@@ -78,16 +78,24 @@ Our output carries roughly 8–12 dB more energy across the whole formant region
 The real thing is darker; ours is brighter and buzzier, which matches the
 listening impression exactly.
 
-**This is suggestive, not conclusive.** The capture is 18.9 s of unknown text
-and ours is 4.9 s of different text, and a long-term average spectrum is
-sensitive to phoneme content. Before drawing a conclusion, render the same
-words the capture speaks and compare like with like.
+**This is suggestive, not conclusive, and after the filter test it is weaker
+still.** The capture is 18.9 s of unknown material -- only 20.6% of it above 8%
+of peak, so mostly silence and probably interface chatter -- against 4.9 s of a
+sentence chosen at random. A long-term average spectrum is sensitive to phoneme
+content, and a mid-band dip is exactly what different content looks like.
+
+**The one measurement that would settle it: render the words the capture
+actually speaks.** Until then this table is a lead, not a finding.
 
 Candidates, in the order worth testing:
 
-1. **Output filtering.** Classic Mac audio hardware low-passed its 22 kHz
-   8-bit output. If Basilisk II models that and we do not, this is the whole
-   difference and the fix is a filter in the driver, not in the engine.
+1. ~~**Output filtering.**~~ **Tested and rejected.** Classic Mac hardware
+   low-passed its 8-bit output, so a missing filter was the obvious first
+   suspect. Fitting a one-pole low-pass to our output against the capture makes
+   the match monotonically *worse* -- 4.48 dB RMS unfiltered, 5.62 at 4 kHz,
+   8.42 at 2 kHz, 13.90 at 1 kHz. The real capture is not rolled off; it has a
+   *dip* through 500-3500 Hz while matching us again at 4500-5000, and no
+   low-pass produces a mid-band dip. Do not re-test this.
 2. **Front-end differences.** outSPOKEN does not feed the engine plain
    dictionary phonemes — `STR# 128` shows Berkeley respelling everything by
    hand (`brohvo`, `keelo`, `ho tel`, `see ehrra`), and it ships `PHNM`,
