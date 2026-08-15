@@ -1,0 +1,271 @@
+# -*- coding: utf-8 -*-
+"""NVDA synthesizer driver for MacinTalk (1984).
+
+The engine is real 68000 code from January 1984, run under Musashi inside
+NVDA's own process. No bridge is needed: the emulator is 64-bit native, so
+unlike a 32-bit DLL this never touches SynthDriverProxy32.
+
+The engine is not shipped. It is read from a `rom/` folder the user fills from
+their own copy -- see `_outspoken/rom.py` and `tools/extract_rom.py`.
+"""
+import os
+import queue
+import sys
+import threading
+
+import nvwave
+import speech.commands
+from logHandler import log
+from synthDriverHandler import (SynthDriver, VoiceInfo, synthDoneSpeaking,
+                                synthIndexReached)
+
+_HERE = os.path.dirname(__file__)
+_ENGINE_DIR = os.path.join(_HERE, "_outspoken")
+if _ENGINE_DIR not in sys.path:
+    sys.path.insert(0, _ENGINE_DIR)
+
+import rom                                                    # noqa: E402
+
+#: The rate the driver writes into its own SoundHeader, rounded to an integer.
+#: The error is 0.002%. Resampling to a "nicer" 22050 would cost a per-sample
+#: Python loop on every utterance, and simply *declaring* 22050 without
+#: resampling would run the voice 0.93% flat -- audible as a wrong pitch on a
+#: voice people remember. WASAPI resamples in shared mode anyway.
+OUT_RATE = 22254
+
+#: Only the two table-0 voices are offered. `$3A` selects a second formant
+#: table (docs/driver-api.md) and the result is thin and chipmunk-like rather
+#: than the Amiga narrator's documented robotic mode, which has not been found.
+_VOICES = [("male", "Male", 110), ("female", "Female", 250)]
+
+
+class SynthDriver(SynthDriver):
+    name = "outspoken"
+    description = "MacinTalk (outSPOKEN, 1984)"
+
+    supportedSettings = (
+        SynthDriver.VoiceSetting(),
+        SynthDriver.RateSetting(),
+        SynthDriver.PitchSetting(),
+    )
+    supportedCommands = {speech.commands.IndexCommand}
+    supportedNotifications = {synthIndexReached, synthDoneSpeaking}
+
+    @classmethod
+    def check(cls):
+        """Only offer the synthesizer when it can actually speak.
+
+        A synthesizer that appears in the list and then says nothing is worse
+        than one that is absent, so this requires the engine. Discoverability
+        does not suffer: the global plugin explains the empty ROM folder at
+        start-up, whether or not the synthesizer is selectable.
+
+        `RULZ` counts as required. Without it the engine still runs, but only
+        on phonemes -- and nothing sends a screen reader phonemes.
+        """
+        try:
+            import osp                                        # noqa: F401
+        except Exception:
+            return False
+        return rom.usable()
+
+    def __init__(self):
+        super().__init__()
+        self._rate, self._pitch = 50, 50
+        self._voiceId = "male"
+        self._engine = None
+        self._engineError = None
+        self._stopped = False
+        self._queue = queue.Queue()
+        self._cancel = threading.Event()
+        self._player = self._makePlayer()
+        self._worker = threading.Thread(target=self._run, name="outspoken",
+                                        daemon=True)
+        self._worker.start()
+
+    # -- audio -------------------------------------------------------------
+    def _makePlayer(self):
+        """Build a WavePlayer across NVDA config generations.
+
+        2025.1 removed config.conf["speech"]["outputDevice"] in favour of
+        config.conf["audio"]["outputDevice"]. Each attempt must be a callable:
+        building the argument dicts up front would evaluate every config lookup
+        before the first try block could catch anything.
+        """
+        import config
+        base = dict(channels=1, samplesPerSec=OUT_RATE, bitsPerSample=16)
+        try:
+            from nvwave import AudioPurpose
+            purpose = {"purpose": AudioPurpose.SPEECH}
+        except Exception:
+            purpose = {}
+
+        def modern():
+            return nvwave.WavePlayer(
+                outputDevice=config.conf["audio"]["outputDevice"],
+                **base, **purpose)
+
+        def legacy():
+            return nvwave.WavePlayer(
+                outputDevice=config.conf["speech"]["outputDevice"], **base)
+
+        def default():
+            return nvwave.WavePlayer(**base, **purpose)
+
+        def bare():
+            return nvwave.WavePlayer(1, OUT_RATE, 16)
+
+        last = None
+        for attempt in (modern, legacy, default, bare):
+            try:
+                return attempt()
+            except Exception as e:
+                last = e
+        raise last
+
+    # -- NVDA interface ----------------------------------------------------
+    def speak(self, speechSequence):
+        items = []
+        for item in speechSequence:
+            if isinstance(item, str):
+                items.append(("text", item))
+            elif isinstance(item, speech.commands.IndexCommand):
+                items.append(("index", item.index))
+        self._queue.put(items)
+
+    def cancel(self):
+        self._cancel.set()
+        if self._engine:
+            self._engine.stop()          # one byte; safe across threads
+        try:
+            self._player.stop()
+        except Exception:
+            pass
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def pause(self, switch):
+        try:
+            self._player.pause(switch)
+        except Exception:
+            pass
+
+    def terminate(self):
+        self._stopped = True
+        self.cancel()
+        self._queue.put(None)
+        try:
+            self._player.close()
+        except Exception:
+            pass
+
+    # -- settings ----------------------------------------------------------
+    def _get_rate(self):
+        return self._rate
+
+    def _set_rate(self, value):
+        self._rate = max(0, min(100, int(value)))
+
+    def _get_pitch(self):
+        return self._pitch
+
+    def _set_pitch(self, value):
+        self._pitch = max(0, min(100, int(value)))
+
+    def _get_availableVoices(self):
+        from collections import OrderedDict
+        out = OrderedDict()
+        for vid, label, _hz in _VOICES:
+            out[vid] = VoiceInfo(vid, label, language="en")
+        return out
+
+    def _get_voice(self):
+        return self._voiceId
+
+    def _set_voice(self, value):
+        if any(v[0] == value for v in _VOICES):
+            self._voiceId = value
+
+    def _baseHz(self):
+        for vid, _label, hz in _VOICES:
+            if vid == self._voiceId:
+                return hz
+        return 110
+
+    def _applySettings(self, eng):
+        # NVDA's sliders are 0-100; the driver's own ranges are rate 40..2560
+        # (default 150) and pitch 65..500 Hz, both clamped by the engine itself.
+        eng.set_rate(40 + (self._rate / 100.0) * 360)          # 40..400 wpm
+        base = self._baseHz()
+        factor = 0.5 + (self._pitch / 100.0)                   # 0.5x .. 1.5x
+        eng.set_voice(base * factor)
+
+    # -- the worker --------------------------------------------------------
+    def _ensureEngine(self):
+        if self._engine is not None or self._engineError is not None:
+            return self._engine
+        found, missing = rom.find()
+        if any(n not in found for n in rom.REQUIRED) or \
+                "RULZ_1129.bin" not in found:
+            self._engineError = "ROM not present"
+            log.warning("outSPOKEN: engine not available.\n" + rom.describe())
+            return None
+        try:
+            import engine as engine_mod
+            self._engine = engine_mod.Engine(found)
+        except Exception:
+            self._engineError = "engine failed to start"
+            log.error("outSPOKEN: engine failed to start", exc_info=True)
+        return self._engine
+
+    #: 8-bit unsigned -> 16-bit signed is exactly "subtract 128, scale by 256",
+    #: which in little-endian means the low byte is zero and the high byte is
+    #: the sample with its top bit flipped. Both steps below run at C speed;
+    #: the obvious per-sample loop costs ~80k Python iterations per utterance
+    #: and is felt as latency in a screen reader.
+    _FLIP = bytes(b ^ 0x80 for b in range(256))
+
+    @classmethod
+    def _to16(cls, pcm8):
+        out = bytearray(len(pcm8) * 2)
+        out[1::2] = pcm8.translate(cls._FLIP)
+        return bytes(out)
+
+    def _run(self):
+        while not self._stopped:
+            items = self._queue.get()
+            if items is None:
+                return
+            self._cancel.clear()
+            eng = self._ensureEngine()
+            if eng is None:
+                synthDoneSpeaking.notify(synth=self)
+                continue
+            try:
+                self._applySettings(eng)
+                for kind, value in items:
+                    if self._cancel.is_set():
+                        break
+                    if kind == "index":
+                        synthIndexReached.notify(synth=self, index=value)
+                        continue
+                    phonemes = eng.translate(value)
+                    pcm = eng.speak(phonemes)
+                    if self._cancel.is_set() or not pcm:
+                        continue
+                    self._player.feed(self._to16(pcm))
+                if not self._cancel.is_set():
+                    # Completion is when the audio has PLAYED, never when the
+                    # engine returned: Prime comes back with real speech still
+                    # sitting in the last buffer, and treating its return as
+                    # "done" costs the final ~150 ms of every utterance.
+                    try:
+                        self._player.idle()
+                    except Exception:
+                        pass
+            except Exception:
+                log.error("outSPOKEN: speech failed", exc_info=True)
+            synthDoneSpeaking.notify(synth=self)

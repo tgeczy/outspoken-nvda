@@ -50,9 +50,9 @@ only reason it was caught in a minute is that the doc said Open should reach
 
 ## The find
 
-`D:\B II\outspoken.bin` — outSPOKEN by Berkeley Systems, a Mac control panel
+`the outSPOKEN file` — outSPOKEN by Berkeley Systems, a Mac control panel
 (`'cdev'`, creator `'BSDo'`), 151,680 bytes, MacBinary, **© 1988 Berkeley
-System Design**. All 63 resources extracted to `C:\git\outspoken-rsrc\`, with
+System Design**. All 63 resources extracted to `the extracted-resources folder\`, with
 `FINDINGS.md` alongside.
 
 **`'DRVR' 1030`, the driver named `.sp`, 21,272 bytes, IS the original
@@ -67,7 +67,7 @@ MacinTalk.** Four copyright strings inside it:
 
 Katz and Barton wrote the MacinTalk that introduced the Mac in January 1984 and
 later founded **SoftVoice**. This is that line — **not** MacinTalk 2/3, which
-is Tim Schaaff at Apple, 1992–94, and whose source is in `C:\git\wintalker`.
+is Tim Schaaff at Apple, 1992–94, and whose source is in `the WinTalker project`.
 Those are sibling branches, not ancestor and descendant.
 
 ### Driver entry points
@@ -149,7 +149,7 @@ before concluding.
 **Use Musashi** (Karl Stenerud's 68000 core, the one MAME ships — plain C, MIT,
 built for embedding behind memory callbacks). Wrap it as a DLL and drive it from
 Python with `ctypes`, exactly as EchoTalk does with `fake6502`.
-`C:\git\wintalker` already proves CMake + MSVC building x86 and x64 DLLs on this
+`the WinTalker project` already proves CMake + MSVC building x86 and x64 DLLs on this
 machine.
 
 ### Two things Unicorn taught us that carry over to any core
@@ -163,7 +163,7 @@ machine.
 
 ## The recording is the WRONG engine — my error, recorded so it is not repeated
 
-`C:\git\outspoken-rsrc\outspoken_sample.wav` — 48 kHz, 16-bit stereo, 18.9 s.
+`the Basilisk II capture` — 48 kHz, 16-bit stereo, 18.9 s.
 Whisper: *"Welcome to outSPOKEN, Anne"*, then punctuation read aloud
 (`comma`, `period`) as a screen reader does. F0 about 123 Hz with a clean
 harmonic stack (246, 372, 495, 615, 735…), 90% of energy below 5.5 kHz.
@@ -216,14 +216,14 @@ The phoneme alphabet also appears in the driver at `+0x015AE`:
 
 | path | what |
 |---|---|
-| `D:\B II\outspoken.bin` | the 1988 control panel, MacBinary |
-| `C:\git\outspoken-rsrc\` | all 63 resources, one file each |
-| `C:\git\outspoken-rsrc\FINDINGS.md` | the MacinTalk identification |
-| `C:\git\outspoken-rsrc\outspoken_sample.wav` | the (wrong-engine) capture |
-| `C:\git\outspoken-nvda\tools\trap_probe.py` | loads `.sp`, calls Open, logs traps |
-| `C:\git\outspoken-nvda\docs\cpu-core-decision.md` | why Unicorn is out |
-| `C:\git\wintalker\` | MacinTalk 2/3 source, sibling branch, builds x86+x64 |
-| `D:\B II\BasiliskII_prefs` | repaired (paths were `C:`, files are on `D:`); backup `.bak-2026-08-15` |
+| `the outSPOKEN file` | the 1988 control panel, MacBinary |
+| `the extracted-resources folder\` | all 63 resources, one file each |
+| `the extraction notes` | the MacinTalk identification |
+| `the Basilisk II capture` | the (wrong-engine) capture |
+| ``tools/trap_probe.py`` | loads `.sp`, calls Open, logs traps |
+| ``docs/cpu-core-decision.md`` | why Unicorn is out |
+| `the WinTalker project\` | MacinTalk 2/3 source, sibling branch, builds x86+x64 |
+| `the Basilisk II prefs` | repaired (paths were `C:`, files are on `D:`); backup `.bak-2026-08-15` |
 
 Basilisk fix, for reference: `rom` path corrected, missing `Mac OS 8.1.hfv`
 dropped, `Starterdisk.hfv` added, **`noaudio true` → `false`** (it was muted),
@@ -237,7 +237,7 @@ dead `typemapfile` cleared.
 2. ~~Disassemble `Control`.~~ **Done** — `docs/driver-api.md`. The `RULZ`
    resource worry is closed too: that probe is unreachable dead code.
 3. **Vendor Musashi**, build the DLL for x86 and x64 alongside the wintalker
-   toolchain (`C:\git\wintalker` already proves CMake + MSVC here). A plain
+   toolchain (`the WinTalker project` already proves CMake + MSVC here). A plain
    **68000** core is enough — set `CPUFlag` (`$012F`) to 0 and the driver's only
    68020 instructions (`movec`) are never reached.
 4. **Port `trap_probe.py` to Musashi** and run `Open`. It should want
@@ -272,7 +272,7 @@ dead `typemapfile` cleared.
 * **Every budget gets a counter, and non-zero is a logged fault.** Jayson's
   warning to Tomi was exactly this: his first fix failed because the 6502 was
   not given enough time to run. A limit that truncates silently gets got wrong
-  again. See `notes/step_budget_truncation.md` in `C:\git\echotalk`.
+  again. See `notes/step_budget_truncation.md` in `the EchoTalk project`.
 * **The user supplies `outspoken.bin`.** Empty `rom/` directory in the add-on,
   README instructions, a `--with-images` flag for personal builds only.
   Retrofitting this is how `READSPF.EXE` ended up tracked in pctalker.

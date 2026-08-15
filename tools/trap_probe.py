@@ -13,8 +13,8 @@ import os
 import struct
 import sys
 
-RSRC = r"C:\git\outspoken-rsrc"
-DRVR = os.path.join(RSRC, "DRVR", "1030_.sp.bin")
+import paths                                                  # noqa: E402
+DRVR = paths.driver()
 
 # --- Mac memory map -------------------------------------------------------
 LOMEM = 0x0000        # low-memory globals live here

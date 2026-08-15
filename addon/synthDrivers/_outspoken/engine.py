@@ -1,0 +1,182 @@
+# -*- coding: utf-8 -*-
+"""Run MacinTalk and hand back PCM.
+
+The whole sequence, and why each step is there, is in docs/driver-api.md,
+docs/sound-model.md and docs/frame-format.md. The short version:
+
+    Open                      allocates dCtlStorage, loads TALK 1
+    driver+$0034              install the per-frame callback  <- load-bearing
+    driver+$001E              hand over the channel and two buffers
+    Prime (_Write)            speak; PCM arrives at every bufferCmd
+
+One instance owns one emulator. The host DLL is a single CPU with global
+state, so every call into it must come from the same thread -- see the worker
+in `synthDrivers/outspoken.py`. The one exception is `stop()`, which writes a
+single byte the callback polls, and a lone `osp_w8` is safe from outside.
+"""
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import osp                                                    # noqa: E402
+import nrl                                                    # noqa: E402
+
+DRV_BASE = 0x00040000
+HEAP, HEAP_SIZE = 0x00080000, 0x00080000
+STACK = 0x00200000
+WORK = 0x00190000
+
+CPUFLAG, RESERR = 0x012F, 0x0A60
+EXPORT_MACSTARTSOUND = 0x001E
+EXPORT_SET_CALLBACK = 0x0034
+BUF_BYTES = 22 + 3870
+
+FLAG = WORK + 0x280            # our stop flag, polled by the hook
+HOOK = WORK + 0x200
+
+#: The rate the driver writes into its own SoundHeader.
+NATIVE_RATE = 22254.5454545
+
+
+class Engine(object):
+    def __init__(self, rom):
+        """`rom` maps file name -> path, as `rom.find()` returns."""
+        image = open(rom["DRVR_1030.bin"], "rb").read()
+        self._entries = osp.driver_entries(image)
+        self.h = h = osp.Host()
+        h.load(DRV_BASE, image)
+        h.heap(HEAP, HEAP_SIZE)
+        h.mem_traps(True)
+        h.w8(CPUFLAG, 0)
+        h.w16(RESERR, 0)
+        h.add_resource("TALK", 1, open(rom["TALK_1001.bin"], "rb").read())
+
+        self.rules = nrl.Rules(open(rom["RULZ_1129.bin"], "rb").read()) \
+            if "RULZ_1129.bin" in rom else None
+
+        self._dce, self._pb = WORK, WORK + 0x100
+        self._open()
+        self._install_hook()
+        self._start_sound()
+
+    # -- set-up ------------------------------------------------------------
+    def _open(self):
+        h, dce, pb = self.h, self._dce, self._pb
+        for off in range(0, 0x80, 4):
+            h.w32(dce + off, 0)
+            h.w32(pb + off, 0)
+        h.w32(dce + 0, DRV_BASE)
+        h.w16(dce + 4, 0x4600)
+        h.w16(dce + 24, 0xFFEF)
+        h.w16(pb + 24, 0xFFEF)
+        h.set_reg(osp.SR, 0x2700)
+        h.set_reg(osp.A7, STACK)
+        h.set_reg(osp.A0, pb)
+        h.set_reg(osp.A1, dce)
+        if h.call(DRV_BASE + self._entries[0], max_instr=5_000_000) != 1:
+            raise RuntimeError("MacinTalk Open did not return")
+
+    def _install_hook(self):
+        """The per-frame callback -- see docs/frame-format.md.
+
+        It is not a notification. It reads f[0] and f[1] of every frame, and
+        bit 7 of f[0] ends the utterance. It also polls our stop flag, which is
+        how `cancel()` works: returning with N set is the engine's own designed
+        way to stop, which is why the export is called SetStopSpeechCallback.
+        """
+        h = self.h
+        for i, w in enumerate((
+                0x4A39, (FLAG >> 16) & 0xFFFF, FLAG & 0xFFFF,  # tst.b FLAG.l
+                0x660E,                                        # bne.s -> stop
+                0x1B5E, 0x0001,                # move.b (a6)+, $1(a5)
+                0x1B5E, 0x0003,                # move.b (a6)+, $3(a5)
+                0x4A2D, 0x0001,                # tst.b  $1(a5)  -- restore N
+                0x4E75,                        # rts
+                0x70FF,                        # moveq #-1, d0   (N set = stop)
+                0x4E75)):                      # rts
+            h.w16(HOOK + 2 * i, w)
+        h.w8(FLAG, 0)
+        h.set_reg(osp.A7, STACK)
+        if h.call_with_args(DRV_BASE + EXPORT_SET_CALLBACK, [HOOK],
+                            max_instr=1000) != 1:
+            raise RuntimeError("could not install the speech callback")
+
+    def _start_sound(self):
+        h = self.h
+        chan, bufa, bufb, rec = (WORK + 0x400, WORK + 0x1000,
+                                 WORK + 0x3000, WORK + 0x300)
+        for off in range(0, 0x80, 4):
+            h.w32(chan + off, 0)
+        # ChannelBusy short-circuits on chan+$20 == -1 and reports idle without
+        # asking the Sound Manager, which is exactly our model: buffers are
+        # consumed the instant they are handed over.
+        h.w16(chan + 0x20, 0xFFFF)
+        for base in (bufa, bufb):
+            for off in range(0, BUF_BYTES + 4, 4):
+                h.w32(base + off, 0)
+        h.w32(rec + 0, chan)
+        h.w32(rec + 4, bufa)
+        h.w32(rec + 8, bufb)
+        h.set_reg(osp.A7, STACK)
+        h.set_reg(osp.A1, self._dce)
+        if h.call_with_args(DRV_BASE + EXPORT_MACSTARTSOUND, [rec],
+                            max_instr=10_000_000) != 1:
+            raise RuntimeError("MACSTARTSOUND failed")
+
+    # -- settings ----------------------------------------------------------
+    def _storage(self):
+        """dCtlStorage is a HANDLE at DCE+$14; writing through the handle
+        itself changes nothing at all and is very quiet about it."""
+        return self.h.r32(self.h.r32(self._dce + 0x14))
+
+    def set_voice(self, pitch_hz):
+        s = self._storage()
+        self.h.w16(s + 0x30, max(65, min(500, int(pitch_hz))))
+
+    def set_rate(self, rate):
+        s = self._storage()
+        self.h.w16(s + 0x32, max(40, min(2560, int(rate))))
+
+    # -- speaking ----------------------------------------------------------
+    def translate(self, text):
+        if self.rules is None:
+            return text
+        return nrl.translate(text, self.rules)
+
+    def stop(self):
+        """Safe from another thread: one byte the callback polls per frame."""
+        try:
+            self.h.w8(FLAG, 1)
+        except Exception:
+            pass
+
+    def speak(self, phonemes):
+        """-> 8-bit unsigned PCM at NATIVE_RATE, leading silence trimmed."""
+        h, pb = self.h, self._pb
+        h.w8(FLAG, 0)
+        raw = phonemes.encode("mac-roman", "replace")
+        if not raw.strip():
+            return b""
+        txt, txt_h = WORK + 0x8000, WORK + 0x7000
+        h.load(txt, raw)
+        h.w32(txt_h, txt)
+        h.w32(pb + 32, txt_h)          # ioBuffer is a HANDLE, not a pointer
+        h.w32(pb + 36, len(raw))
+        h.w32(pb + 40, 0)
+        h.w16(pb + 16, 1)
+        h.pcm_reset()
+        h.set_reg(osp.A7, STACK)
+        h.set_reg(osp.A0, pb)
+        h.set_reg(osp.A1, self._dce)
+        h.call(DRV_BASE + self._entries[1], max_instr=400_000_000)
+        pcm = h.pcm
+        # An utterance after a cancel carries ~157 ms of leading silence, and a
+        # fresh one opens with a single $40 sample before its silence. Both are
+        # measured, not guessed -- see docs/frame-format.md.
+        i = 0
+        while i < len(pcm) and pcm[i] in (0x80, 0x60, 0x40):
+            i += 1
+        return pcm[i:] if i < len(pcm) else b""

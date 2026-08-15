@@ -18,8 +18,8 @@ import re
 import struct
 import sys
 
-RSRC = r"C:\git\outspoken-rsrc"
-DRVR = os.path.join(RSRC, "DRVR", "1030_.sp.bin")
+import paths                                                  # noqa: E402
+DRVR = paths.driver()
 
 # The instructions a routine can end on, as big-endian words.
 TERMINATORS = {

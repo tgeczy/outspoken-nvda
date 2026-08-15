@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import osp                                                    # noqa: E402
 from disasm import trap_name                                  # noqa: E402
 
-RSRC = r"C:\git\outspoken-rsrc"
-DRVR = os.path.join(RSRC, "DRVR", "1030_.sp.bin")
+import paths                                                  # noqa: E402
+DRVR = paths.driver()
 
 DRV_BASE = 0x00040000
 HEAP = 0x00080000
@@ -53,7 +53,7 @@ def main():
 
     # Open calls _GetResource('TALK', 1).  outSPOKEN stores it as TALK 1001 --
     # the +1000 offset is outSPOKEN's convention, applied here at the edge.
-    talk = open(os.path.join(RSRC, "TALK", "1001.bin"), "rb").read()
+    talk = open(paths.talk(), "rb").read()
     h.add_resource("TALK", 1, talk)
     print("registered TALK 1 (%d bytes, from TALK 1001)\n" % len(talk))
 

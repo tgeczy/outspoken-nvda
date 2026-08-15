@@ -24,8 +24,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from symbol_map import find_symbols                            # noqa: E402
 
-RSRC = r"C:\git\outspoken-rsrc"
-DRVR = os.path.join(RSRC, "DRVR", "1030_.sp.bin")
+import paths                                                  # noqa: E402
+DRVR = paths.driver()
 
 # Low-memory globals.
 #

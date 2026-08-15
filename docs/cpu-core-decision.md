@@ -54,7 +54,7 @@ embedded behind callbacks for memory access.
 This is the same shape as EchoTalk: Jayson vendored `fake6502`, a public-domain
 6502 core in C, wrapped it, and built a DLL the NVDA driver loads with `ctypes`.
 Ours would vendor Musashi instead, for a different CPU, and expose the same kind
-of small C API. `C:\git\wintalker` already proves the toolchain on this machine —
+of small C API. `the WinTalker project` already proves the toolchain on this machine —
 CMake plus MSVC, building `WinTalker.dll` for both x86 and x64.
 
 Nothing about the plan changes except which core sits underneath. The A-trap

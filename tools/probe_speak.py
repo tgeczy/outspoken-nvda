@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import osp                                                    # noqa: E402
 from disasm import trap_name                                  # noqa: E402
 
-RSRC = r"C:\git\outspoken-rsrc"
-DRVR = os.path.join(RSRC, "DRVR", "1030_.sp.bin")
+import paths                                                  # noqa: E402
+DRVR = paths.driver()
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "build", "spoken.wav")
 
@@ -57,7 +57,7 @@ def setup(text, before_prime=None):
     h.mem_traps(True)
     h.w8(CPUFLAG, 0)
     h.w16(RESERR, 0)
-    h.add_resource("TALK", 1, open(os.path.join(RSRC, "TALK", "1001.bin"),
+    h.add_resource("TALK", 1, open(paths.talk(),
                                    "rb").read())
 
     dce, pb = WORK, WORK + 0x100

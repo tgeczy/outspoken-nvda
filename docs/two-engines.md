@@ -53,7 +53,7 @@ Starterdisk's `.SPEECH` hits sit beside outSPOKEN's own MacsBug routine names
 So the voice on the recording **is** the engine this project emulates, and any
 difference is in our chain rather than in a missing engine.
 
-Measured on the capture in `C:\git\outspoken-rsrc\outspoken_sample.wav`
+Measured on the capture in `the Basilisk II capture`
 (18.9 s, stereo, 48 kHz):
 
 * **f0 median 117.9 Hz** (10th percentile 84.8, 90th 279.1) against 111.8 Hz for
@@ -106,7 +106,7 @@ defect in this emulation.
 * **MacinTalk Pro (`gala`) voices are huge** -- Bruce 801 KB, Agnes 870 KB,
   Victoria 935 KB. A concatenative engine, entirely separate.
 
-`C:\git\wintalker` already builds the formant one from Apple source
+`the WinTalker project` already builds the formant one from Apple source
 (`MT4.h`, `formantSynth.c`, `Src/Wavinout.c`'s `voiceNames[]`), and its
 `NVDA_addon/` already lists all seventeen: Fred, Kathy, Princess, Junior,
 Ralph, Whisper, Zarvox, Trinoids, Bubbles, Boing, Bells, Hysterical, Deranged,
@@ -171,6 +171,6 @@ Candidates, in the order worth testing:
   separate line sharing no code with the above.
 
 Sibling branches, not ancestor and descendant. The Apple branch is already
-solved elsewhere: `C:\git\wintalker` holds `MacInTalkSrc.zip` and a working
+solved elsewhere: `the WinTalker project` holds `MacInTalkSrc.zip` and a working
 `NVDA_addon/` with x64 and x86 `WinTalker.dll` built from it. If both voices are
 wanted in NVDA they are two synthesisers, not two voices of one.

@@ -24,8 +24,8 @@ MacinTalk 3 is deliberately skipped: it is built natively from Apple source by
 the WinTalker project, and emulating it would be strictly worse. MacinTalk Pro
 is a different engine again and is not supported yet.
 
-    py -3 tools/extract_rom.py "D:\\B II\\O s 7 src.hfv"
-    py -3 tools/extract_rom.py "D:\\B II\\outspoken.bin" --out rom
+    py -3 tools/extract_rom.py "C:\path\to\MacOS7.hfv"
+    py -3 tools/extract_rom.py "C:\path\to\outSPOKEN" --out rom
     py -3 tools/extract_rom.py <image> --list
 """
 import argparse

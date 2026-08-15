@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>MacinTalk (outSPOKEN, 1984)</title></head><body>
+<h1>MacinTalk (outSPOKEN, 1984)</h1>
+
+<p>The speech engine that introduced the Macintosh in January 1984, written by
+Joseph Katz and Mark Barton. This add-on runs the original 68000 code under the
+Musashi CPU emulator, inside NVDA's own process.</p>
+
+<h2>You must supply the engine</h2>
+
+<p>This add-on contains no part of MacinTalk or outSPOKEN, and never will.
+You provide it from your own copy.</p>
+
+<p>Put these three files in <code>outspoken-roms</code> inside your NVDA
+configuration folder:</p>
+
+<ul>
+<li><code>DRVR_1030.bin</code> &mdash; the engine, a driver named <code>.sp</code></li>
+<li><code>TALK_1001.bin</code> &mdash; MacinTalk Rules</li>
+<li><code>RULZ_1129.bin</code> &mdash; letter-to-sound rules, needed for English text</li>
+</ul>
+
+<p>They may sit loose in that folder or in a <code>macintalk1</code> subfolder;
+subfolders are searched. The <code>tools/extract_rom.py</code> script in the
+project repository pulls them out of a disk image or an outSPOKEN file for you,
+and produces exactly that layout. On first run the add-on offers to open the
+folder in Explorer.</p>
+
+<p>The folder lives in NVDA's configuration directory rather than inside the
+add-on, because updating an add-on deletes and recreates its own folder and
+would take your engine with it.</p>
+
+<h2>Voices</h2>
+
+<p>Two, male and female, differing in pitch &mdash; 110&nbsp;Hz and 250&nbsp;Hz.
+That is the entire voice list this engine has. Rate and pitch sliders map onto
+the driver's own ranges.</p>
+
+<h2>Notes</h2>
+
+<p>The engine speaks phonemes and nothing else; its own English front end was a
+separate component that outSPOKEN supplied. English is converted here by an
+interpreter written for this project, reading the letter-to-sound rules out of
+your own <code>RULZ</code> resource.</p>
+
+<p>The same engine, 67.8% byte-identical, shipped as the Amiga's
+<code>narrator.device</code>. If the voice sounds familiar, that is why.</p>
+
+<h2>Credit</h2>
+
+<p>Engine: Joseph Katz and Mark Barton, 1984. CPU core: Musashi, by Karl
+Stenerud. NVDA driver: tgeczy. With thanks to Jayson Smith
+(<a href="https://github.com/jaybird110127">@jaybird110127</a>) and his work on
+EchoTalk, which is the pattern this project follows.</p>
+</body></html>
