@@ -33,7 +33,9 @@ execution has since confirmed the parts it can reach:
   what makes this tractable at all.
 * **[`docs/driver-api.md`](docs/driver-api.md)** — speech is `_Write`, not
   `_Control`. `Control` sets rate (0–4096, default 150), pitch (65–500 Hz) and
-  voice. There are **two voices, differing only in pitch — 110 Hz and 250 Hz**.
+  voice. Pitch and a natural/robotic mode flag give **four voices — male and
+  female, natural and robotic** — the same list the Amiga add-on exposes,
+  measured at 111.8 / 103.5 / 247.3 / 296.7 Hz.
   Setting `CPUFlag` to 0 keeps the driver away from its only 68020 instructions,
   so a plain 68000 core suffices.
 * **[`docs/frame-format.md`](docs/frame-format.md)** — the synthesiser's

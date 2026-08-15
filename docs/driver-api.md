@@ -44,9 +44,36 @@ voice 1:  pitch $FA = 250   rate $96 = 150   toggle 0     ($CA/$CC/$CE)
 ```
 
 Selecting a voice copies that bank into the live fields; setting pitch or rate
-writes both the live field *and* the current bank. So the two voices differ, out
-of the box, only in pitch — **110 Hz and 250 Hz**. That is the male/female pair,
-and it is the entire voice list this engine has.
+writes both the live field *and* the current bank. Out of the box the two banks
+differ only in pitch — **110 Hz and 250 Hz**, the male/female pair.
+
+**The third field is not a spare.** `$3A(a5)` (`$C8`/`$CE` in the banks) is the
+Amiga narrator's `mode`, natural or robotic, and the synthesiser reads it at
++$27BE to pick the sub-frame reload:
+
+```
+cmpi.w  #$0, $3a(a5)
+bne.b   $27ce
+move.w  #$b, $52(a5)      ; mode 0, natural  -> 11
+move.w  #$8, $52(a5)      ; mode 1, robotic  ->  8
+```
+
+Both banks default it to 0, which is why it looked absent. Driving it directly
+gives the **same four voices the Amiga add-on offers** — `sex` x `mode`.
+Rendered from `AY1 KAEN SPIY1K AXGEH1N`, with the fundamental measured off the
+output by autocorrelation rather than assumed:
+
+| voice | pitch field | mode | measured f0 |
+|---|---|---|---|
+| male natural | 110 | 0 | 111.8 Hz |
+| male robotic | 110 | 1 | 103.5 Hz |
+| female natural | 250 | 0 | 247.3 Hz |
+| female robotic | 250 | 1 | 296.7 Hz |
+
+Note the storage is reached through a **handle**: `dCtlStorage` at DCE`+$14`
+must be dereferenced before these offsets mean anything. Writing to the handle
+itself changes nothing and produces four identical renders, which is a quiet
+enough failure to cost an hour.
 
 This maps onto NVDA cleanly: `voice` → csCode 3, `rate` → csCode 2,
 `pitch` → csCode 4. Note the NVDA rate/pitch sliders are 0–100 and will need
