@@ -97,19 +97,23 @@ def test_latency_is_small(driver, rom_files):
     assert worst < 0.30, "worst latency %.0f ms" % (worst * 1000)
 
 
-def test_cancel_does_not_restart_the_stream_for_nothing(driver, rom_files):
-    """NVDA calls cancel() before nearly every speak(), including when nothing
-    is sounding. Each stop() tears the output stream down and the next feed()
-    pays to start it again -- which a long utterance absorbs and a short one
-    does not. That is why typing echo lagged while sentences were fine."""
-    driver.speak(["a sentence long enough to still be playing"])
-    _settle(driver._player, 1, timeout=5.0)
-    before = driver._player.stops
+def test_cancel_stops_even_when_nothing_is_queued(driver, rom_files):
+    """Cancelling repeatedly with nothing to say must be harmless.
+
+    This test used to assert the opposite -- that cancel avoided touching the
+    player when the driver thought no audio was outstanding -- as a way of
+    dodging output-stream restarts. That was a hypothesis, and honouring it
+    broke interruption outright, because "no audio outstanding" was decided by
+    whether the worker was busy rather than by whether sound was playing.
+    Restarts are a performance question; interrupting is a correctness one.
+    """
+    _warm(driver)
     for _ in range(10):
-        driver.cancel()                  # nothing is queued after the first
+        driver.cancel()
         time.sleep(0.01)
-    assert driver._player.stops - before <= 1, \
-        "%d stops for 10 cancels" % (driver._player.stops - before)
+    before = driver._player.bytes
+    driver.speak(["still here"])
+    assert _settle(driver._player, before + 1, timeout=5.0) > before
 
 
 def test_terminate_is_clean(rom_files):
@@ -206,3 +210,30 @@ def test_typing_like_nvda_does(driver, rom_files):
     assert median < 0.15, "median keystroke latency %.0f ms" % (median * 1000)
     assert latencies[-1] < 0.60, "worst keystroke latency %.0f ms" % (
         latencies[-1] * 1000)
+
+
+def test_cancel_always_stops_the_player(driver, rom_files):
+    """Interrupting is the whole job of cancel().
+
+    This was once gated on a flag meant to avoid needless stream restarts, but
+    the flag tracked the WORKER being busy rather than the player having audio.
+    The worker goes idle 50 ms after the last item while sound is still
+    playing, so a keystroke arriving later found the gate shut and cancelled
+    nothing: speech continued after Tab was released, and "copy" queued behind
+    "178777 characters selected" instead of cutting it off.
+    """
+    _warm(driver)
+    driver.speak(["a sentence long enough that it is certainly still playing"])
+    _settle(driver._player, 1, timeout=5.0)
+    before = driver._player.stops
+    driver.cancel()
+    assert driver._player.stops == before + 1, "cancel did not stop the player"
+
+    # And again once the worker has gone idle, which is the case that broke.
+    driver.speak(["another long sentence, spoken while we wait a while"])
+    _settle(driver._player, 1, timeout=5.0)
+    time.sleep(0.4)                      # worker idles; audio still playing
+    before = driver._player.stops
+    driver.cancel()
+    assert driver._player.stops == before + 1, \
+        "cancel did nothing once the worker had gone idle"

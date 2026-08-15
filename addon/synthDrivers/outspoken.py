@@ -183,16 +183,21 @@ class SynthDriver(SynthDriver):
                     break
         if self._engine:
             self._engine.stop()          # one byte; safe across threads
-        # Only touch the player when it has something to interrupt. NVDA calls
-        # cancel() before nearly every speak(), including when nothing is
-        # sounding, and each stop() tears the output stream down so the next
-        # feed() pays to start it again.
-        if self._audioOut:
-            self._audioOut = False
-            try:
-                self._player.stop()
-            except Exception:
-                pass
+        # ALWAYS stop the player. This was once gated on a flag meant to avoid
+        # restarting the output stream needlessly -- but that flag tracked the
+        # worker being busy, not the player having audio, and the worker goes
+        # idle 50 ms after the last item while the sound is still playing. So
+        # by the time a keystroke arrived the gate was shut and cancel did
+        # nothing: speech carried on after Tab was released, and "copy" queued
+        # up behind "178777 characters selected" instead of interrupting it.
+        #
+        # Interrupting is the entire job of cancel(). The stream-restart cost
+        # was a hypothesis; the broken interruption was observed.
+        self._audioOut = False
+        try:
+            self._player.stop()
+        except Exception:
+            pass
 
     def pause(self, switch):
         try:
