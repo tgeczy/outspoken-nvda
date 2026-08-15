@@ -61,6 +61,61 @@ Measured on the capture in `C:\git\outspoken-rsrc\outspoken_sample.wav`
 * Energy above 11.5 kHz is 52 dB below peak, consistent with a 22 kHz source
   upsampled to 48 — the rate `MACSTARTSOUND` writes into the `SoundHeader`.
 
+## Correction: the demo was a different *product*
+
+Everything above about which disk and which driver was chasing the wrong thing.
+The recording says "132 items comma, one comma zero twenty three period nine
+mb" -- a Finder window on a **1,023.9 MB** volume. `O s 7 src.hfv` is
+1,073,741,824 bytes, exactly 1024 MB; `Starterdisk.hfv` is 9 MB. So the capture
+came from the OS 7 disk after all.
+
+Dumping that image (1,223 files, 109.9 MB, via `machfs`) shows why none of the
+`.SPEECH` reasoning applied:
+
+```
+System Folder/Control Panels/outSPOKEN 8     cdev oSM   rsrc 255187
+System Folder/Extensions/MacinTalk 3         thng mtk3  rsrc 358659
+System Folder/Extensions/MacinTalk Pro       thng gala  rsrc 572928 + 235892
+System Folder/Extensions/Speech Manager      INIT ttsc
+System Folder/Extensions/Voices/Fred         ttvf mtk3  rsrc 1157
+System Folder/Extensions/Voices/Bruce        ttvf gala  rsrc 801815
+```
+
+That is **outSPOKEN 8**, creator `oSM`. The file this project reverse-engineers
+is `outspoken.bin`, creator `BSDo` -- an earlier and different product.
+outSPOKEN 8's resources contain `ttsc`, the Gestalt selector for the Speech
+Manager, and no `.SPEECH`, no `MacinTalk` and no Katz/Barton strings at all. It
+also announces "outSPOKEN requires a 68020 or later", where `.sp` deliberately
+runs on a plain 68000 with `CPUFlag` at zero.
+
+So the demo is outSPOKEN 8 driving the Speech Manager, and the voice is one of
+Apple's. Nothing in `DRVR 1030` will ever sound like it, and that is not a
+defect in this emulation.
+
+| | outSPOKEN (`BSDo`) | outSPOKEN 8 (`oSM`) |
+|---|---|---|
+| engine | bundled `.sp`, 1984 Katz/Barton | Speech Manager (`ttsc`) |
+| voices | one male/female pitch pair | Fred, Bruce, Victoria, Agnes, … |
+| CPU | 68000 | 68020 or later |
+
+### Those voices are two engines, and one of them is already solved
+
+* **MacinTalk 3 (`mtk3`) voices are tiny** -- Fred, Kathy, Princess, Ralph,
+  Junior, Whisper, Zarvox and Trinoids are about 1,160 bytes each. They are
+  parameter sets for the 358 KB `MacinTalk 3` component, a formant synthesiser.
+* **MacinTalk Pro (`gala`) voices are huge** -- Bruce 801 KB, Agnes 870 KB,
+  Victoria 935 KB. A concatenative engine, entirely separate.
+
+`C:\git\wintalker` already builds the formant one from Apple source
+(`MT4.h`, `formantSynth.c`, `Src/Wavinout.c`'s `voiceNames[]`), and its
+`NVDA_addon/` already lists all seventeen: Fred, Kathy, Princess, Junior,
+Ralph, Whisper, Zarvox, Trinoids, Bubbles, Boing, Bells, Hysterical, Deranged,
+Good News, Bad News, Pipe Organ, Cellos.
+
+**So Fred is not missing from anywhere. It is a different project, and it is
+already built.** The MacinTalk Pro voices -- Bruce, Victoria, Agnes -- are the
+only ones nothing here or there covers.
+
 ## The open difference: we are too bright
 
 Long-term average spectra, each normalised to its own peak:
@@ -84,8 +139,11 @@ of peak, so mostly silence and probably interface chatter -- against 4.9 s of a
 sentence chosen at random. A long-term average spectrum is sensitive to phoneme
 content, and a mid-band dip is exactly what different content looks like.
 
-**The one measurement that would settle it: render the words the capture
-actually speaks.** Until then this table is a lead, not a finding.
+**Superseded.** The capture is outSPOKEN 8 through Apple's Speech Manager, so
+it is not this engine at all and the whole comparison was between two different
+synthesisers. That fully explains a mid-band dip no filter could reproduce. The
+table is kept only as a record of a measurement that pointed the right way for
+the wrong reason -- our output was never supposed to match it.
 
 Candidates, in the order worth testing:
 
