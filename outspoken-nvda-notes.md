@@ -1,0 +1,310 @@
+# outSPOKEN / MacinTalk 1984 — working notes
+
+**Goal:** an NVDA add-on that speaks with the original 1984 MacinTalk, by
+running the real 68000 code under an emulator. Same architecture as
+`pctalker-nvda` and Jayson Smith's EchoTalk: run the actual binary, model only
+what it touches, ship the emulator freely and let the user supply the engine.
+
+Status: **the engine runs.** Musashi is vendored and building, the host DLL
+exists for x86 and x64, and **MacinTalk's `DriverOpen` executes to completion
+and initialises itself exactly as the static analysis predicted** — see
+"First execution" below. The sound model is settled (`docs/sound-model.md`) and
+the driver API is mapped (`docs/driver-api.md`).
+
+## First execution — 2026-08-15
+
+`py -3 tools/probe_open.py`:
+
+```
+  +0006C  _NewHandle                 -> 0x00080B00     ($B00 = 2816, as predicted)
+  +0008E  _CmpString                 STUBBED
+  +0012A  _HLock
+  +00162  _HUnlock
+  stop: returned to sentinel, D0 = 0        44 instructions, 0 faults
+
+  voice  $3A  = 0        rate  $32 = 150     pitch $30 = 110
+  v0 rate $C6 = 150      v0 pitch $C4 = 110
+  v1 rate $CC = 150      v1 pitch $CA = 250
+```
+
+Every one of those values was written into `docs/driver-api.md` from the
+disassembly *before* anything ran. **Execution confirmed the reading.**
+
+### The bug that made it "work" in 14 instructions
+
+The first run returned cleanly having done nothing. An OS trap returns its
+error in `D0` **and sets the condition codes from it** — callers branch on the
+flags. Our handler set `D0` and left the flags alone, so `_NewHandle`'s
+following `bne` saw a stale `Z` and took the error exit, which returns
+`noErr`. A clean success that allocated nothing.
+
+The fix is in `service_atrap`: patch the **stacked** SR, not the live one, since
+the `rte` restores from the stack. Toolbox traps (`$A800+`) return on the stack
+and are left alone.
+
+Worth keeping as a shape: *a plausible success is the expensive failure*. The
+only reason it was caught in a minute is that the doc said Open should reach
+`_GetResource` and the log showed it did not.
+
+---
+
+## The find
+
+`D:\B II\outspoken.bin` — outSPOKEN by Berkeley Systems, a Mac control panel
+(`'cdev'`, creator `'BSDo'`), 151,680 bytes, MacBinary, **© 1988 Berkeley
+System Design**. All 63 resources extracted to `C:\git\outspoken-rsrc\`, with
+`FINDINGS.md` alongside.
+
+**`'DRVR' 1030`, the driver named `.sp`, 21,272 bytes, IS the original
+MacinTalk.** Four copyright strings inside it:
+
+```
++00420  COPYRIGHT 1984, JOSEPH KATZ / MARK BARTON
++005D1  COPYRIGHT 1984, JOSEPH KATZ / MARK BARTON
++02966  COPYRIGHT 1984 MARK BARTON & JOSEPH KATZ
++03676  COPYRIGHT 1984 MARK BARTON & JOSEPH KATZ
+```
+
+Katz and Barton wrote the MacinTalk that introduced the Mac in January 1984 and
+later founded **SoftVoice**. This is that line — **not** MacinTalk 2/3, which
+is Tim Schaaff at Apple, 1992–94, and whose source is in `C:\git\wintalker`.
+Those are sibling branches, not ancestor and descendant.
+
+### Driver entry points
+
+| routine | offset |
+|---|---|
+| Open | `+0x005A` |
+| Prime | `+0x4BA4` |
+| Control | `+0x018E` |
+| Status | `+0x02E0` |
+| Close | `+0x028A` |
+
+**Speech goes through `Prime` (`_Write`), not `Control`** — an earlier note here
+said the opposite and was wrong. `Control` sets voice, rate and pitch; there are
+two voices, differing only in pitch (110 Hz and 250 Hz). There is also an
+**export table at +$0014** that Berkeley's own code jumps through. Full map with
+ranges, defaults and the `CPUFlag` requirement: **`docs/driver-api.md`**.
+
+### Routine map — run `py -3 tools/symbol_map.py`
+
+MacsBug names survived in the shipped binary, and each one sits *after* the
+routine it names. That gives exact extents for free, which matters because a
+disassembler will happily decode the phoneme tables as instructions:
+
+```
+0x0014 SetStopSpeechCallback   0x005A DriverOpen  <-- driver Open
+0x0182 ...the synthesiser, 19 KB, unnamed...      <-- Control/Close/Status/Prime
+0x4CA0 ResetBufLength   0x4CE6 SetupA3
+0x4E84 OpenSound        0x4E98 CloseSound      (8-byte empty stubs)
+0x4EAE ChannelBusy      0x4EF4 WaitSoundDone   0x4F40 SilenceChannel
+0x4F9C STOPSPEECH       0x4FCC EndOfSpeech     0x50C4 CALLBACK
+0x5100 MACSTARTSOUND    0x51AA CtrlDown        0x51D0 MACSTOPSOUND
+0x524A ClearBuffers     0x5282 StuffA3
+```
+
+The four remaining entry points (`Control` +0x018E, `Close` +0x028A, `Status`
++0x02E0, `Prime` +0x4BA4) all fall in the big unnamed block — that block is the
+1984 synthesiser itself and carries no symbols.
+
+`Reader` at +0x187 is *not* a symbol: it is inside a Pascal string constant that
+`DriverOpen` feeds to `_CmpString`. Cosmetic, but it is why the scanner does not
+list it.
+
+### ANSWERED — `.sp` is not self-contained, and that is good news
+
+It uses the **Sound Manager**: `bufferCmd` (81) + `callBackCmd` (13) through
+`_SndDoCommand`, two buffers of **3870 8-bit unsigned samples at 22254.5455 Hz**.
+There is no `.Sound` string in the binary and no DAC pacing to model. Full
+evidence and the complete list of traps the host must service:
+**`docs/sound-model.md`**.
+
+It also pulls outSPOKEN's own resources — `DriverOpen` calls
+`GetResource('RULZ', 130)`, `GetResource('RULZ', 129)` and
+`GetResource('TALK', 1)`. Berkeley wrote the text front end (`RULZ` rules,
+`PHNM` phonemes, two `DICT`s); MacinTalk is the phoneme back end. Note the IDs
+are offset by 1000 from what the cdev actually stores (`RULZ 1129`, `TALK
+1001`), and we have only one `RULZ`.
+
+---
+
+## CPU core: Musashi, not Unicorn
+
+**Unicorn cannot run this.** Its m68k target comes from QEMU, which grew up
+around ColdFire, and ColdFire deleted the instructions real 68000 code lives on.
+Measured:
+
+| instruction | result |
+|---|---|
+| `movem.l a0-a2,-(a7)` | **illegal** |
+| `movem.l (a7)+,a0-a2` | **illegal** |
+| `movem.l (a0),d0-d1` | ok — the form ColdFire kept |
+| `dbra d0,-4` | **illegal** |
+| `link`/`unlk`/`bsr.w`/`rts`/`lea (pc)`/`swap`/`ext.l` | ok |
+
+MacinTalk's `Open` dies on its second instruction. `rts` looked broken too and
+was not — that was a bad test harness returning into unmapped zeros. Check
+before concluding.
+
+**Use Musashi** (Karl Stenerud's 68000 core, the one MAME ships — plain C, MIT,
+built for embedding behind memory callbacks). Wrap it as a DLL and drive it from
+Python with `ctypes`, exactly as EchoTalk does with `fake6502`.
+`C:\git\wintalker` already proves CMake + MSVC building x86 and x64 DLLs on this
+machine.
+
+### Two things Unicorn taught us that carry over to any core
+
+* **A-line traps**: a Toolbox call surfaces as an exception with PC parked on
+  the `$Axxx` word. Read it, service it, advance PC by 2.
+* **`illegal` loops forever** — PC does not advance, so it re-fires. Terminate
+  on a sentinel address, the way `pctalker_speaker.py` does.
+
+---
+
+## The recording is the WRONG engine — my error, recorded so it is not repeated
+
+`C:\git\outspoken-rsrc\outspoken_sample.wav` — 48 kHz, 16-bit stereo, 18.9 s.
+Whisper: *"Welcome to outSPOKEN, Anne"*, then punctuation read aloud
+(`comma`, `period`) as a screen reader does. F0 about 123 Hz with a clean
+harmonic stack (246, 372, 495, 615, 735…), 90% of energy below 5.5 kHz.
+
+**But the disk has outSPOKEN 8.0, ALVA BV, © 1997–98**, which requires a 68020
+and speaks through the **Speech Manager** — `ttsc`, `[[pbas +7]]`, `[[rate]]`.
+That is PlainTalk, i.e. **MacinTalk 3, the `wintalker` branch**. So this
+recording is the sibling engine, not `.sp`.
+
+Lesson: check *which version is installed* before capturing a reference.
+
+Real 1984 reference audio needs the 1988 cdev running on an older System —
+a separate expedition, not a blocker.
+
+### "Anne"
+
+The 1988 code holds `Welcome to outSPOKEN,` as a 21-character Pascal string
+ending in the comma; the name is appended at runtime. Nearby, `BLURBDIALOG`:
+
+```
+Please enter your name.
+3PLIY5Z EH1NTER YOHR NEY2M, DHEH1N /HIH1T RIY1TER1N.
+```
+
+Tomi did not type it. **Anne is a previous owner**, her name still in the disk
+image, still spoken aloud on launch.
+
+---
+
+## Test vectors — better than the recording
+
+The 1988 resources carry announcements **pre-written in MacinTalk phonemes with
+stress digits**, which bypasses the text front end entirely and lets the
+synthesizer be tested on its own:
+
+```
+3PLIY5Z EH1NTER YOHR NEY2M, DHEH1N /HIH1T RIY1TER1N.
+    = "Please enter your name, then hit return."
+
+1DHIHS KAA1PIY IHZ FOHR DIH2MUNSTREY3SHUN OW3NLIY.
+    = "This copy is for demonstration only."
+```
+
+The phoneme alphabet also appears in the driver at `+0x015AE`:
+`IYIHEHAEAAAHAOUHAXIXERUXQXOHRXLXEY`, then `NXNHDXQ`, `ULUMUNILIMIN`.
+
+---
+
+## Files
+
+| path | what |
+|---|---|
+| `D:\B II\outspoken.bin` | the 1988 control panel, MacBinary |
+| `C:\git\outspoken-rsrc\` | all 63 resources, one file each |
+| `C:\git\outspoken-rsrc\FINDINGS.md` | the MacinTalk identification |
+| `C:\git\outspoken-rsrc\outspoken_sample.wav` | the (wrong-engine) capture |
+| `C:\git\outspoken-nvda\tools\trap_probe.py` | loads `.sp`, calls Open, logs traps |
+| `C:\git\outspoken-nvda\docs\cpu-core-decision.md` | why Unicorn is out |
+| `C:\git\wintalker\` | MacinTalk 2/3 source, sibling branch, builds x86+x64 |
+| `D:\B II\BasiliskII_prefs` | repaired (paths were `C:`, files are on `D:`); backup `.bak-2026-08-15` |
+
+Basilisk fix, for reference: `rom` path corrected, missing `Mac OS 8.1.hfv`
+dropped, `Starterdisk.hfv` added, **`noaudio true` → `false`** (it was muted),
+dead `typemapfile` cleared.
+
+---
+
+## Next steps
+
+1. ~~Find where audio is written.~~ **Done** — `docs/sound-model.md`.
+2. ~~Disassemble `Control`.~~ **Done** — `docs/driver-api.md`. The `RULZ`
+   resource worry is closed too: that probe is unreachable dead code.
+3. **Vendor Musashi**, build the DLL for x86 and x64 alongside the wintalker
+   toolchain (`C:\git\wintalker` already proves CMake + MSVC here). A plain
+   **68000** core is enough — set `CPUFlag` (`$012F`) to 0 and the driver's only
+   68020 instructions (`movec`) are never reached.
+4. **Port `trap_probe.py` to Musashi** and run `Open`. It should want
+   `_NewHandle($B00)`, then `_GetResource('TALK', 1)` — serve it the extracted
+   `TALK 1001` with the +1000 ID mapping.
+5. Hand over a channel and two 3892-byte buffers via the export table at
+   `+$001E`, `PBWrite` the text, harvest PCM at `bufferCmd`, resample
+   22254.5455 Hz → device rate, wrap for NVDA.
+
+### Still unknown
+
+* Who calls `StuffA3` (+$5282) and the buffer-swap wait (+$52BC). No branch in
+  the image targets either, so the synthesiser reaches them through a pointer —
+  likely one of the globals at `0x4C16`. Not blocking; it will show up the first
+  time the engine runs.
+* The driver's globals sit **inside the resource image** at `0x4C16`, reached
+  PC-relative from every routine. So the 21,272 bytes are **not read-only** —
+  map them writable, and reload a fresh copy per utterance if runs ever need to
+  be repeatable. This is the kind of thing that surfaces as "the second
+  utterance sounds wrong".
+
+### Tools that exist now
+
+| tool | what it does |
+|---|---|
+| `tools/symbol_map.py` | recovers all 18 MacsBug routines and their extents |
+| `tools/disasm.py` | capstone m68k with A-traps resolved by name; takes a symbol or a range |
+| `tools/trap_probe.py` | the Unicorn probe — kept for reference, Unicorn cannot run this code |
+
+### Design in from commit one, both learned the hard way
+
+* **Every budget gets a counter, and non-zero is a logged fault.** Jayson's
+  warning to Tomi was exactly this: his first fix failed because the 6502 was
+  not given enough time to run. A limit that truncates silently gets got wrong
+  again. See `notes/step_budget_truncation.md` in `C:\git\echotalk`.
+* **The user supplies `outspoken.bin`.** Empty `rom/` directory in the add-on,
+  README instructions, a `--with-images` flag for personal builds only.
+  Retrofitting this is how `READSPF.EXE` ended up tracked in pctalker.
+
+  **Tomi's UX, decided 2026-08-15 — no settings panel for this.** On first
+  launch, if `rom/` is empty, one dialog:
+
+  > "ROM for outSPOKEN is not present. Press OK to open the empty ROM folder in
+  > Windows Explorer, where you can paste a working outSPOKEN ROM."
+
+  OK runs `os.startfile(rom_dir)`. That is the whole import flow. Implement it
+  in a `globalPlugin` so it can appear at startup, and have `SynthDriver.check()`
+  return whether the ROM exists so the synth simply is not offered until it does.
+
+  **Distribution, per Tomi:** the Hungarian synths (PC-ROBOT, BraiLab, PC-TALKER,
+  FlexVoice) may ship with binaries bundled *in the release*, never in the repo,
+  because we hold distribution rights from their authors. **outSPOKEN has no such
+  permission** — GitHub gets code only; a bundled build stays on Tomi's own
+  Eurpod synths folder for friends. See [[kiraly-correspondence-state]].
+
+---
+
+## Rights
+
+outSPOKEN is Berkeley Systems, later ALVA BV. MacinTalk is Katz and Barton.
+There is no permission letter here of the kind Király gave for PC-TALKER.
+
+**How the code is executed has no bearing on this.** Emulating it "abstractly"
+is not a shield — distributing MacinTalk's 21 KB would be infringement whether
+Musashi runs it or a real 68000 does. What is freely shippable is *our*
+emulator, host and driver; the engine comes from the user's own copy. That is
+precisely how EchoTalk handles the Textalker images, and it is the only part of
+the arrangement doing real legal work.
+
+Local investigation is fine. Publication needs the question answered first.

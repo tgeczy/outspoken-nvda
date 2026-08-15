@@ -1,0 +1,27 @@
+# The engine.  outSPOKEN and MacinTalk are not ours to distribute -- see
+# THIRD_PARTY_LICENSES.md.  Every extracted resource is a .bin, so the rule is
+# blunt on purpose: nothing binary gets committed by accident.
+*.bin
+rom/
+addon/synthDrivers/outspoken_rom/
+
+# Vendored third-party source.  build.sh fetches Musashi; the repo stays ours.
+third_party/
+
+# Build output
+build/
+*.dll
+*.exe
+*.obj
+*.lib
+*.exp
+*.pdb
+*.log
+
+# Audio captured while testing
+*.wav
+*.aiff
+
+__pycache__/
+*.pyc
+.venv/
