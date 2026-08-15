@@ -292,15 +292,23 @@ class SynthDriver(SynthDriver):
                 # wait for.
                 item = self._queue.get(timeout=0.05) if pending                     else self._queue.get()
             except queue.Empty:
-                try:
-                    self._player.idle()
-                except Exception:
-                    pass
+                # Report completion as soon as everything is rendered and fed,
+                # WITHOUT waiting for the audio to drain.
+                #
+                # Waiting is the theoretically right answer and it cost half a
+                # second of interactive latency, because NVDA paces what it
+                # sends on this notification: with a 0.5 s letter, everything
+                # afterwards ran 0.5 s late. The Amiga Narrator add-on, which
+                # drives the same kind of engine acceptably, does not wait
+                # either.
+                #
+                # The risk this takes on is the one that add-on has: NVDA can
+                # decide the utterance is finished and cancel the tail. Two
+                # things make that less likely here than there -- the engine's
+                # trailing padding is trimmed, so the audio ends when the
+                # speech does, and cancel() only stops the player when there is
+                # something to interrupt.
                 self._audioOut = False
-                # Completion means the audio has PLAYED, never that the engine
-                # returned: Prime comes back with real speech still sitting in
-                # the last buffer, and calling this any earlier costs the final
-                # ~150 ms of every utterance.
                 synthDoneSpeaking.notify(synth=self)
                 pending = False
                 continue

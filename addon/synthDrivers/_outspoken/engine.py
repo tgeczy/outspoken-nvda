@@ -52,6 +52,17 @@ _PAD = (0x80, 0x60, 0x40)
 #: silence to that value is a click -- heard, in Tomi's words, as raindrops.
 _FADE = 90                      # samples, about 4 ms at 22254 Hz
 
+#: A short, FIXED gap after each utterance.
+#:
+#: The engine's own trailing padding is 28 to 149 ms depending on where its
+#: last buffer happened to end, which is both wasteful and uneven. Trimming all
+#: of it made consecutive utterances run together -- "space" ran straight into
+#: the next typed letter -- so a small constant goes back in its place. Worth
+#: exposing as a "shorten pauses" setting later; the value is the whole
+#: mechanism.
+_GAP_MS = 45
+_GAP = int(22254.5454 * _GAP_MS / 1000.0)
+
 
 def _tidy(pcm):
     """Strip the engine's padding and ramp the edges.
@@ -76,7 +87,7 @@ def _tidy(pcm):
         g = k / float(fade)
         out[k] = 128 + int((out[k] - 128) * g)
         out[-1 - k] = 128 + int((out[-1 - k] - 128) * g)
-    return bytes(out)
+    return bytes(out) + bytes([0x80]) * _GAP
 
 
 class Engine(object):
