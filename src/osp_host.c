@@ -127,14 +127,28 @@ unsigned int m68k_read_memory_8(unsigned int a)
     }
     return g_ram[a];
 }
+/* Word and long reads are watched too.  Hooking only byte reads once made a
+ * field with four `move.w` consumers look completely unread. */
+static void note_read(unsigned a)
+{
+    if (g_rwatch_hi > g_rwatch_lo && a >= g_rwatch_lo && a < g_rwatch_hi) {
+        unsigned i = g_rwatch_n % RWATCH_CAP;
+        g_rwatch_pc[i] = m68k_get_reg(NULL, M68K_REG_PPC);
+        g_rwatch_addr[i] = a;
+        g_rwatch_n++;
+    }
+}
+
 unsigned int m68k_read_memory_16(unsigned int a)
 {
     if (!in_ram(a, 2)) { note_fault(a, 0, 2); return 0; }
+    note_read(a);
     return ((unsigned)g_ram[a] << 8) | g_ram[a + 1];
 }
 unsigned int m68k_read_memory_32(unsigned int a)
 {
     if (!in_ram(a, 4)) { note_fault(a, 0, 4); return 0; }
+    note_read(a);
     return ((unsigned)g_ram[a] << 24) | ((unsigned)g_ram[a + 1] << 16)
          | ((unsigned)g_ram[a + 2] << 8) | g_ram[a + 3];
 }

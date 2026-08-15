@@ -47,28 +47,44 @@ Selecting a voice copies that bank into the live fields; setting pitch or rate
 writes both the live field *and* the current bank. Out of the box the two banks
 differ only in pitch — **110 Hz and 250 Hz**, the male/female pair.
 
-**The third field is not a spare.** `$3A(a5)` (`$C8`/`$CE` in the banks) is the
-Amiga narrator's `mode`, natural or robotic, and the synthesiser reads it at
-+$27BE to pick the sub-frame reload:
+**The third field is not a spare — it swaps the formant table.** `$3A(a5)`
+(`$C8`/`$CE` in the banks) has two consumers, and the important one is in the
+*generator*, at +$1D7A, where it chooses which table the frame builder reads
+its three formant bytes from:
 
 ```
-cmpi.w  #$0, $3a(a5)
-bne.b   $27ce
-move.w  #$b, $52(a5)      ; mode 0, natural  -> 11
-move.w  #$8, $52(a5)      ; mode 1, robotic  ->  8
+tst.w   $3a(a5)
+beq.b   $1d84
+lea     $4b9e(pc), a3     ; non-zero -> a different table
+                          ; zero     -> $2ff6(pc)
 ```
 
-Both banks default it to 0, which is why it looked absent. Driving it directly
-gives the **same four voices the Amiga add-on offers** — `sex` x `mode`.
-Rendered from `AY1 KAEN SPIY1K AXGEH1N`, with the fundamental measured off the
-output by autocorrelation rather than assumed:
+It is read again at +$27BE, where it picks the sub-frame reload — 11 when zero,
+8 otherwise — so the table also advances faster.
 
-| voice | pitch field | mode | measured f0 |
+**It is not the Amiga's natural/robotic mode.** That label was assumed from the
+Amiga's documented field list and is wrong: a different formant set played
+through a faster advance sounds higher and thinner, not flatter. Tomi's ear on
+the rendered files: "a bit like chipmunk", where robotic should be monotone.
+
+Both banks default it to 0, which is why it looked absent. Driving pitch and
+`$3A` gives four distinct voices. Rendered from `AY1 KAEN SPIY1K AXGEH1N`, with
+the fundamental measured off the output by autocorrelation rather than assumed:
+
+| pitch field | `$3A` | measured f0 | judged by ear |
 |---|---|---|---|
-| male natural | 110 | 0 | 111.8 Hz |
-| male robotic | 110 | 1 | 103.5 Hz |
-| female natural | 250 | 0 | 247.3 Hz |
-| female robotic | 250 | 1 | 296.7 Hz |
+| 110 | 0 | 111.8 Hz | good |
+| 110 | 1 | 103.5 Hz | chipmunk-ish |
+| 250 | 0 | 247.3 Hz | good |
+| 250 | 1 | 296.7 Hz | chipmunk-ish |
+
+**Flat intonation has not been located.** The pitch path is `$30` (Hz) →
+`d0 = $127690 / pitch`, clamped to `$4A38`, stored at `$34(a5)`; then per frame
+`move.l $34(a5), d7 / divu.w d5, d7` writes a byte into the frame at +$21F2.
+The per-frame variation in `d5` is the contour, so a monotone mode means
+holding `d5` constant. Dropping stress digits from the phoneme string narrows
+the spread but does not flatten it (sd 53.8 → 48.6 Hz), so the stress marks are
+a contributor rather than the mechanism. Unresolved.
 
 Note the storage is reached through a **handle**: `dCtlStorage` at DCE`+$14`
 must be dereferenced before these offsets mean anything. Writing to the handle

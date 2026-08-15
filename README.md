@@ -7,8 +7,12 @@ on to found SoftVoice.
 The engine is real 68000 code. This project runs it under an emulator and models
 only the handful of Macintosh services it actually touches.
 
-> **Status: the engine runs.** `DriverOpen` executes to completion under Musashi
-> with no stubbed traps and no memory faults. Speech is not wired up yet. See
+> **Status: it speaks.** `DriverOpen` executes to completion under Musashi with
+> no stubbed traps and no memory faults, and `Prime` renders intelligible speech
+> that ends when it should — verified by ear on "I can speak again". Input is
+> **phonemes**; the English front end is a separate component this engine never
+> had (see [`docs/softvoice-lineage.md`](docs/softvoice-lineage.md)). The NVDA
+> add-on itself is not built yet. See
 > [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md) for the working log.
 
 ## You must supply the engine
@@ -33,9 +37,9 @@ execution has since confirmed the parts it can reach:
   what makes this tractable at all.
 * **[`docs/driver-api.md`](docs/driver-api.md)** — speech is `_Write`, not
   `_Control`. `Control` sets rate (0–4096, default 150), pitch (65–500 Hz) and
-  voice. Pitch and a natural/robotic mode flag give **four voices — male and
-  female, natural and robotic** — the same list the Amiga add-on exposes,
-  measured at 111.8 / 103.5 / 247.3 / 296.7 Hz.
+  voice. Pitch and a formant-table flag give **four voices**, though only the
+  two table-0 ones sound right; the other two come out thin. Flat intonation
+  is not yet located.
   Setting `CPUFlag` to 0 keeps the driver away from its only 68020 instructions,
   so a plain 68000 core suffices.
 * **[`docs/frame-format.md`](docs/frame-format.md)** — the synthesiser's
@@ -53,14 +57,21 @@ execution has since confirmed the parts it can reach:
 
 ## Tools
 
-None of these need an emulator; they read the binary.
-
 | tool | what it does |
 |---|---|
-| `tools/symbol_map.py` | recovers all 18 routines from the MacsBug names left in the shipped binary, with exact extents |
-| `tools/disasm.py` | capstone m68k with A-traps resolved by name; takes a symbol or an address range |
+| `tools/symbol_map.py` | recovers all 18 routines from the MacsBug names left in the shipped binary, with exact extents — no emulator needed |
+| `tools/disasm.py` | capstone m68k with A-traps resolved by name; takes a symbol or an address range — no emulator needed |
 | `tools/osp.py` | ctypes binding for the host DLL |
 | `tools/probe_open.py` | runs `DriverOpen` and reports every trap it asked for |
+| `tools/probe_speak.py` | the full sequence, and writes `build/spoken.wav`. Takes **phonemes**: `py -3 tools/probe_speak.py "AY1 KAEN SPIY1K AXGEH1N"` |
+| `tools/probe_frames.py` | measures the frame stride and dumps the block before playback mutates it |
+
+The host carries four instruments, and every one of them settled a question the
+disassembly had answered wrongly: a write watchpoint, a read watchpoint (a ring,
+because generation does thousands of reads before playback starts), a PC trace
+ring, and `osp_snap_set`/`osp_snap_halt`, which record `d0-d7`/`a0-a7` at a
+chosen PC and stop there. Reach for them early; see
+[`docs/frame-format.md`](docs/frame-format.md) for what it cost not to.
 
 ## Building
 
