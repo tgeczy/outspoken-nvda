@@ -174,7 +174,15 @@ class SynthDriver(SynthDriver):
         self._queue.put((items, time.perf_counter()))
 
     def cancel(self):
-        """Discard what is queued and stop what is sounding."""
+        """Discard what is queued and stop what is sounding.
+
+        Runs on NVDA's MAIN thread, which is also the thread that turns
+        application typedCharacter events into speech. Anything slow here
+        stalls those events, and they then arrive in a batch with the next
+        keystroke -- which is what "press space three times and hear
+        'space space space I'" looks like. So it is timed.
+        """
+        t0 = time.perf_counter()
         for q in (self._queue, self._audioQueue):
             while True:
                 try:
@@ -194,10 +202,16 @@ class SynthDriver(SynthDriver):
         # Interrupting is the entire job of cancel(). The stream-restart cost
         # was a hypothesis; the broken interruption was observed.
         self._audioOut = False
+        tStop = time.perf_counter()
         try:
             self._player.stop()
         except Exception:
             pass
+        now = time.perf_counter()
+        if (now - t0) * 1000 >= 15:
+            log.info("outSPOKEN: cancel took %.0f ms on the main thread "
+                     "(player.stop %.0f ms)"
+                     % ((now - t0) * 1000, (now - tStop) * 1000))
 
     def pause(self, switch):
         try:
