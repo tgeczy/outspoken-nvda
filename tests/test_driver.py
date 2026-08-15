@@ -132,3 +132,43 @@ def test_index_commands_are_reported(driver, rom_files):
            and time.perf_counter() - t0 < 3.0):
         time.sleep(0.01)
     assert synthDriverHandler.synthIndexReached.count > before
+
+
+def test_never_goes_permanently_silent(driver, rom_files):
+    """The worst failure this driver has had: it stopped speaking and stayed
+    that way.
+
+    A generation counter stamped items when queued and compared them when
+    rendered, so a cancel arriving in that window made an item stale. In real
+    use it reached a state where every item was stale and never recovered --
+    615 utterances spoken, then 194 discarded unheard, silence until NVDA was
+    restarted.
+
+    Thirty cancel-then-speak cycles, which is a few seconds of ordinary typing.
+    Audio must still be arriving at the end, not just at the start.
+    """
+    _warm(driver)
+    first_half = last_half = 0
+    for i, c in enumerate("abcdefghijklmnopqrstuvwxyzabcd"):
+        driver.cancel()
+        before = driver._player.bytes
+        driver.speak([c])
+        got = _settle(driver._player, before + 1, timeout=3.0) - before
+        if i < 15:
+            first_half += got
+        else:
+            last_half += got
+        time.sleep(0.02)
+    assert last_half > 0, "went silent partway through and stayed silent"
+    assert last_half > first_half * 0.5, \
+        "audio dwindled: %d bytes early, %d late" % (first_half, last_half)
+
+
+def test_cancel_leaves_the_driver_usable(driver, rom_files):
+    """Cancelling with nothing queued, repeatedly, must not wedge anything."""
+    _warm(driver)
+    for _ in range(20):
+        driver.cancel()
+    before = driver._player.bytes
+    driver.speak(["still here"])
+    assert _settle(driver._player, before + 1, timeout=5.0) > before
