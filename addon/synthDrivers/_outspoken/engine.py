@@ -60,7 +60,12 @@ _FADE = 90                      # samples, about 4 ms at 22254 Hz
 #: the next typed letter -- so a small constant goes back in its place. Worth
 #: exposing as a "shorten pauses" setting later; the value is the whole
 #: mechanism.
-_GAP_MS = 45
+#: 45 ms was enough while a blocking feed() sat in the render loop and put
+#: accidental delay between utterances. With feeding moved to its own thread
+#: they are pushed back to back, nothing pads them any more, and "space" ran
+#: into the next typed letter again. This is now the ONLY thing separating two
+#: utterances, so it has to be a real pause rather than a seam.
+_GAP_MS = 110
 _GAP = int(22254.5454 * _GAP_MS / 1000.0)
 
 #: One buffer's worth of silence, for wiping between utterances.
@@ -93,9 +98,28 @@ def _tidy(pcm):
     return bytes(out) + bytes([0x80]) * _GAP
 
 
+#: The live engine, if any. See the class docstring: a second one resets the
+#: first, so it is worth noticing rather than debugging later.
+_LIVE = []
+
+
 class Engine(object):
     def __init__(self, rom):
         """`rom` maps file name -> path, as `rom.find()` returns."""
+        if _LIVE:
+            # NVDA builds a new SynthDriver when the user switches synthesizer
+            # and back, and osp_init() resets the emulator's global state, so
+            # any older instance is quietly invalidated from here on.
+            try:
+                from logHandler import log
+                log.warning("outSPOKEN: a second engine was created; "
+                            "the previous one is no longer valid")
+            except Exception:
+                pass
+        for old in _LIVE:
+            old._dead = True             # it cannot safely touch the CPU now
+        _LIVE.append(self)
+        self._dead = False
         image = open(rom["DRVR_1030.bin"], "rb").read()
         self._entries = osp.driver_entries(image)
         self.h = h = osp.Host()
@@ -189,6 +213,16 @@ class Engine(object):
         s = self._storage()
         self.h.w16(s + 0x30, max(65, min(500, int(pitch_hz))))
 
+    def read_settings(self):
+        """What the engine is actually holding, not what we asked for.
+
+        Worth reading back rather than trusting: a letter measures twice as
+        long inside NVDA as outside it at a nominally identical rate, and only
+        one of those two numbers can be true.
+        """
+        s = self._storage()
+        return (self.h.r16(s + 0x30), self.h.r16(s + 0x32))
+
     def set_rate(self, rate):
         s = self._storage()
         self.h.w16(s + 0x32, max(40, min(2560, int(rate))))
@@ -203,8 +237,18 @@ class Engine(object):
             return nrl.letter_name(t, self.rules)
         return nrl.translate(text, self.rules)
 
+    def close(self):
+        """Retire this engine. Any later call is a no-op rather than a fault."""
+        self._dead = True
+        try:
+            _LIVE.remove(self)
+        except ValueError:
+            pass
+
     def stop(self):
         """Safe from another thread: one byte the callback polls per frame."""
+        if self._dead:
+            return
         try:
             self.h.w8(FLAG, 1)
         except Exception:
@@ -212,6 +256,10 @@ class Engine(object):
 
     def speak(self, phonemes):
         """-> 8-bit unsigned PCM at NATIVE_RATE, leading silence trimmed."""
+        if self._dead:
+            # A newer Engine has reset the emulator's global state; driving the
+            # CPU from here would run against memory that is no longer ours.
+            return b""
         h, pb = self.h, self._pb
         h.w8(FLAG, 0)
         # Wipe the sound buffers first.

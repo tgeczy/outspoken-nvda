@@ -195,6 +195,8 @@ class SynthDriver(SynthDriver):
     def terminate(self):
         self._stopped = True
         self.cancel()
+        if self._engine:
+            self._engine.close()         # stop it touching the emulator
         self._queue.put(None)
         self._audioQueue.put(None)
         try:
@@ -409,7 +411,8 @@ class SynthDriver(SynthDriver):
                             % (total, value[:24], phonemes[:40],
                                (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
                                (t2 - t1) * 1000,
-                               len(pcm) / 22254.5454, self._engineRate))
+                               len(pcm) / 22254.5454, self._engineRate)
+                            + " engine holds pitch=%d rate=%d" % eng.read_settings())
                     pending = True
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
