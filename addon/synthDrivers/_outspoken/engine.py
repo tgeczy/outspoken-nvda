@@ -63,6 +63,9 @@ _FADE = 90                      # samples, about 4 ms at 22254 Hz
 _GAP_MS = 45
 _GAP = int(22254.5454 * _GAP_MS / 1000.0)
 
+#: One buffer's worth of silence, for wiping between utterances.
+_SILENCE = bytes([0x80]) * 3870
+
 
 def _tidy(pcm):
     """Strip the engine's padding and ramp the edges.
@@ -157,6 +160,7 @@ class Engine(object):
         h = self.h
         chan, bufa, bufb, rec = (WORK + 0x400, WORK + 0x1000,
                                  WORK + 0x3000, WORK + 0x300)
+        self._bufs = (bufa, bufb)
         for off in range(0, 0x80, 4):
             h.w32(chan + off, 0)
         # ChannelBusy short-circuits on chan+$20 == -1 and reports idle without
@@ -210,6 +214,21 @@ class Engine(object):
         """-> 8-bit unsigned PCM at NATIVE_RATE, leading silence trimmed."""
         h, pb = self.h, self._pb
         h.w8(FLAG, 0)
+        # Wipe the sound buffers first.
+        #
+        # MACSTARTSOUND is handed two buffers once and the engine reuses them
+        # for every utterance, filling each from the start and then handing
+        # over its whole declared length. Anything the new utterance has not
+        # reached yet is still the PREVIOUS one's speech, so a short phrase
+        # arrives with the tail of the one before it stuck on the front.
+        #
+        # Measured: "space" is 9,761 samples on its own and 14,982 straight
+        # after "a" -- and the 5,221 difference is almost exactly the 5,001
+        # samples "a" takes. Heard as one utterance running into the next, and
+        # as latency, because what you hear first is the thing you asked for
+        # last time.
+        for base in self._bufs:
+            h.load(base + 22, _SILENCE)
         # A trailing space and a cleared run after it are both load-bearing.
         # The parser reads past the text it was given: "IY4" alone renders
         # nothing at all and returns after 408 instructions, while "IY4 " gives

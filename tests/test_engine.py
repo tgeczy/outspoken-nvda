@@ -106,3 +106,22 @@ def test_synthesis_is_fast(eng):
         eng.speak(eng.translate("notification chevron button"))
     per = (time.perf_counter() - t0) / 5 * 1000
     assert per < 250, "%.0f ms per utterance" % per
+
+
+def test_no_audio_bleeds_in_from_the_previous_utterance(eng):
+    """The engine reuses two sound buffers for every utterance and hands over
+    a whole buffer's declared length, so anything the new utterance has not
+    reached yet is still the previous one's speech.
+
+    Measured before the fix: "space" was 9,761 samples alone and 14,982 after
+    "a" -- and the 5,221 difference is almost exactly the 5,001 samples "a"
+    takes. Heard as one utterance running into the next, and as latency,
+    because the first thing you hear is what you asked for last time.
+    """
+    alone = eng.speak(eng.translate("space"))
+    for before in ("a", "hello there", "the quick brown fox jumps over", "z"):
+        eng.speak(eng.translate(before))
+        after = eng.speak(eng.translate("space"))
+        assert after == alone, \
+            "'space' changed after %r: %d vs %d samples" % (
+                before, len(after), len(alone))

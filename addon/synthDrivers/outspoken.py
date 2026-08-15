@@ -81,6 +81,7 @@ class SynthDriver(SynthDriver):
     def __init__(self):
         super().__init__()
         self._rate, self._pitch = 50, 50
+        self._engineRate = 0
         self._voiceId = "male"
         self._engine = None
         self._engineError = None
@@ -232,7 +233,9 @@ class SynthDriver(SynthDriver):
         and still reaches genuinely fast at the top, which is where a lot of
         screen-reader users sit.
         """
-        eng.set_rate(_RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (self._rate / 100.0))
+        self._engineRate = int(
+            _RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (self._rate / 100.0))
+        eng.set_rate(self._engineRate)
         base = self._baseHz()
         factor = 0.5 + (self._pitch / 100.0)                   # 0.5x .. 1.5x
         eng.set_voice(base * factor)
@@ -353,10 +356,13 @@ class SynthDriver(SynthDriver):
                     # abandons the rest of the previous utterance instead of
                     # waiting it out.
                     data = self._to16(pcm)
+                    tFirst = None
                     for off in range(0, len(data), _CHUNK_BYTES):
                         if gen != self._gen:
                             break
                         self._player.feed(data[off:off + _CHUNK_BYTES])
+                        if tFirst is None:
+                            tFirst = time.perf_counter()
                     t3 = time.perf_counter()
                     # Latency is the thing users report and the thing that is
                     # hardest to guess at, so measure the whole path -- from
@@ -364,15 +370,21 @@ class SynthDriver(SynthDriver):
                     # say where it went. Only when it is slow enough to notice,
                     # so a normal log stays quiet.
                     total = (t3 - queuedAt) * 1000
-                    if total >= 80:
+                    # Time to the FIRST slice is what the listener experiences
+                    # as latency; time to the last is only how long the worker
+                    # was busy. Reporting the wrong one of those sent me after
+                    # feed() when the audio may already have been sounding.
+                    first = ((tFirst or t3) - queuedAt) * 1000
+                    if total >= 80 or first >= 60:
                         log.info(
-                            "outSPOKEN: %.0f ms for %r "
+                            "outSPOKEN: first %.0f ms, all %.0f ms for %r "
                             "(wait %.0f, translate %.0f, synth %.0f, feed %.0f;"
-                            " %.2f s audio)"
-                            % (total, value[:30], (t0 - queuedAt) * 1000,
+                            " %.2f s audio, rate %d, %d chunks)"
+                            % (first, total, value[:30], (t0 - queuedAt) * 1000,
                                (t1 - t0) * 1000, (t2 - t1) * 1000,
                                (t3 - t2) * 1000,
-                               len(pcm) / 22254.5454))
+                               len(pcm) / 22254.5454, self._engineRate,
+                               max(1, -(-len(data) // _CHUNK_BYTES))))
                     pending = True
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
