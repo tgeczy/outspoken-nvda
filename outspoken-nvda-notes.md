@@ -512,3 +512,79 @@ Find the missing `a6 += 2`. The candidates, in order:
 
 The third is the most likely: the drift may be a *consequence* of a wrong first
 frame rather than its cause.
+
+---
+
+## The front end works. The engine overruns its own frame buffer.
+
+Verified the three generator input lists for the first time (they are
+`$100(a5)` phoneme indices, `$500(a5)` durations, `$300(a5)` flags). For the
+input `DHIHS KAA1PIY IHZ` -- "this copy is" -- the staged phoneme list is:
+
+```
+ 0  QX  dur 20     <- leading glottal
+ 1  DH  dur  5
+ 2  IH  dur 13
+ 3  S   dur 11
+ 4  KX  dur  8     <- K expanded to its aspirated allophone
+ 5  ..  dur  1        plus two burst components
+ 6  ..  dur  5
+ 7  AA  dur 19
+ 8  P   dur 10     <- P likewise
+ 9  ..  dur  1
+10  ..  dur  2
+11  IY  dur 13
+12  IH  dur 14
+13  Z   dur 10
+14  -   dur 24     <- trailing pause
+15  FF  END
+```
+
+That is a correct phonetic rendering with correct allophone expansion and
+plausible durations. **Parsing, allophone selection and duration assignment all
+work.** The hard half of the engine is fine; the defect is purely in playback.
+
+### The overrun, provable from those numbers
+
+Durations sum to **156 frames**, so `_NewPtr` allocates `156 * 8 + 8` = **1256
+bytes**, and the frame list ends with the eight `$FF` bytes written at +$1CFC.
+
+The read watchpoint caught playback still reading at **frame+1538**.
+
+**1538 is 282 bytes past the end of a 1256-byte buffer.** The engine ran off the
+end of its own data into unallocated heap, which is why it then read constants
+forever and never returned. Not a subtle numerical problem -- a straightforward
+overrun.
+
+### So the real question is: what should have stopped it?
+
+The **first**-frame loader checks the terminator:
+
+```
++027E4  move.b (a6)+, $1(a5)
++027E8  bmi.w  $290C            ; byte >= $80 -> end of speech
+```
+
+The **steady-state** loader does not. Its only `bmi` tests the return value of
+the stop-speech hook, not the frame byte:
+
+```
++028D2  jsr    $0.l             ; the stop-speech callback
++028D8  bmi.b  $290C            ; hook says stop
++028DA  moveq  #0, d7
++028DC  move.b (a6)+, d7        ; pitch -- NOT checked for $FF
+```
+
+Our hook is `moveq #0,d0; rts` -- permanently "keep going". So either
+
+* the hook is genuinely how an utterance ends, and Berkeley's returned negative
+  once the frame list was consumed (in which case our stub is the bug and the
+  fix is to make it count frames), or
+* the terminator is caught in the **other** synthesis loop at +$298E, which runs
+  when `$14(a5)` is non-zero -- and `$FF` in that field would select exactly
+  that path. Our `$14(a5)` is 0 for every frame, which would mean we never get
+  there because the field is being read from the wrong offset.
+
+The second is the more likely, and it would also explain the 6-vs-8 stride
+discrepancy: both are symptoms of reading `$14`/`$10` from the wrong bytes.
++$298E is the last significant block of this engine still unread.
