@@ -77,7 +77,7 @@ class SynthDriver(SynthDriver):
         self._engineError = None
         self._stopped = False
         self._queue = queue.Queue()
-        self._cancel = threading.Event()
+        self._gen = 0
         self._player = self._makePlayer()
         self._worker = threading.Thread(target=self._run, name="outspoken",
                                         daemon=True)
@@ -131,21 +131,30 @@ class SynthDriver(SynthDriver):
                 items.append(("text", item))
             elif isinstance(item, speech.commands.IndexCommand):
                 items.append(("index", item.index))
-        self._queue.put(items)
+        # Stamped with the current generation. NVDA calls cancel() and then
+        # speak() in quick succession, so anything queued from here must
+        # survive that cancel -- see below.
+        self._queue.put((self._gen, items))
 
     def cancel(self):
-        self._cancel.set()
+        """Drop everything queued before now, and stop what is sounding.
+
+        Deliberately does NOT drain the queue. Draining races against the
+        speak() that follows almost every cancel: if the drain lands after the
+        new item was queued, the new speech is thrown away and the keystroke is
+        silent. That was heard as "typing fast does not speak every letter".
+
+        Bumping a generation counter cannot race. Items carry the generation
+        they were queued under, the worker skips any that are stale, and the
+        speak() after this one picks up the new value and survives.
+        """
+        self._gen += 1
         if self._engine:
             self._engine.stop()          # one byte; safe across threads
         try:
             self._player.stop()
         except Exception:
             pass
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
 
     def pause(self, switch):
         try:
@@ -235,11 +244,47 @@ class SynthDriver(SynthDriver):
         return bytes(out)
 
     def _run(self):
+        """Render queued speech, and wait for playback only when idle.
+
+        Two rules earned by listening to it get things wrong:
+
+        * **Never block while work is outstanding.** Synthesis takes 4-30 ms;
+          playback takes seconds. Waiting for the audio after every utterance
+          made each keystroke queue behind the sound of the one before it, so
+          a letter could arrive half a second late. The wait now happens only
+          after a short quiet period with nothing left to render.
+        * **Skip stale work rather than dropping fresh work.** Every item
+          carries the generation it was queued under; cancel() bumps that
+          counter. Anything older is discarded here, where it is safe, instead
+          of by draining the queue in cancel(), which raced the speak() that
+          follows it and swallowed keystrokes.
+        """
+        pending = False                 # audio has been fed but not waited on
         while not self._stopped:
-            items = self._queue.get()
-            if items is None:
+            try:
+                # Poll briefly while audio is outstanding so a new keystroke is
+                # picked up at once; block outright when there is nothing to
+                # wait for.
+                item = self._queue.get(timeout=0.05) if pending                     else self._queue.get()
+            except queue.Empty:
+                try:
+                    self._player.idle()
+                except Exception:
+                    pass
+                # Completion means the audio has PLAYED, never that the engine
+                # returned: Prime comes back with real speech still sitting in
+                # the last buffer, and calling this any earlier costs the final
+                # ~150 ms of every utterance.
+                synthDoneSpeaking.notify(synth=self)
+                pending = False
+                continue
+
+            if item is None:
                 return
-            self._cancel.clear()
+            gen, items = item
+            if gen != self._gen:
+                continue                # cancelled before we got to it
+
             eng = self._ensureEngine()
             if eng is None:
                 synthDoneSpeaking.notify(synth=self)
@@ -247,31 +292,15 @@ class SynthDriver(SynthDriver):
             try:
                 self._applySettings(eng)
                 for kind, value in items:
-                    if self._cancel.is_set():
+                    if gen != self._gen:
                         break
                     if kind == "index":
                         synthIndexReached.notify(synth=self, index=value)
                         continue
-                    phonemes = eng.translate(value)
-                    pcm = eng.speak(phonemes)
-                    if self._cancel.is_set() or not pcm:
+                    pcm = eng.speak(eng.translate(value))
+                    if gen != self._gen or not pcm:
                         continue
                     self._player.feed(self._to16(pcm))
-                if not self._cancel.is_set() and self._queue.empty():
-                    # Completion is when the audio has PLAYED, never when the
-                    # engine returned: Prime comes back with real speech still
-                    # sitting in the last buffer, and treating its return as
-                    # "done" costs the final ~150 ms of every utterance.
-                    #
-                    # But only wait when nothing else is queued. Synthesis takes
-                    # 4-30 ms while playback takes seconds, so blocking here
-                    # with work outstanding makes every keystroke queue behind
-                    # the audio of the one before it -- which is felt as lag
-                    # while typing, and was.
-                    try:
-                        self._player.idle()
-                    except Exception:
-                        pass
+                    pending = True
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
-            synthDoneSpeaking.notify(synth=self)
