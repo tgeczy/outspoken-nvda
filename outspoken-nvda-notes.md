@@ -734,3 +734,28 @@ than to a fourth theory about how they were being cut apart.
 The leading/trailing split of the gap stays regardless — a gap on the end
 really is destroyed by an interruption, which is true and worth keeping. It
 simply was not the case in play here.
+
+### Correction, written the moment it was resolved
+
+The section above was right about the mechanism and **wrong in its
+conclusion.** The symptom disappeared with the 70 ms leading / 40 ms trailing
+split, so the gap was the fix after all — and claiming that placement "could
+never have affected this symptom" was overreach.
+
+The likeliest reason earlier attempts appeared to change nothing is that they
+were not running. `engine.py` is imported once, so copying a new file over it
+does nothing until NVDA reloads the driver; several "no change" reports were
+probably measurements of the previous build.
+
+**Two lessons, and the second is the expensive one:**
+
+* When a fix produces no change at all, that is evidence — but *"the fix was
+  never loaded"* must be ruled out before *"the mechanism is wrong"*. Verifying
+  a deployment is one `grep`, and it was skipped repeatedly.
+* Reasoning from a true observation to a confident negative — "therefore this
+  cannot matter" — is where this project went wrong most often. That NVDA
+  delivers both utterances in the same millisecond is a fact. The conclusion
+  drawn from it was not.
+
+A gap on the end really is destroyed by an interruption, so the split earns its
+place regardless.
