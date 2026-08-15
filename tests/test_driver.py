@@ -172,3 +172,37 @@ def test_cancel_leaves_the_driver_usable(driver, rom_files):
     before = driver._player.bytes
     driver.speak(["still here"])
     assert _settle(driver._player, before + 1, timeout=5.0) > before
+
+
+def test_typing_like_nvda_does(driver, rom_files):
+    """Simulate NVDA's actual pattern for typed characters.
+
+    For every keystroke NVDA cancels, speaks one character, and -- because the
+    sequence ends with EndUtteranceCommand -- does not send the next until
+    synthDoneSpeaking arrives. Nothing else in this file models that pacing,
+    which is why several latency bugs reached Tomi before they reached a test.
+
+    Asserts what a user would notice: every keystroke produces sound, and none
+    of them takes long enough to feel like a delay.
+    """
+    import synthDriverHandler
+    done = synthDriverHandler.synthDoneSpeaking
+    _warm(driver)
+    latencies, spoke = [], 0
+    for c in "abcdefghijklmnopqrst":
+        done.arm()
+        driver.cancel()
+        before = driver._player.bytes
+        t0 = time.perf_counter()
+        driver.speak([c])
+        got = _settle(driver._player, before + 1, timeout=3.0)
+        if got > before:
+            spoke += 1
+            latencies.append(time.perf_counter() - t0)
+        done.wait(timeout=3.0)           # NVDA waits here before the next key
+    assert spoke == 20, "only %d of 20 keystrokes produced audio" % spoke
+    latencies.sort()
+    median = latencies[len(latencies) // 2]
+    assert median < 0.15, "median keystroke latency %.0f ms" % (median * 1000)
+    assert latencies[-1] < 0.60, "worst keystroke latency %.0f ms" % (
+        latencies[-1] * 1000)

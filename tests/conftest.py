@@ -157,8 +157,23 @@ def _install_fake_nvda():
         VoiceSetting = RateSetting = PitchSetting = VolumeSetting = _Setting
         def __init__(self): pass
     class _Notifier(object):
-        def __init__(self): self.count = 0
-        def notify(self, **k): self.count += 1
+        """Counts, and lets a test wait for the next notification.
+
+        NVDA paces speech on synthDoneSpeaking when a sequence ends with
+        EndUtteranceCommand, which typed characters always do -- so a test that
+        does not wait for it is not testing what a user experiences.
+        """
+        def __init__(self):
+            self.count = 0
+            self._event = threading.Event()
+        def notify(self, **k):
+            self.count += 1
+            self._event.set()
+        def wait(self, timeout=5.0):
+            self._event.clear()
+            return self._event.wait(timeout)
+        def arm(self):
+            self._event.clear()
     sdh.SynthDriver = SynthDriver
     sdh.VoiceInfo = VoiceInfo
     sdh.synthDoneSpeaking = _Notifier()
