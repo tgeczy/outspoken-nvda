@@ -663,3 +663,39 @@ offset is a symptom of something upstream rather than the whole fix.
 
 All three of those were my leading theories. Recording them as *dead* is worth
 as much as the live lead.
+
+---
+
+## Reproducing the current state from cold
+
+```sh
+sh build.sh x64                 # fetches Musashi, builds build/osp_host.dll
+py -3 tools/probe_open.py       # Open: 5 traps, 0 stubbed, voice banks 110/250
+py -3 tools/probe_speak.py "DHIHS KAA1PIY IHZ FOHR DIH2MUNSTREY3SHUN OW3NLIY."
+```
+
+`probe_speak` writes `build/spoken.wav`. Expect ~3.9 s of speech-shaped but
+unintelligible audio, then silent buffers until the instruction budget trips.
+
+**Input must be phonemes**, from the 112-entry table at driver+$159C (dump it
+with the snippet in the "phoneme alphabet" work). Do **not** start the string
+with a stress digit -- the parser checks the *previous* phoneme's attributes and
+rejects a leading one, which looks like an instant silent return.
+
+### The three debugging tools that actually found things
+
+All are in `src/osp_host.c`, driven from Python:
+
+| tool | call | what it answered |
+|---|---|---|
+| PC ring trace | `osp_trace_enable(1)` | where Prime gave up (exit path, in one read) |
+| write watchpoint | `osp_watch_set(lo, hi)` | who writes the oscillator increments, and how often |
+| read watchpoint (ring) | `osp_rwatch_set(lo, hi)` | the real frame stride, settling a contradiction two static readings could not |
+
+The read watch **must** be a ring: generation performs thousands of frame-buffer
+reads before playback starts, so a one-shot log fills entirely with the wrong
+phase and reports zero playback reads.
+
+The engine's own memory is the best witness available. Three times now, reading
+the disassembly produced a plausible wrong answer and the watchpoint produced
+the right one in a minute. Reach for the watchpoint sooner.
