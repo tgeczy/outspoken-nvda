@@ -105,9 +105,25 @@ static void note_write(unsigned a, unsigned n, unsigned v, int size)
     g_watch_n++;
 }
 
+/* Read watch: record (pc, addr) for byte reads in a range.  Static reading has
+ * twice now failed to settle how far `a6` advances per frame; the machine can
+ * simply be asked. */
+static unsigned g_rwatch_lo, g_rwatch_hi;
+#define RWATCH_CAP 4096
+static unsigned g_rwatch_pc[RWATCH_CAP], g_rwatch_addr[RWATCH_CAP];
+static int      g_rwatch_n;
+
 unsigned int m68k_read_memory_8(unsigned int a)
 {
     if (!in_ram(a, 1)) { note_fault(a, 0, 1); return 0; }
+    if (g_rwatch_hi > g_rwatch_lo && a >= g_rwatch_lo && a < g_rwatch_hi) {
+        /* Ring, not a one-shot: generation does thousands of reads before
+         * playback starts, and a capped log fills with the wrong phase. */
+        unsigned i = g_rwatch_n % RWATCH_CAP;
+        g_rwatch_pc[i] = m68k_get_reg(NULL, M68K_REG_PPC);
+        g_rwatch_addr[i] = a;
+        g_rwatch_n++;
+    }
     return g_ram[a];
 }
 unsigned int m68k_read_memory_16(unsigned int a)
@@ -864,6 +880,20 @@ OSP_API int osp_buflog_get(int i, unsigned *addr, unsigned *len)
 {
     if (i < 0 || i >= g_buflog_n) return -1;
     *addr = g_buflog_addr[i]; *len = g_buflog_len[i];
+    return 0;
+}
+
+OSP_API void osp_rwatch_set(unsigned lo, unsigned hi)
+{ g_rwatch_lo = lo; g_rwatch_hi = hi; g_rwatch_n = 0; }
+OSP_API int osp_rwatch_n(void) { return g_rwatch_n; }
+/* Oldest-first over whatever the ring still holds. */
+OSP_API int osp_rwatch_get(int i, unsigned *pc, unsigned *addr)
+{
+    int have = g_rwatch_n < RWATCH_CAP ? g_rwatch_n : RWATCH_CAP;
+    int start = g_rwatch_n - have;
+    if (i < 0 || i >= have) return -1;
+    *pc = g_rwatch_pc[(start + i) % RWATCH_CAP];
+    *addr = g_rwatch_addr[(start + i) % RWATCH_CAP];
     return 0;
 }
 

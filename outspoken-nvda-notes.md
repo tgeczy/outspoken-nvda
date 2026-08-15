@@ -435,3 +435,80 @@ operand. A plain `move.b (a6)+, $5(a5)` read as `move.b (a6)+, -$5556(a5)`,
 which sent me hunting a self-modifying relocation that does not exist. Fixed:
 `end` now bounds the loop, never the decoder's input. **Check the byte count
 before believing a strange displacement.**
+
+---
+
+## Measured, not inferred: playback drifts off the frame grid and then stalls
+
+A read watchpoint on the frame buffer settles the 6-vs-8 contradiction by
+watching the machine instead of arguing with the disassembly.
+
+**Everything that WRITES the buffer uses an 8-byte stride**, confirmed live:
+
+```
+driver+0x01B92  frame+  0
+driver+0x01B92  frame+  8   (+8)
+driver+0x01B92  frame+ 16   (+8)   ... and so on, uniformly
+driver+0x01E5A  frame+152   \  the transition smoother, reading
+driver+0x01E5E  frame+160   /  pairs exactly 8 apart
+```
+
+**Playback does not.** Late in the run the only frame-buffer reads left are:
+
+```
+driver+0x0295A  frame+1534
+driver+0x0294E  frame+1533
+driver+0x02954  frame+1535
+   ...the same three bytes, forever
+```
+
+Two things fall out of that:
+
+1. **`a6` is at 1538, which is not a multiple of 8.** It has drifted off the
+   frame grid, exactly as the 6-byte consumer stride predicts. So from some
+   point onward the "formant selectors" are being read from the middle of the
+   wrong frame.
+2. **`driver+0x28DC` never fires again.** That is the frame-advance read, and
+   without it `a6` stops moving entirely. The engine is stuck re-reading three
+   bytes and emitting samples from them — which is both the constant output and
+   the reason `Prime` never returns.
+
+So the garbled audio and the non-termination are **one defect, not two**.
+
+### Why it stalls
+
+The frame advance at +$28DA is guarded by two counters packed into the halves
+of `d0`, juggled by `swap`:
+
+```
++028CE  subq.w #1, d0 ; bpl.b $2930     <- never falls through any more
++028D2  jsr $0.l                        <- stop-speech hook
++028DA  move.b (a6)+, d7                <- the frame advance
+...
++02930  swap d0 ; subq.w #1, d0 ; bpl.b $2960
++02936  moveq #0, d1 ; moveq #0, d2     <- phases reset every sub-frame
++02948  clr.w d0 ; move.b $10(a5), d0   <- reload from the frame
+```
+
+`$38(a5)` is `$35B6 / rate` = 13750/150 = **91**, which at the engine's 11127 Hz
+native rate is 8.2 ms — a correct frame period. The other counter comes from
+`$10(a5)`, loaded from the frame's last byte. Once `a6` is off-grid that byte is
+garbage, the counter never expires, and +$28DA is never reached again.
+
+Note also +$2936: **`d1` and `d2` — the two formant phases — are zeroed on every
+sub-frame.** With the increments also zero (loaded once, from an empty frame 0)
+the phase can never accumulate at all.
+
+### Next
+
+Find the missing `a6 += 2`. The candidates, in order:
+* an advance inside the `$14(a5) != 0` loop at +$298E that only runs when that
+  flag is set — ours is always 0, which would mean our `$14` is wrong, not the
+  stride;
+* the stop-speech hook at +$28D2 being expected to adjust something (our stub
+  only returns 0);
+* `$10(a5)`/`$14(a5)` being read from the wrong byte offsets, which would make
+  the "6-byte" reading itself an artefact of already-drifted alignment.
+
+The third is the most likely: the drift may be a *consequence* of a wrong first
+frame rather than its cause.
