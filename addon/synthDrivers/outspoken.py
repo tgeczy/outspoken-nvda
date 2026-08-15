@@ -12,6 +12,7 @@ import os
 import queue
 import sys
 import threading
+import time
 
 import nvwave
 import speech.commands
@@ -78,6 +79,7 @@ class SynthDriver(SynthDriver):
         self._stopped = False
         self._queue = queue.Queue()
         self._gen = 0
+        self._audioOut = False           # is there audio worth interrupting?
         self._player = self._makePlayer()
         self._worker = threading.Thread(target=self._run, name="outspoken",
                                         daemon=True)
@@ -134,7 +136,7 @@ class SynthDriver(SynthDriver):
         # Stamped with the current generation. NVDA calls cancel() and then
         # speak() in quick succession, so anything queued from here must
         # survive that cancel -- see below.
-        self._queue.put((self._gen, items))
+        self._queue.put((self._gen, items, time.perf_counter()))
 
     def cancel(self):
         """Drop everything queued before now, and stop what is sounding.
@@ -151,10 +153,18 @@ class SynthDriver(SynthDriver):
         self._gen += 1
         if self._engine:
             self._engine.stop()          # one byte; safe across threads
-        try:
-            self._player.stop()
-        except Exception:
-            pass
+        # Only touch the player when it actually has something to interrupt.
+        # NVDA calls cancel() before nearly every speak(), including when
+        # nothing is sounding, and each stop() tears the output stream down so
+        # the next feed() pays to start it again. A long utterance absorbs that
+        # once; a short one is almost entirely start-up cost, which is why
+        # typing echo lagged while whole sentences did not.
+        if self._audioOut:
+            self._audioOut = False
+            try:
+                self._player.stop()
+            except Exception:
+                pass
 
     def pause(self, switch):
         try:
@@ -271,6 +281,7 @@ class SynthDriver(SynthDriver):
                     self._player.idle()
                 except Exception:
                     pass
+                self._audioOut = False
                 # Completion means the audio has PLAYED, never that the engine
                 # returned: Prime comes back with real speech still sitting in
                 # the last buffer, and calling this any earlier costs the final
@@ -281,7 +292,7 @@ class SynthDriver(SynthDriver):
 
             if item is None:
                 return
-            gen, items = item
+            gen, items, queuedAt = item
             if gen != self._gen:
                 continue                # cancelled before we got to it
 
@@ -297,10 +308,31 @@ class SynthDriver(SynthDriver):
                     if kind == "index":
                         synthIndexReached.notify(synth=self, index=value)
                         continue
-                    pcm = eng.speak(eng.translate(value))
+                    t0 = time.perf_counter()
+                    phonemes = eng.translate(value)
+                    t1 = time.perf_counter()
+                    pcm = eng.speak(phonemes)
+                    t2 = time.perf_counter()
                     if gen != self._gen or not pcm:
                         continue
+                    self._audioOut = True
                     self._player.feed(self._to16(pcm))
+                    t3 = time.perf_counter()
+                    # Latency is the thing users report and the thing that is
+                    # hardest to guess at, so measure the whole path -- from
+                    # NVDA handing us the text to the audio being fed -- and
+                    # say where it went. Only when it is slow enough to notice,
+                    # so a normal log stays quiet.
+                    total = (t3 - queuedAt) * 1000
+                    if total >= 80:
+                        log.info(
+                            "outSPOKEN: %.0f ms for %r "
+                            "(wait %.0f, translate %.0f, synth %.0f, feed %.0f;"
+                            " %.2f s audio)"
+                            % (total, value[:30], (t0 - queuedAt) * 1000,
+                               (t1 - t0) * 1000, (t2 - t1) * 1000,
+                               (t3 - t2) * 1000,
+                               len(pcm) / 22254.5454))
                     pending = True
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
