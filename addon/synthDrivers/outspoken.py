@@ -305,11 +305,25 @@ class SynthDriver(SynthDriver):
                     self._nEmpty))
 
     def _feed(self):
-        """Push PCM to the player, in slices, until told otherwise.
+        """Push each utterance to the player in ONE call.
 
-        Runs on its own thread so a blocking feed never delays rendering or
-        the completion notification. The generation check is what makes a
-        cancel drop audio that has been rendered but not yet pushed.
+        Slicing it and checking for a newer generation between slices was a
+        mistake, and the counters said so: 367 of 435 rendered utterances were
+        discarded before they ever reached the device -- 46% -- which is heard
+        as words cut in half and as the synthesizer going quiet for a dozen
+        keystrokes at a time.
+
+        The cause is that feeding blocks for as long as the audio lasts, so
+        while one utterance is being pushed the worker renders several more in
+        milliseconds and stacks them up behind it. A single cancel then wipes
+        the whole backlog. The Amiga Narrator add-on cannot have this bug
+        because it hands the player a whole utterance at once: the audio is in
+        the device before any cancel can take it away.
+
+        So the generation is checked exactly once, before the push. After that
+        the utterance is committed, and interrupting it is the player's job --
+        cancel() calls stop(), which both flushes what is queued and releases
+        this thread from the blocking feed.
         """
         while not self._stopped:
             item = self._audioQueue.get()
@@ -320,16 +334,10 @@ class SynthDriver(SynthDriver):
                 self._nStaleAudio += 1
                 self._report()
                 continue
-            for off in range(0, len(data), _CHUNK_BYTES):
-                if gen != self._gen:
-                    self._nStaleAudio += 1
-                    self._report()
-                    break
-                try:
-                    self._player.feed(data[off:off + _CHUNK_BYTES])
-                except Exception:
-                    log.error("outSPOKEN: feeding audio failed", exc_info=True)
-                    break
+            try:
+                self._player.feed(data)
+            except Exception:
+                log.error("outSPOKEN: feeding audio failed", exc_info=True)
 
     def _run(self):
         """Render queued speech, and wait for playback only when idle.
