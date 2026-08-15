@@ -34,6 +34,7 @@ STREAM_START = 0.12
 class FakeWavePlayer(object):
     def __init__(self, *a, **k):
         self.fed = 0
+        self.bytes = 0
         self.stops = 0
         self.idles = 0
         self.startups = 0
@@ -44,6 +45,7 @@ class FakeWavePlayer(object):
     def feed(self, data):
         with self._lock:
             self.fed += 1
+            self.bytes += len(data)
             now = time.perf_counter()
             if not self._running:
                 self._running = True

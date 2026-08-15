@@ -9,9 +9,11 @@ docs/sound-model.md and docs/frame-format.md. The short version:
     driver+$001E              hand over the channel and two buffers
     Prime (_Write)            speak; PCM arrives at every bufferCmd
 
-One instance owns one emulator. The host DLL is a single CPU with global
-state, so every call into it must come from the same thread -- see the worker
-in `synthDrivers/outspoken.py`. The one exception is `stop()`, which writes a
+One instance owns one emulator, and **there can only be one**. The host DLL is
+a single CPU with global state, so constructing a second Engine resets the
+first out from under it -- silently, and with no error to notice. Every call
+into it must also come from the same thread; see the worker in
+`synthDrivers/outspoken.py`. The one exception is `stop()`, which writes a
 single byte the callback polls, and a lone `osp_w8` is safe from outside.
 """
 import os

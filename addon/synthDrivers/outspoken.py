@@ -39,6 +39,12 @@ OUT_RATE = 22254
 #: than the Amiga narrator's documented robotic mode, which has not been found.
 _VOICES = [("male", "Male", 110), ("female", "Female", 250)]
 
+#: How much audio to hand the player at a time, in bytes of 16-bit mono.
+#: Small enough that a blocking feed() cannot park the worker for long, large
+#: enough not to spend all day in ctypes.
+_CHUNK_MS = 60
+_CHUNK_BYTES = int(OUT_RATE * _CHUNK_MS / 1000.0) * 2
+
 
 class SynthDriver(SynthDriver):
     name = "outspoken"
@@ -316,7 +322,24 @@ class SynthDriver(SynthDriver):
                     if gen != self._gen or not pcm:
                         continue
                     self._audioOut = True
-                    self._player.feed(self._to16(pcm))
+                    # Feed in slices, not in one lump.
+                    #
+                    # WavePlayer.feed() blocks until the device has room, so
+                    # handing it a whole utterance parks this thread for most
+                    # of that utterance's duration -- measured at 394 ms for a
+                    # single letter and 1671 ms for one sentence. Nothing else
+                    # can be picked up meanwhile, which is felt as lag while
+                    # typing and as keystrokes being skipped outright.
+                    #
+                    # Slicing bounds the block to one slice and gives a place
+                    # to notice that newer speech has arrived, so a keystroke
+                    # abandons the rest of the previous utterance instead of
+                    # waiting it out.
+                    data = self._to16(pcm)
+                    for off in range(0, len(data), _CHUNK_BYTES):
+                        if gen != self._gen:
+                            break
+                        self._player.feed(data[off:off + _CHUNK_BYTES])
                     t3 = time.perf_counter()
                     # Latency is the thing users report and the thing that is
                     # hardest to guess at, so measure the whole path -- from
