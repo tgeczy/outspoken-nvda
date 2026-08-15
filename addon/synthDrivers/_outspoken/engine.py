@@ -52,21 +52,26 @@ _PAD = (0x80, 0x60, 0x40)
 #: silence to that value is a click -- heard, in Tomi's words, as raindrops.
 _FADE = 90                      # samples, about 4 ms at 22254 Hz
 
-#: A short, FIXED gap after each utterance.
+#: A short, fixed gap around each utterance -- MOSTLY IN FRONT.
 #:
 #: The engine's own trailing padding is 28 to 149 ms depending on where its
-#: last buffer happened to end, which is both wasteful and uneven. Trimming all
-#: of it made consecutive utterances run together -- "space" ran straight into
-#: the next typed letter -- so a small constant goes back in its place. Worth
-#: exposing as a "shorten pauses" setting later; the value is the whole
-#: mechanism.
-#: 45 ms was enough while a blocking feed() sat in the render loop and put
-#: accidental delay between utterances. With feeding moved to its own thread
-#: they are pushed back to back, nothing pads them any more, and "space" ran
-#: into the next typed letter again. This is now the ONLY thing separating two
-#: utterances, so it has to be a real pause rather than a seam.
-_GAP_MS = 110
-_GAP = int(22254.5454 * _GAP_MS / 1000.0)
+#: last buffer happened to end, which is both wasteful and uneven, so it is
+#: trimmed and this goes back in its place.
+#:
+#: The split matters. A gap on the END is the first thing an interruption
+#: destroys: type a letter while "space" is still playing and cancel() stops
+#: the player mid-word, tail and all, so the letter begins instantly and the
+#: two run together -- which is exactly what "space attaches to the next
+#: keypress" sounds like. A gap at the START belongs to the new utterance and
+#: survives, because it plays after the stop rather than before it.
+#:
+#: Kept small at the front so it costs little latency, with the remainder
+#: behind for the uninterrupted case. Worth exposing as a "shorten pauses"
+#: setting later; these two numbers are the whole mechanism.
+_LEAD_MS = 70
+_TAIL_MS = 40
+_LEAD = int(22254.5454 * _LEAD_MS / 1000.0)
+_TAIL = int(22254.5454 * _TAIL_MS / 1000.0)
 
 #: One buffer's worth of silence, for wiping between utterances.
 _SILENCE = bytes([0x80]) * 3870
@@ -95,7 +100,7 @@ def _tidy(pcm):
         g = k / float(fade)
         out[k] = 128 + int((out[k] - 128) * g)
         out[-1 - k] = 128 + int((out[-1 - k] - 128) * g)
-    return bytes(out) + bytes([0x80]) * _GAP
+    return bytes([0x80]) * _LEAD + bytes(out) + bytes([0x80]) * _TAIL
 
 
 #: The live engine, if any. See the class docstring: a second one resets the
@@ -120,6 +125,7 @@ class Engine(object):
             old._dead = True             # it cannot safely touch the CPU now
         _LIVE.append(self)
         self._dead = False
+        self._speaking = False
         image = open(rom["DRVR_1030.bin"], "rb").read()
         self._entries = osp.driver_entries(image)
         self.h = h = osp.Host()
@@ -246,8 +252,17 @@ class Engine(object):
             pass
 
     def stop(self):
-        """Safe from another thread: one byte the callback polls per frame."""
-        if self._dead:
+        """Interrupt the utterance in flight, if there is one.
+
+        Only while actually synthesising. The flag is polled by the frame
+        callback and aborts whatever Prime is doing, so setting it while the
+        engine is idle poisons the NEXT utterance instead of the current one.
+        Holding a key down makes NVDA cancel continuously, and the engine then
+        rendered nothing at all, over and over -- 'spoken' frozen at 392 while
+        'rendered-empty' climbed. Heard as speech disappearing until the
+        synthesizer was switched away and back.
+        """
+        if self._dead or not self._speaking:
             return
         try:
             self.h.w8(FLAG, 1)
@@ -298,5 +313,12 @@ class Engine(object):
         h.set_reg(osp.A7, STACK)
         h.set_reg(osp.A0, pb)
         h.set_reg(osp.A1, self._dce)
-        h.call(DRV_BASE + self._entries[1], max_instr=400_000_000)
+        self._speaking = True
+        try:
+            h.call(DRV_BASE + self._entries[1], max_instr=400_000_000)
+        finally:
+            # Clear it on the way out as well as on the way in, so a stop that
+            # lands late cannot survive into the next utterance.
+            self._speaking = False
+            h.w8(FLAG, 0)
         return _tidy(h.pcm)

@@ -125,3 +125,19 @@ def test_no_audio_bleeds_in_from_the_previous_utterance(eng):
         assert after == alone, \
             "'space' changed after %r: %d vs %d samples" % (
                 before, len(after), len(alone))
+
+
+def test_a_stop_while_idle_cannot_poison_the_next_utterance(eng):
+    """Holding a key down makes NVDA cancel continuously.
+
+    The stop flag is polled by the frame callback and aborts whatever Prime is
+    doing, so a stop landing while the engine is idle used to abort the NEXT
+    utterance instead of the current one. In use that meant the engine rendered
+    nothing at all, over and over: 'spoken' frozen at 392 while 'rendered-empty'
+    climbed, heard as speech vanishing until the synthesizer was switched away.
+    """
+    full = eng.speak(eng.translate("the quick brown fox"))
+    assert full
+    for _ in range(30):                  # as if a key were held down
+        eng.stop()
+        assert eng.speak(eng.translate("the quick brown fox")) == full
