@@ -7,13 +7,14 @@ on to found SoftVoice.
 The engine is real 68000 code. This project runs it under an emulator and models
 only the handful of Macintosh services it actually touches.
 
-> **Status: it speaks.** `DriverOpen` executes to completion under Musashi with
-> no stubbed traps and no memory faults, and `Prime` renders intelligible speech
-> that ends when it should — verified by ear on "I can speak again". Input is
-> **phonemes**; the English front end is a separate component this engine never
-> had (see [`docs/softvoice-lineage.md`](docs/softvoice-lineage.md)). The NVDA
-> add-on itself is not built yet. See
-> [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md) for the working log.
+> **Status: the add-on works.** MacinTalk speaks inside NVDA — English text,
+> both voices, rate and pitch, working interruption. The engine takes phonemes
+> only, so English is converted by an interpreter written for this project
+> reading the user's own `RULZ` rules and `DICT` exception list
+> (see [`docs/softvoice-lineage.md`](docs/softvoice-lineage.md) for why the
+> front end is a separate component at all). 38 tests:
+> `py -3 -m pytest tests -q`. Working log in
+> [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md).
 
 ## You must supply the engine
 
@@ -22,9 +23,22 @@ from it never will.** Those are © 1984 Katz and Barton and © 1989 Berkeley
 Systems (later ALVA BV), and we have no permission to redistribute them.
 Emulating code is not a licence to ship it.
 
-The add-on reads the engine out of its `rom/` folder, which arrives empty. On
-first launch, if it is empty, you get one dialog offering to open that folder in
-Explorer so you can paste in a copy extracted from your own outSPOKEN disk.
+The add-on reads the engine out of **`outspoken-roms`** in your NVDA
+configuration folder, which arrives empty — not the add-on's own directory,
+because updating an add-on deletes and recreates that and would take your engine
+with it. On first launch you get one dialog offering to open the folder in
+Explorer.
+
+`tools/extract_rom.py` fills it from a disk image or an outSPOKEN file you
+already have:
+
+```sh
+py -3 tools/extract_rom.py "C:/path/to/outSPOKEN"
+py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv"      # needs machfs
+```
+
+It classifies what it finds by what is inside it rather than by name, extracts
+what this project can use, and says plainly what it skipped and why.
 
 ## What was learned by reading the binary
 
