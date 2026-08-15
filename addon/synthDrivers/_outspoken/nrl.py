@@ -91,8 +91,18 @@ class Rules(object):
 # no special case.
 
 def _suffix_at(text, i):
-    for s in SUFFIXES:
-        if text[i:i + len(s)] == s:
+    """Length of the suffix at `i`, or 0.
+
+    `%` is "one of ER, E, ES, ED, ING, ELY" -- and they are *suffixes*, so the
+    match only counts when the word ends there. Without that check the `E` of
+    SELECT satisfies `%`, and the rule `[E]^%` turns a short E long: "sea-lect".
+    The same rule is right for COMPLETE, where the final E really is a suffix.
+
+    Longest first, so ELY beats E and ING beats nothing at all.
+    """
+    for s in sorted(SUFFIXES, key=len, reverse=True):
+        j = i + len(s)
+        if text[i:j] == s and (j >= len(text) or text[j] == " "):
             return len(s)
     return 0
 
@@ -239,6 +249,25 @@ def translate(text, rules):
             i += 1
     return "".join(out).strip()
 
+
+def letter_name(ch, rules):
+    """How a lone letter should be announced.
+
+    Twenty-five of the twenty-six already come out as their names -- B is
+    BIY4, W is DAH4BULYUW. `A` is the exception: a bare A matches the rule for
+    the *word* "a" and comes out as a schwa, which is heard as a clipped
+    "uh" when NVDA echoes a keystroke.
+
+    The rule file has the letter reading too, as ` [A. ]=EH4Y. `, so the value
+    is taken from the user's own rules rather than written in here. The dotted
+    form is no good for the rest -- consonants lose their vowel and B becomes a
+    silent "B." -- so it is used only where the plain reading is the word.
+    """
+    plain = translate(ch, rules)
+    if ch.upper() != "A":
+        return plain
+    dotted = translate(ch + ".", rules).rstrip(". ")
+    return dotted or plain
 
 # The rule file carries its own regression suite: every whole-word entry in the
 # exception dictionary is an exact input -> output pair, written by the people

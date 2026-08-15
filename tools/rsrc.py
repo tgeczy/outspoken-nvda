@@ -9,7 +9,7 @@ drops into `rom/` instead of demanding pre-extracted files.
 Handles a bare resource fork, a MacBinary wrapper (`.bin`), and an AppleDouble
 resource file, because users have all three and can rarely tell them apart.
 
-    py -3 tools/rsrc.py "C:\path\to\MacinTalk 2.rsrc"
+    py -3 tools/rsrc.py "C:/path/to/MacinTalk 2.rsrc"
     py -3 tools/rsrc.py <file> thng          # one type
     py -3 tools/rsrc.py <file> snd  128 out.bin
 """

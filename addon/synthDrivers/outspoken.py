@@ -257,11 +257,17 @@ class SynthDriver(SynthDriver):
                     if self._cancel.is_set() or not pcm:
                         continue
                     self._player.feed(self._to16(pcm))
-                if not self._cancel.is_set():
+                if not self._cancel.is_set() and self._queue.empty():
                     # Completion is when the audio has PLAYED, never when the
                     # engine returned: Prime comes back with real speech still
                     # sitting in the last buffer, and treating its return as
                     # "done" costs the final ~150 ms of every utterance.
+                    #
+                    # But only wait when nothing else is queued. Synthesis takes
+                    # 4-30 ms while playback takes seconds, so blocking here
+                    # with work outstanding makes every keystroke queue behind
+                    # the audio of the one before it -- which is felt as lag
+                    # while typing, and was.
                     try:
                         self._player.idle()
                     except Exception:

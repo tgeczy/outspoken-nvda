@@ -144,6 +144,10 @@ class Engine(object):
     def translate(self, text):
         if self.rules is None:
             return text
+        t = text.strip()
+        if len(t) == 1 and t.isalpha():
+            # Typing echo sends one character, and it wants the letter's NAME.
+            return nrl.letter_name(t, self.rules)
         return nrl.translate(text, self.rules)
 
     def stop(self):
@@ -157,11 +161,18 @@ class Engine(object):
         """-> 8-bit unsigned PCM at NATIVE_RATE, leading silence trimmed."""
         h, pb = self.h, self._pb
         h.w8(FLAG, 0)
-        raw = phonemes.encode("mac-roman", "replace")
-        if not raw.strip():
+        # A trailing space and a cleared run after it are both load-bearing.
+        # The parser reads past the text it was given: "IY4" alone renders
+        # nothing at all and returns after 408 instructions, while "IY4 " gives
+        # 14,904 samples. Worse, without the clear it reads whatever the
+        # previous, longer utterance left behind -- which is heard as fragments
+        # of another word bleeding onto the end of a short one.
+        raw = phonemes.strip().encode("mac-roman", "replace")
+        if not raw:
             return b""
+        raw += b" "
         txt, txt_h = WORK + 0x8000, WORK + 0x7000
-        h.load(txt, raw)
+        h.load(txt, raw + b" " * 64)
         h.w32(txt_h, txt)
         h.w32(pb + 32, txt_h)          # ioBuffer is a HANDLE, not a pointer
         h.w32(pb + 36, len(raw))
