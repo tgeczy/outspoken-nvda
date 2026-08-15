@@ -55,6 +55,7 @@ static unsigned       g_ram_size;
 #define STOP_BUDGET     2
 #define STOP_EXCEPTION  3
 #define STOP_FAULT      4
+#define STOP_BREAK      5
 
 static int          g_stop_reason;
 static int          g_stop_vector;
@@ -208,6 +209,22 @@ static unsigned g_ticks;          /* _TickCount, one per call */
 static unsigned *g_trace;
 static unsigned  g_trace_pos;
 static int       g_trace_on;
+
+/* Register snapshots at a chosen PC.
+ *
+ * The trace ring says where the CPU went; it cannot say what a pointer held
+ * when it got there.  Deducing a buffer stride from a disassembly listing is
+ * exactly the guess that has been wrong three times in this project, so:
+ * stop at the loader entry and write a6 down.  17 slots = d0-d7, a0-a7, pc. */
+#define SNAP_CAP 64
+static unsigned g_snap[SNAP_CAP][17];
+static unsigned g_snap_pc;                     /* 0 disables */
+static int      g_snap_n;
+/* Halt on the Nth arrival, so memory can be read before later passes touch
+ * it.  The player rewrites the frame block as it walks it -- +$28EC clears
+ * three bytes of every frame it consumes -- which makes a dump taken after
+ * the run a record of playback rather than of what playback was handed. */
+static int      g_snap_halt;
 
 static unsigned heap_alloc(unsigned size)
 {
@@ -674,6 +691,24 @@ static void run_pending_callback(void)
 static void instr_hook(unsigned int pc)
 {
     if (g_trace_on) g_trace[g_trace_pos++ & (TRACE_CAP - 1u)] = pc;
+    if (g_snap_pc && pc == g_snap_pc && g_snap_n < SNAP_CAP) {
+        static const int R[17] = {
+            M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3,
+            M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+            M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3,
+            M68K_REG_A4, M68K_REG_A5, M68K_REG_A6, M68K_REG_A7,
+            M68K_REG_PC };
+        int k;
+        for (k = 0; k < 17; k++)
+            g_snap[g_snap_n][k] = m68k_get_reg(NULL, (m68k_register_t)R[k]);
+        g_snap_n++;
+        if (g_snap_halt && g_snap_n >= g_snap_halt) {
+            g_stop_reason = STOP_BREAK;
+            g_stop_pc = pc;
+            m68k_end_timeslice();
+            return;
+        }
+    }
     if (pc == MAGIC_CB_RET) {
         g_in_callback = 0;
         m68k_end_timeslice();
@@ -716,6 +751,7 @@ OSP_API int osp_init(unsigned ram_size)
     if (!g_trace) g_trace = (unsigned *)malloc(TRACE_CAP * sizeof(unsigned));
     if (!g_trace) return -1;
     g_trace_pos = 0; g_trace_on = 0;
+    g_snap_pc = 0; g_snap_n = 0; g_snap_halt = 0;
 
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_init();
@@ -880,6 +916,17 @@ OSP_API int osp_buflog_get(int i, unsigned *addr, unsigned *len)
 {
     if (i < 0 || i >= g_buflog_n) return -1;
     *addr = g_buflog_addr[i]; *len = g_buflog_len[i];
+    return 0;
+}
+
+OSP_API void osp_snap_set(unsigned pc) { g_snap_pc = pc; g_snap_n = 0; }
+OSP_API void osp_snap_halt(int nth) { g_snap_halt = nth; }
+OSP_API int  osp_snap_n(void) { return g_snap_n; }
+OSP_API int  osp_snap_get(int i, unsigned *out)
+{
+    int k;
+    if (i < 0 || i >= g_snap_n) return -1;
+    for (k = 0; k < 17; k++) out[k] = g_snap[i][k];
     return 0;
 }
 

@@ -25,7 +25,7 @@ DLL_X86 = os.path.join(ROOT, "build", "osp_host_x86.dll")
  PREF_ADDR, PREF_DATA, PPC, IR) = range(31)
 
 STOP = {0: "still running", 1: "returned to sentinel", 2: "INSTRUCTION BUDGET",
-        3: "unhandled exception", 4: "fault"}
+        3: "unhandled exception", 4: "fault", 5: "snapshot breakpoint"}
 
 # Vector numbers worth naming when we stop on one.
 VECTORS = {
@@ -176,6 +176,24 @@ class Host(object):
 
     @property
     def fault_count(self): return self.lib.osp_fault_count()
+
+    # --- register snapshots at a PC -------------------------------------
+    # Keyed by name so a caller can say snap["a6"] rather than count slots.
+    SNAP_NAMES = ("d0 d1 d2 d3 d4 d5 d6 d7 "
+                  "a0 a1 a2 a3 a4 a5 a6 a7 pc").split()
+
+    def snap_at(self, pc):
+        """Record d0-d7/a0-a7/pc the first 64 times execution reaches `pc`."""
+        self.lib.osp_snap_set(pc)
+
+    @property
+    def snaps(self):
+        out = []
+        buf = (ctypes.c_uint * 17)()
+        for i in range(self.lib.osp_snap_n()):
+            self.lib.osp_snap_get(i, buf)
+            out.append(dict(zip(self.SNAP_NAMES, list(buf))))
+        return out
 
     @property
     def traps(self):

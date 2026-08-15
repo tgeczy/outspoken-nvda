@@ -41,7 +41,13 @@ EXPORT_STOPSPEECH = 0x0026
 BUF_BYTES = 22 + 3870
 
 
-def setup(text):
+def setup(text, before_prime=None):
+    """Run Open / MACSTARTSOUND / Prime.
+
+    `before_prime` is called with the Host once everything is staged but
+    before Prime runs -- the only moment where a probe can arm a watchpoint
+    or a snapshot and still see the synthesiser from its first instruction.
+    """
     image = open(DRVR, "rb").read()
     opn, prime, ctl, status, close = osp.driver_entries(image)
 
@@ -140,6 +146,8 @@ def setup(text):
     h.w16(pb + 16, 1)            # ioResult = in progress
 
     h.pcm_reset()
+    if before_prime:
+        before_prime(h)
     h.set_reg(osp.A7, STACK)
     h.set_reg(osp.A0, pb)
     h.set_reg(osp.A1, dce)
