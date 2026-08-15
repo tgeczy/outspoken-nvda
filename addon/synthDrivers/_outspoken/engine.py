@@ -43,6 +43,42 @@ HOOK = WORK + 0x200
 NATIVE_RATE = 22254.5454545
 
 
+#: Silence is 0x80; ClearBuffers also writes 0x60 into the classic frame, and a
+#: fresh utterance opens with a single 0x40. All three are padding.
+_PAD = (0x80, 0x60, 0x40)
+
+#: A few milliseconds of ramp at each end. Once the padding is gone the audio
+#: starts and stops at whatever amplitude it happened to reach, and a step from
+#: silence to that value is a click -- heard, in Tomi's words, as raindrops.
+_FADE = 90                      # samples, about 4 ms at 22254 Hz
+
+
+def _tidy(pcm):
+    """Strip the engine's padding and ramp the edges.
+
+    Leading silence is up to ~157 ms after a cancel; trailing silence is 28 to
+    149 ms because the driver pads its last buffer rather than shortening it
+    (docs/sound-model.md). On a half-second letter that padding is a third of
+    the duration, and with typing echo it is dead air between every keystroke.
+    """
+    n = len(pcm)
+    i = 0
+    while i < n and pcm[i] in _PAD:
+        i += 1
+    j = n
+    while j > i and pcm[j - 1] in _PAD:
+        j -= 1
+    if j - i < 2:
+        return b""
+    out = bytearray(pcm[i:j])
+    fade = min(_FADE, len(out) // 2)
+    for k in range(fade):
+        g = k / float(fade)
+        out[k] = 128 + int((out[k] - 128) * g)
+        out[-1 - k] = 128 + int((out[-1 - k] - 128) * g)
+    return bytes(out)
+
+
 class Engine(object):
     def __init__(self, rom):
         """`rom` maps file name -> path, as `rom.find()` returns."""
@@ -185,11 +221,4 @@ class Engine(object):
         h.set_reg(osp.A0, pb)
         h.set_reg(osp.A1, self._dce)
         h.call(DRV_BASE + self._entries[1], max_instr=400_000_000)
-        pcm = h.pcm
-        # An utterance after a cancel carries ~157 ms of leading silence, and a
-        # fresh one opens with a single $40 sample before its silence. Both are
-        # measured, not guessed -- see docs/frame-format.md.
-        i = 0
-        while i < len(pcm) and pcm[i] in (0x80, 0x60, 0x40):
-            i += 1
-        return pcm[i:] if i < len(pcm) else b""
+        return _tidy(h.pcm)
