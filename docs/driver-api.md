@@ -47,10 +47,10 @@ Selecting a voice copies that bank into the live fields; setting pitch or rate
 writes both the live field *and* the current bank. Out of the box the two banks
 differ only in pitch — **110 Hz and 250 Hz**, the male/female pair.
 
-**The third field is not a spare — it swaps the formant table.** `$3A(a5)`
-(`$C8`/`$CE` in the banks) has two consumers, and the important one is in the
-*generator*, at +$1D7A, where it chooses which table the frame builder reads
-its three formant bytes from:
+**The third field selects a formant table, and the second one does not work.**
+`$3A(a5)` (`$C8`/`$CE` in the banks) has two consumers. The important one is in
+the *generator*, at +$1D7A, where it chooses which table the frame builder
+reads its three formant bytes from:
 
 ```
 tst.w   $3a(a5)
@@ -59,24 +59,30 @@ lea     $4b9e(pc), a3     ; non-zero -> a different table
                           ; zero     -> $2ff6(pc)
 ```
 
-It is read again at +$27BE, where it picks the sub-frame reload — 11 when zero,
-8 otherwise — so the table also advances faster.
+It is read again at +$27BE, where it picks the sub-frame reload: 11 when zero,
+8 otherwise.
 
-**It is not the Amiga's natural/robotic mode.** That label was assumed from the
-Amiga's documented field list and is wrong: a different formant set played
-through a faster advance sounds higher and thinner, not flatter. Tomi's ear on
-the rendered files: "a bit like chipmunk", where robotic should be monotone.
+**Setting it does not give a second voice.** Measured on the same sentence at
+the same rate, `$3A = 0` renders 2.23 s and `$3A = 1` renders **0.18 s** -- the
+utterance collapses almost immediately, which is what the terminator being hit
+early looks like. Lowering the rate to compensate for the faster reload
+(232 -> 169) only stretches it to 0.28 s. It is not a fast voice; it is a
+broken render, and the "chipmunk" quality earlier attributed to it was that.
 
-Both banks default it to 0, which is why it looked absent. Driving pitch and
-`$3A` gives four distinct voices. Rendered from `AY1 KAEN SPIY1K AXGEH1N`, with
-the fundamental measured off the output by autocorrelation rather than assumed:
+The alternate table is presumably indexed differently and needs something this
+build does not configure. `DriverOpen` sets `$C8` and `$CE` to zero, so the
+shipped product never selects it.
 
-| pitch field | `$3A` | measured f0 | judged by ear |
-|---|---|---|---|
-| 110 | 0 | 111.8 Hz | good |
-| 110 | 1 | 103.5 Hz | chipmunk-ish |
-| 250 | 0 | 247.3 Hz | good |
-| 250 | 1 | 296.7 Hz | chipmunk-ish |
+**So the voice list really is two: male at 110 Hz and female at 250 Hz.** The
+Amiga narrator's four -- male/female against natural/robotic -- come from a
+`mode` its own device supports; this Macintosh build either lacks it or never
+shipped it working. Measured fundamentals for the two that do work, taken from
+the rendered audio by autocorrelation rather than assumed:
+
+| pitch field | measured f0 |
+|---|---|
+| 110 | 111.8 Hz |
+| 250 | 247.3 Hz |
 
 **Flat intonation has not been located.** The pitch path is `$30` (Hz) →
 `d0 = $127690 / pitch`, clamped to `$4A38`, stored at `$34(a5)`; then per frame

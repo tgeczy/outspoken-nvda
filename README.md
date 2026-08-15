@@ -37,9 +37,9 @@ execution has since confirmed the parts it can reach:
   what makes this tractable at all.
 * **[`docs/driver-api.md`](docs/driver-api.md)** — speech is `_Write`, not
   `_Control`. `Control` sets rate (0–4096, default 150), pitch (65–500 Hz) and
-  voice. Pitch and a formant-table flag give **four voices**, though only the
-  two table-0 ones sound right; the other two come out thin. Flat intonation
-  is not yet located.
+  voice. **Two voices, male at 110 Hz and female at 250 Hz** -- that is the
+  whole list. A formant-table flag exists but the alternate table renders a
+  2.23 s sentence in 0.18 s, so it is broken rather than robotic.
   Setting `CPUFlag` to 0 keeps the driver away from its only 68020 instructions,
   so a plain 68000 core suffices.
 * **[`docs/frame-format.md`](docs/frame-format.md)** — the synthesiser's
