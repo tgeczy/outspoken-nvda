@@ -90,6 +90,17 @@ class SynthDriver(SynthDriver):
         self._gen = 0
         self._audioOut = False           # is there audio worth interrupting?
         self._player = self._makePlayer()
+        # Pushing audio is separated from rendering it, because
+        # WavePlayer.feed() blocks until the device has room -- for as long as
+        # the audio lasts. With that inside the render loop, synthDoneSpeaking
+        # could not be reported until the whole utterance had been pushed, and
+        # NVDA paces what it sends next on exactly that notification. Measured:
+        # 162 ms between NVDA calling speak() and this driver being handed the
+        # next letter, with our own queue wait at zero.
+        self._audioQueue = queue.Queue()
+        self._feeder = threading.Thread(target=self._feed, name="outspoken-feed",
+                                        daemon=True)
+        self._feeder.start()
         self._worker = threading.Thread(target=self._run, name="outspoken",
                                         daemon=True)
         self._worker.start()
@@ -185,6 +196,7 @@ class SynthDriver(SynthDriver):
         self._stopped = True
         self.cancel()
         self._queue.put(None)
+        self._audioQueue.put(None)
         try:
             self._player.close()
         except Exception:
@@ -271,6 +283,27 @@ class SynthDriver(SynthDriver):
         out[1::2] = pcm8.translate(cls._FLIP)
         return bytes(out)
 
+    def _feed(self):
+        """Push PCM to the player, in slices, until told otherwise.
+
+        Runs on its own thread so a blocking feed never delays rendering or
+        the completion notification. The generation check is what makes a
+        cancel drop audio that has been rendered but not yet pushed.
+        """
+        while not self._stopped:
+            item = self._audioQueue.get()
+            if item is None:
+                return
+            gen, data = item
+            for off in range(0, len(data), _CHUNK_BYTES):
+                if gen != self._gen:
+                    break
+                try:
+                    self._player.feed(data[off:off + _CHUNK_BYTES])
+                except Exception:
+                    log.error("outSPOKEN: feeding audio failed", exc_info=True)
+                    break
+
     def _run(self):
         """Render queued speech, and wait for playback only when idle.
 
@@ -356,13 +389,7 @@ class SynthDriver(SynthDriver):
                     # abandons the rest of the previous utterance instead of
                     # waiting it out.
                     data = self._to16(pcm)
-                    tFirst = None
-                    for off in range(0, len(data), _CHUNK_BYTES):
-                        if gen != self._gen:
-                            break
-                        self._player.feed(data[off:off + _CHUNK_BYTES])
-                        if tFirst is None:
-                            tFirst = time.perf_counter()
+                    self._audioQueue.put((gen, data))
                     t3 = time.perf_counter()
                     # Latency is the thing users report and the thing that is
                     # hardest to guess at, so measure the whole path -- from
@@ -374,17 +401,15 @@ class SynthDriver(SynthDriver):
                     # as latency; time to the last is only how long the worker
                     # was busy. Reporting the wrong one of those sent me after
                     # feed() when the audio may already have been sounding.
-                    first = ((tFirst or t3) - queuedAt) * 1000
-                    if total >= 80 or first >= 60:
+                    if total >= 60:
                         log.info(
-                            "outSPOKEN: first %.0f ms, all %.0f ms for %r "
-                            "(wait %.0f, translate %.0f, synth %.0f, feed %.0f;"
-                            " %.2f s audio, rate %d, %d chunks)"
-                            % (first, total, value[:30], (t0 - queuedAt) * 1000,
-                               (t1 - t0) * 1000, (t2 - t1) * 1000,
-                               (t3 - t2) * 1000,
-                               len(pcm) / 22254.5454, self._engineRate,
-                               max(1, -(-len(data) // _CHUNK_BYTES))))
+                            "outSPOKEN: %.0f ms for %r -> %r "
+                            "(wait %.0f, translate %.0f, synth %.0f;"
+                            " %.2f s audio, rate %d)"
+                            % (total, value[:24], phonemes[:40],
+                               (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
+                               (t2 - t1) * 1000,
+                               len(pcm) / 22254.5454, self._engineRate))
                     pending = True
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
