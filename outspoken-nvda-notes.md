@@ -588,3 +588,78 @@ Our hook is `moveq #0,d0; rts` -- permanently "keep going". So either
 The second is the more likely, and it would also explain the 6-vs-8 stride
 discrepancy: both are symptoms of reading `$14`/`$10` from the wrong bytes.
 +$298E is the last significant block of this engine still unread.
+
+---
+
+## Two synthesis loops — and only one of them makes sound
+
+A write watchpoint on the sound buffer's sample area answers the question I
+should have asked first: **who actually writes the PCM?**
+
+```
+driver+0x02864  x184   distinct values 1    (just $80)
+driver+0x0286E  x184   distinct values 2    ($40, $80)
+driver+0x029CA  x72    distinct values 12   62 67 6C 71 76 7B 80 85 8A ...
+driver+0x029EC  x72    distinct values 11   67 6C 71 76 7B 80 85 8A ...
+```
+
+**Loop A (+$2812, reached when `$14(a5)` is zero) writes nothing but silence.**
+Every sample it produces is exactly `$80`; the `$40`s are its interpolated
+midpoints at a buffer start. **Loop B (+$298E) produces a real waveform** —
+evenly spaced levels five apart, which is what a table-driven formant
+oscillator should look like.
+
+And loop A runs 184 times for every 72 of loop B. That ratio *is* the artefact:
+mostly silence, punctuated by short bursts of genuine speech, repeating at the
+buffer rate.
+
+### Why loop A is silent
+
+The prologue sets up the tables:
+
+```
++02746  lea $459E(pc), a0     ; phase -> index table
++0274A  lea $2BF6(pc), a1     ; the waveform table
++0274E  lea $369E(pc), a4     ; 8 waveform pointers, stride $1E0,
++02754  lea $A4(a5), a4       ; copied into a5[$A4..$C0]
+```
+
+Loop A then computes `d6 = d3 | a0[phase]` and looks up `a1[d6]`, twice, and
+finishes with `addi.b #$80, d7`. **`d3` is a frame selector byte shifted left
+5.** When that byte is zero, `d3` is zero, both lookups land on the table's
+silence row, and the result is exactly `$80`.
+
+So loop A is silent precisely when its selector byte is zero — and two of every
+three frames have zeros in the columns it reads.
+
+### The off-by-two, and evidence for it
+
+The generator writes each frame as **low halves at bytes 0,1,2 and high halves
+at bytes 3,4,5** (`move.b d3/d4/d5`, `swap`, `move.b d3/d4/d5` again). Loop A
+reads bytes **1,2,3** — straddling the boundary between the two groups. That
+alone would produce a mixture of real and zero selectors.
+
+Shifting the three displacements at +$2950/+$2956/+$295C and re-measuring:
+
+| selector bytes read | peak | distinct levels |
+|---|---|---|
+| 1,3,2 (as shipped) | 94 | 92 |
+| 3,5,4 (high group, +2) | 111 | 151 |
+| 0,2,1 (low group, -2) | **127** | **184** |
+
+Reading either coherent group gives markedly more dynamic range and far more
+distinct levels than the straddling read. That is real evidence the frame
+alignment is off — though neither shift alone makes it intelligible, so the
+offset is a symptom of something upstream rather than the whole fix.
+
+### Ruled out, with measurements
+
+* **Not the oscillator increments.** Forcing `a5+1`/`a5+3` to any value changes
+  the output by exactly nothing (patches verified to land in emulated memory).
+* **Not the sub-frame counter.** Forcing `$10(a5)` to 4, 8, 16, 24 or 40 changes
+  the buffer count but not one sample value.
+* **Not the frame stride alone.** Patching `addq.l #3,a6` to #4 or #5 at +$28E4
+  does not help.
+
+All three of those were my leading theories. Recording them as *dead* is worth
+as much as the live lead.
