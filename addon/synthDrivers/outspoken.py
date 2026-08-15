@@ -97,6 +97,14 @@ class SynthDriver(SynthDriver):
         # NVDA paces what it sends next on exactly that notification. Measured:
         # 162 ms between NVDA calling speak() and this driver being handed the
         # next letter, with our own queue wait at zero.
+        # Counters, reported when they move. Silence and truncation both look
+        # like "nothing happened" from outside, and neither shows up in a
+        # latency measurement -- so count the places speech can be discarded.
+        self._nSpoken = 0
+        self._nStaleItem = 0             # dropped before rendering
+        self._nStaleAudio = 0            # rendered, then dropped before playing
+        self._nEmpty = 0                 # rendered to nothing
+        self._lastReport = 0.0
         self._audioQueue = queue.Queue()
         self._feeder = threading.Thread(target=self._feed, name="outspoken-feed",
                                         daemon=True)
@@ -285,6 +293,17 @@ class SynthDriver(SynthDriver):
         out[1::2] = pcm8.translate(cls._FLIP)
         return bytes(out)
 
+    def _report(self):
+        """Say what is being discarded, at most once a second."""
+        now = time.perf_counter()
+        if now - self._lastReport < 1.0:
+            return
+        self._lastReport = now
+        log.info("outSPOKEN: spoken %d, dropped-before-render %d, "
+                 "dropped-before-play %d, rendered-empty %d"
+                 % (self._nSpoken, self._nStaleItem, self._nStaleAudio,
+                    self._nEmpty))
+
     def _feed(self):
         """Push PCM to the player, in slices, until told otherwise.
 
@@ -297,8 +316,14 @@ class SynthDriver(SynthDriver):
             if item is None:
                 return
             gen, data = item
+            if gen != self._gen:
+                self._nStaleAudio += 1
+                self._report()
+                continue
             for off in range(0, len(data), _CHUNK_BYTES):
                 if gen != self._gen:
+                    self._nStaleAudio += 1
+                    self._report()
                     break
                 try:
                     self._player.feed(data[off:off + _CHUNK_BYTES])
@@ -355,7 +380,9 @@ class SynthDriver(SynthDriver):
                 return
             gen, items, queuedAt = item
             if gen != self._gen:
-                continue                # cancelled before we got to it
+                self._nStaleItem += 1   # cancelled before we got to it
+                self._report()
+                continue
 
             eng = self._ensureEngine()
             if eng is None:
@@ -374,8 +401,15 @@ class SynthDriver(SynthDriver):
                     t1 = time.perf_counter()
                     pcm = eng.speak(phonemes)
                     t2 = time.perf_counter()
-                    if gen != self._gen or not pcm:
+                    if not pcm:
+                        self._nEmpty += 1
+                        self._report()
                         continue
+                    if gen != self._gen:
+                        self._nStaleAudio += 1
+                        self._report()
+                        continue
+                    self._nSpoken += 1
                     self._audioOut = True
                     # Feed in slices, not in one lump.
                     #
