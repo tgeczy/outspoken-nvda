@@ -182,9 +182,19 @@ class Host(object):
     SNAP_NAMES = ("d0 d1 d2 d3 d4 d5 d6 d7 "
                   "a0 a1 a2 a3 a4 a5 a6 a7 pc").split()
 
-    def snap_at(self, pc):
-        """Record d0-d7/a0-a7/pc the first 64 times execution reaches `pc`."""
+    def snap_at(self, pc, halt_on=0):
+        """Record d0-d7/a0-a7/pc the first 64 times execution reaches `pc`.
+
+        `halt_on` = N stops execution on the Nth arrival, so a probe can read
+        or change emulated memory mid-run and then `resume()`.
+        """
         self.lib.osp_snap_set(pc)
+        self.lib.osp_snap_halt(halt_on)
+
+    def resume(self, max_instr=400_000_000):
+        """Continue from a snapshot breakpoint with every register intact."""
+        self.lib.osp_resume.argtypes = [ctypes.c_longlong]
+        return self.lib.osp_resume(max_instr)
 
     @property
     def snaps(self):

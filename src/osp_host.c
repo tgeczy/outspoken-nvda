@@ -894,6 +894,23 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 
 /* Call a routine that takes Pascal arguments already pushed by the caller.
  * MACSTARTSOUND is reached this way, through the export table at driver+$001E. */
+/* Continue after a snapshot breakpoint, leaving PC, SP and every register
+ * exactly as the break left them.  Needed to test what NVDA does constantly:
+ * stop an utterance half way through and then start another one. */
+OSP_API int osp_resume(long long max_instr)
+{
+    if (g_stop_reason != STOP_BREAK) return g_stop_reason;
+    g_stop_reason = STOP_RUNNING;
+    g_instr_budget = max_instr;
+    g_instr_count = 0;
+    while (g_stop_reason == STOP_RUNNING) {
+        m68k_execute(100000);
+        if (g_cb_pending && g_stop_reason == STOP_RUNNING)
+            run_pending_callback();
+    }
+    return g_stop_reason;
+}
+
 OSP_API int osp_call_with_args(unsigned entry, const unsigned *args, int nargs,
                                long long max_instr)
 {
