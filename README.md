@@ -41,6 +41,11 @@ execution has since confirmed the parts it can reach:
   selector and a gain. Also why the routine installed by
   `SetStopSpeechCallback` is **not a notification** — it reads two bytes of
   every frame, and the synthesiser cannot advance without it.
+* **[`docs/softvoice-lineage.md`](docs/softvoice-lineage.md)** — MacinTalk and
+  the Amiga `narrator.device` are **67.8% byte-identical**, with the same
+  111-entry phoneme table and a letter-to-sound rule set 60.2% shared with
+  `translator.library`. Which settles the architecture: the driver speaks
+  phonemes only, and the English front end is a separate component.
 * **[`docs/cpu-core-decision.md`](docs/cpu-core-decision.md)** — why Unicorn
   cannot run this and Musashi can.
 
