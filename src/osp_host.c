@@ -83,6 +83,28 @@ static void note_fault(unsigned addr, int write, int size)
 
 static int in_ram(unsigned a, unsigned n) { return (a + n) <= g_ram_size; }
 
+/* A write watchpoint.  When a value in emulated memory is wrong and static
+ * reading has not found who sets it, ask the machine instead: record the PC of
+ * every write into a range.  Cheaper than another hour of disassembly. */
+static unsigned g_watch_lo, g_watch_hi;
+#define WATCH_CAP 512
+typedef struct { unsigned pc, addr, val; int size; } WatchRec;
+static WatchRec g_watch[WATCH_CAP];
+static int      g_watch_n;
+
+static void note_write(unsigned a, unsigned n, unsigned v, int size)
+{
+    if (g_watch_hi <= g_watch_lo) return;
+    if (a + n <= g_watch_lo || a >= g_watch_hi) return;
+    if (g_watch_n < WATCH_CAP) {
+        g_watch[g_watch_n].pc = m68k_get_reg(NULL, M68K_REG_PPC);
+        g_watch[g_watch_n].addr = a;
+        g_watch[g_watch_n].val = v;
+        g_watch[g_watch_n].size = size;
+    }
+    g_watch_n++;
+}
+
 unsigned int m68k_read_memory_8(unsigned int a)
 {
     if (!in_ram(a, 1)) { note_fault(a, 0, 1); return 0; }
@@ -102,17 +124,20 @@ unsigned int m68k_read_memory_32(unsigned int a)
 void m68k_write_memory_8(unsigned int a, unsigned int v)
 {
     if (!in_ram(a, 1)) { note_fault(a, 1, 1); return; }
+    note_write(a, 1, v, 1);
     g_ram[a] = (unsigned char)v;
 }
 void m68k_write_memory_16(unsigned int a, unsigned int v)
 {
     if (!in_ram(a, 2)) { note_fault(a, 1, 2); return; }
+    note_write(a, 2, v, 2);
     g_ram[a]     = (unsigned char)(v >> 8);
     g_ram[a + 1] = (unsigned char)v;
 }
 void m68k_write_memory_32(unsigned int a, unsigned int v)
 {
     if (!in_ram(a, 4)) { note_fault(a, 1, 4); return; }
+    note_write(a, 4, v, 4);
     g_ram[a]     = (unsigned char)(v >> 24);
     g_ram[a + 1] = (unsigned char)(v >> 16);
     g_ram[a + 2] = (unsigned char)(v >> 8);
@@ -839,6 +864,17 @@ OSP_API int osp_buflog_get(int i, unsigned *addr, unsigned *len)
 {
     if (i < 0 || i >= g_buflog_n) return -1;
     *addr = g_buflog_addr[i]; *len = g_buflog_len[i];
+    return 0;
+}
+
+OSP_API void osp_watch_set(unsigned lo, unsigned hi)
+{ g_watch_lo = lo; g_watch_hi = hi; g_watch_n = 0; }
+OSP_API int osp_watch_n(void) { return g_watch_n; }
+OSP_API int osp_watch_get(int i, unsigned *pc, unsigned *addr, unsigned *val, int *size)
+{
+    if (i < 0 || i >= g_watch_n || i >= WATCH_CAP) return -1;
+    *pc = g_watch[i].pc; *addr = g_watch[i].addr;
+    *val = g_watch[i].val; *size = g_watch[i].size;
     return 0;
 }
 

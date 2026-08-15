@@ -109,7 +109,12 @@ def disassemble(d, start, end, base=0):
             print("  +%05X  %-12s %s" % (pc, "%04X" % word, trap_name(word)))
             pc += 2
             continue
-        chunk = d[pc:min(pc + 16, end)]
+        # Read past `end` for the operand words.  Clipping the slice at the
+        # requested end makes the final instruction decode from too few bytes
+        # and invent an operand -- which is how a plain `move.b (a6)+,$5(a5)`
+        # once read as `-$5556(a5)` and sent me hunting a relocation bug that
+        # did not exist.  `end` bounds the loop, never the decoder's input.
+        chunk = d[pc:pc + 16]
         insns = list(md.disasm(chunk, base + pc, count=1))
         if not insns:
             print("  +%05X  %-12s dc.w    $%04X" % (pc, "%04X" % word, word))

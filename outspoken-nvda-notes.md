@@ -375,3 +375,63 @@ SndNewChannel(&chan, 5, 0, NIL)   ; synth 5 = sampledSynth, no init flags
 
 Our probe allocates 64 bytes and zeroes them, which is enough for `chan+8` and
 `chan+$20` but is not what the engine was built against.
+
+---
+
+## The defect, located precisely — 2026-08-15
+
+Three oscillator phase increments live at `a5+0`, `a5+2`, `a5+4` (word each).
+A write watchpoint on those six bytes across a whole utterance shows **exactly
+who writes them**:
+
+```
+driver+0x027E4   a5+1  x1     value 0     <- first frame only
+driver+0x027EC   a5+3  x1     value 0     <- first frame only
+driver+0x027F4   a5+5  x1     value 0     <- first frame only
+driver+0x028E0   a5+4  x341   values 0,2,4,6,14,18   <- every frame
+```
+
+So the **pitch** increment is refreshed per frame, but the two **formant**
+increments are loaded once, from frame 0, and never again. The frame loader at
++$27E4 is straight-line code fallen into from the per-utterance init at +$27B0;
+nothing branches back to it.
+
+**Frame 0 is all zeros.** Hence both formant oscillators sit at a fixed phase for
+the entire utterance, the waveform lookup returns a constant, and the output
+holds DC across each pitch period — which is what the capture shows and what the
+listener heard as flapping.
+
+### The frame buffer is not empty, which is the puzzle
+
+Eight bytes per frame, `$42(a5)`, for "DHIHS KAA1PIY IHZ":
+
+```
+  #   osc1 osc2 pitch          #   osc1 osc2 pitch
+  0     0    0    0            6     5   36   30
+  1     0    6    5            7     6   42   36
+  2     0    0   10            8     0    0   41
+  3     2   18   15            9     7   54   46
+  4     3   24   20           10     8   61   52
+  5     0    0   25           11     0    0   57
+```
+
+Real, smoothly ramping data — but **every third frame has osc1 = osc2 = 0**, and
+frame 0 is one of them. So either
+
+* the generator is writing a three-frame cycle in which one frame is a
+  deliberate transition and my 8-byte framing is misreading it, or
+* the loaders disagree: +$27E4 consumes **8** bytes per frame while the
+  steady-state loader at +$28DA consumes **6** (one, skip three, then two, with
+  bytes 1-3 re-read backwards at `-$5(a6)`/`-$4(a6)`/`-$3(a6)` as formant table
+  selectors). Those cannot both be right about the same buffer.
+
+The 6-vs-8 disagreement is the most likely thread to pull next.
+
+### Tooling note — a decoder bug that manufactured a red herring
+
+`tools/disasm.py` clipped its byte slice at the requested end address, so the
+last instruction in any range decoded from too few bytes and invented an
+operand. A plain `move.b (a6)+, $5(a5)` read as `move.b (a6)+, -$5556(a5)`,
+which sent me hunting a self-modifying relocation that does not exist. Fixed:
+`end` now bounds the loop, never the decoder's input. **Check the byte count
+before believing a strange displacement.**
