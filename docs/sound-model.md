@@ -209,3 +209,46 @@ Katz and Barton's.** The synthesiser underneath it is the 1984 engine, and it
 still speaks to its output through a cursor in `$48(a5)` exactly as it would have
 on a 128K Mac. We are emulating a 1984 synthesiser through a 1988 porch, and only
 the porch touches the Sound Manager.
+
+---
+
+## The per-sample store — confirmed by execution
+
+The inner loop at +$284E consults the channel pointer **for every sample** and
+writes differently depending on it:
+
+```
++0284C  move.w d7, -(a7)      ; the new sample
++0284E  bsr.w  $4C08          ; tst.l globals+$10 -- is there a channel?
++02852  bne.b  $2864
+        ; --- no channel: direct DAC, FOUR bytes per sample ---
++02854  move.b d7, $2(a3)
++02858  add.w  $24(a5), d7    ; mean with the previous sample
++0285C  lsr.w  #1, d7
++0285E  move.b d7, (a3)
++02860  addq.l #4, a3
+        ; --- channel: TWO bytes per sample ---
++02864  move.b d7, $1(a3)
++02868  add.w  $24(a5), d7
++0286C  lsr.w  #1, d7
++0286E  move.b d7, (a3)
++02870  addq.l #2, a3
++02872  move.w (a7)+, $24(a5) ; remember it for the next interpolation
+```
+
+**The synthesiser runs at half the output rate.** It generates one sample per
+iteration and writes two: the sample itself at the odd offset, and the mean of
+it and its predecessor at the even one. So the engine's native rate is
+**11127.27 Hz**, linearly interpolated 2x to the 22254.5455 Hz the SoundHeader
+declares.
+
+The direct-DAC path writes four bytes for the same pair because the classic Mac
+sound buffer is 370 **words** per frame with only the high byte sampled — which
+is also why `ClearBuffers` fills with `$80808060` rather than plain `$80`.
+
+`$20(a5)` counts the pair down by 2; at zero the code compares `a3` against the
+limit and calls `StuffA3` (+$4BF0 -> +$5284) to move to the other buffer.
+
+**This means the channel pointer at globals+$10 must be non-zero for every
+sample, not just at start-up.** A zero there does not merely change the buffer —
+it changes the stride, and the output silently becomes half-rate garbage.

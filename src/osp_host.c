@@ -160,6 +160,14 @@ static int      g_mem_traps;
 
 static unsigned g_ticks;          /* _TickCount, one per call */
 
+/* A ring of recently executed addresses.  Reasoning about where 21 KB of
+ * unfamiliar 68000 decided to give up is guesswork without this; with it, the
+ * exit path is one `git diff`-sized read. */
+#define TRACE_CAP 262144u
+static unsigned *g_trace;
+static unsigned  g_trace_pos;
+static int       g_trace_on;
+
 static unsigned heap_alloc(unsigned size)
 {
     unsigned p;
@@ -317,6 +325,136 @@ static unsigned res_find(unsigned type, short id)
     return 0;
 }
 
+/* ------------------------------------------------------- the Sound Manager -
+ *
+ * The whole audio path, per docs/sound-model.md.  MacinTalk fills a buffer,
+ * hands it over with `bufferCmd`, and queues a `callBackCmd` behind it to learn
+ * when that buffer has drained.  We take the samples immediately and fire the
+ * callback, so the engine runs flat out and never waits on a clock.
+ */
+#define quietCmd     3
+#define flushCmd     4
+#define callBackCmd  13
+#define bufferCmd    81
+
+#define PCM_CAP       (8u * 1024u * 1024u)
+#define MAGIC_CB_RET  0x00F11000u
+#define CB_SCRATCH    0x00F20000u   /* the SndCommand, copied out of the
+                                     * caller's stack frame -- by the time the
+                                     * callback runs, that frame is gone */
+
+static unsigned char *g_pcm;
+static unsigned  g_pcm_len;
+static int       g_pcm_overflow;
+static int       g_buffers_taken;
+static unsigned  g_sample_rate;     /* Fixed, from the last SoundHeader */
+static int       g_short_buffers;   /* headers whose length was rewritten */
+
+/* Which physical buffer each bufferCmd named, and the length it declared.
+ * Double buffering is only correct if these alternate; a duplicate or a skip
+ * is audible as a chop at the buffer rate -- 3870 samples at 22254 Hz is
+ * 174 ms, so about 6 Hz. */
+#define BUFLOG_CAP 8192
+static unsigned  g_buflog_addr[BUFLOG_CAP];
+static unsigned  g_buflog_len[BUFLOG_CAP];
+static int       g_buflog_n;
+
+static int      g_cb_pending;
+static int      g_in_callback;
+static unsigned g_cb_chan;
+
+/* Take one buffer's worth of samples.
+ *
+ * `length` is read from the header every time and never assumed.  The driver
+ * rewrites it (SetBufLength, +$4C36) so the last buffer of an utterance is
+ * short; taking a fixed 3870 would append stale bytes to every phrase and show
+ * up as a ~6 Hz chop under the voice. */
+static void take_buffer(unsigned hdr)
+{
+    unsigned len = m68k_read_memory_32(hdr + 4);
+    unsigned ptr = m68k_read_memory_32(hdr + 0);
+    unsigned area = ptr ? ptr : (hdr + 0x16);
+    unsigned i;
+
+    g_sample_rate = m68k_read_memory_32(hdr + 8);
+    if (len != 0x0F1E) g_short_buffers++;
+    if (len > 0x10000u) {           /* nothing legitimate is this big */
+        note_fault(hdr + 4, 0, 4);
+        return;
+    }
+    for (i = 0; i < len; i++) {
+        if (g_pcm_len >= PCM_CAP) { g_pcm_overflow++; return; }
+        g_pcm[g_pcm_len++] = (unsigned char)m68k_read_memory_8(area + i);
+    }
+    if (g_buflog_n < BUFLOG_CAP) {
+        g_buflog_addr[g_buflog_n] = hdr;
+        g_buflog_len[g_buflog_n] = len;
+        g_buflog_n++;
+    }
+    g_buffers_taken++;
+}
+
+static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
+{
+    switch (base) {
+    case 0xA803:                        /* _SndDoCommand   */
+    case 0xA804: {                      /* _SndDoImmediate */
+        /* These two do NOT have the same signature:
+         *
+         *     SndDoCommand  (chan, cmd, noWait)   -- 10 bytes of arguments
+         *     SndDoImmediate(chan, cmd)           --  8
+         *
+         * Treating them alike reads the command pointer two bytes off (giving
+         * addresses like $FFDC001D) and, worse, pops two bytes too many, which
+         * silently corrupts the caller's frame.  That is how MACSTARTSOUND came
+         * back "cleanly" having written none of its SoundHeader fields. */
+        int nowait = (base == 0xA803);
+        unsigned pbytes = nowait ? 10u : 8u;
+        unsigned cmdp = m68k_read_memory_32(csp + (nowait ? 2 : 0));
+        unsigned chan = m68k_read_memory_32(csp + (nowait ? 6 : 4));
+        unsigned cmd = m68k_read_memory_16(cmdp);
+        unsigned param2 = m68k_read_memory_32(cmdp + 4);
+        int i;
+
+        if (cmd == bufferCmd) {
+            take_buffer(param2);
+        } else if (cmd == callBackCmd) {
+            /* Copy the command somewhere that outlives the caller's frame,
+             * then run the callback once we are safely outside m68k_execute. */
+            for (i = 0; i < 8; i++)
+                m68k_write_memory_8(CB_SCRATCH + i,
+                                    m68k_read_memory_8(cmdp + i));
+            g_cb_chan = chan;
+            g_cb_pending = 1;
+        }
+        /* quietCmd / flushCmd: there is no queue to drop, we already took it */
+        tb_return(exc_sp, pbytes, 0, 2);
+        if (g_cb_pending) m68k_end_timeslice();
+        return 1;
+    }
+    case 0xA800: {                      /* _SoundDispatch, selector in D0 */
+        unsigned d0 = m68k_get_reg(NULL, M68K_REG_D0);
+        unsigned selector = d0 & 0xFFFFu;
+        if (selector == 8) {            /* SndChannelStatus(chan, len, stat) */
+            unsigned stat = m68k_read_memory_32(csp + 0);
+            unsigned len = m68k_read_memory_16(csp + 4);
+            unsigned i;
+            for (i = 0; i < len && i < 64; i++)
+                m68k_write_memory_8(stat + i, 0);
+            /* scChannelBusy at +12.  We consume buffers instantly, so the
+             * channel is never busy and every wait loop exits at once. */
+            m68k_write_memory_8(stat + 12, 0);
+            tb_return(exc_sp, 10, 0, 2);
+            return 1;
+        }
+        tb_return(exc_sp, 10, 0, 2);
+        return 1;
+    }
+    default:
+        return 0;
+    }
+}
+
 /* Returns 1 if we served the trap.  `exc_sp` is the exception frame address. */
 static int serve_toolbox_trap(unsigned short word, unsigned exc_sp)
 {
@@ -325,6 +463,8 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp)
      * Masking bit 9 as well -- the OS-trap rule -- turns $A9A0 into $A8A0 and
      * every resource call falls through to "stubbed". */
     unsigned base = word & 0xFBFFu;
+
+    if (serve_sound_trap(base, exc_sp, csp)) return 1;
 
     switch (base) {
     case 0xA9A0: {                       /* _GetResource(type, id) -> Handle */
@@ -454,8 +594,50 @@ static void service_atrap(void)
     }
 }
 
+/* Run the driver's own callback proc, outside m68k_execute.
+ *
+ * Doing this from inside the trap handler would mean re-entering the CPU while
+ * it is already running.  Instead the handler ends the timeslice, and we get
+ * here with the machine stopped: push the two Pascal arguments and a magic
+ * return address, jump to the proc, let it run to that address, then put PC and
+ * SP back exactly as they were.  Register state is restored; the flag word the
+ * callback set is a memory write, so it survives -- which is the whole point.
+ */
+static void run_pending_callback(void)
+{
+    unsigned proc = m68k_read_memory_32(g_cb_chan + 8);   /* SndChannel.callBack */
+    unsigned save_pc, save_sp, sp;
+
+    g_cb_pending = 0;
+    if (!proc) return;
+
+    save_pc = m68k_get_reg(NULL, M68K_REG_PC);
+    save_sp = m68k_get_reg(NULL, M68K_REG_SP);
+
+    sp = save_sp;
+    sp -= 4; m68k_write_memory_32(sp, g_cb_chan);    /* chan, pushed first  */
+    sp -= 4; m68k_write_memory_32(sp, CB_SCRATCH);   /* the SndCommand      */
+    sp -= 4; m68k_write_memory_32(sp, MAGIC_CB_RET); /* return address      */
+    m68k_set_reg(M68K_REG_SP, sp);
+    m68k_set_reg(M68K_REG_PC, proc);
+
+    g_in_callback = 1;
+    while (g_in_callback && g_stop_reason == STOP_RUNNING)
+        m68k_execute(100000);
+    g_in_callback = 0;
+
+    m68k_set_reg(M68K_REG_PC, save_pc);
+    m68k_set_reg(M68K_REG_SP, save_sp);
+}
+
 static void instr_hook(unsigned int pc)
 {
+    if (g_trace_on) g_trace[g_trace_pos++ & (TRACE_CAP - 1u)] = pc;
+    if (pc == MAGIC_CB_RET) {
+        g_in_callback = 0;
+        m68k_end_timeslice();
+        return;
+    }
     if (pc >= MAGIC_EXC_BASE && pc < MAGIC_EXC_BASE + 64u * MAGIC_EXC_SLOT) {
         int vec = (int)((pc - MAGIC_EXC_BASE) / MAGIC_EXC_SLOT);
         if (vec == 10) { service_atrap(); return; }   /* A-line: expected   */
@@ -484,10 +666,15 @@ OSP_API int osp_init(unsigned ram_size)
 {
     unsigned v;
     if (g_ram) free(g_ram);
-    if (ram_size < 0x00F20000u) ram_size = 0x00F20000u;  /* magic pages fit */
+    if (ram_size < 0x00F30000u) ram_size = 0x00F30000u;  /* magic pages fit */
     g_ram = (unsigned char *)calloc(ram_size, 1);
     if (!g_ram) return -1;
     g_ram_size = ram_size;
+    if (!g_pcm) g_pcm = (unsigned char *)malloc(PCM_CAP);
+    if (!g_pcm) return -1;
+    if (!g_trace) g_trace = (unsigned *)malloc(TRACE_CAP * sizeof(unsigned));
+    if (!g_trace) return -1;
+    g_trace_pos = 0; g_trace_on = 0;
 
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_init();
@@ -511,6 +698,9 @@ OSP_API int osp_init(unsigned ram_size)
     g_trap_count = g_trap_overflow = g_stub_count = g_fault_count = 0;
     g_stackpc_is_instruction = -1;
     g_res_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
+    g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
+    g_buflog_n = 0;
+    g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
     g_heap_base = g_heap_end = g_heap_next = 0;
     g_mem_traps = 0;
     return 0;
@@ -602,10 +792,70 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
     g_instr_count = 0;
     g_instr_budget = max_instr;
 
-    while (g_stop_reason == STOP_RUNNING)
+    while (g_stop_reason == STOP_RUNNING) {
         m68k_execute(100000);
+        if (g_cb_pending && g_stop_reason == STOP_RUNNING)
+            run_pending_callback();
+    }
 
     return g_stop_reason;
+}
+
+/* Call a routine that takes Pascal arguments already pushed by the caller.
+ * MACSTARTSOUND is reached this way, through the export table at driver+$001E. */
+OSP_API int osp_call_with_args(unsigned entry, const unsigned *args, int nargs,
+                               long long max_instr)
+{
+    unsigned sp = m68k_get_reg(NULL, M68K_REG_SP);
+    int i;
+    for (i = 0; i < nargs; i++) {
+        sp -= 4;
+        m68k_write_memory_32(sp, args[i]);
+    }
+    m68k_set_reg(M68K_REG_SP, sp);
+    return osp_call(entry, MAGIC_SENTINEL, max_instr);
+}
+
+OSP_API unsigned osp_pcm_len(void)      { return g_pcm_len; }
+OSP_API int  osp_buffers_taken(void)    { return g_buffers_taken; }
+OSP_API int  osp_pcm_overflow(void)     { return g_pcm_overflow; }
+OSP_API int  osp_short_buffers(void)    { return g_short_buffers; }
+OSP_API unsigned osp_sample_rate(void)  { return g_sample_rate; }
+OSP_API void osp_pcm_reset(void)
+{
+    g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
+}
+OSP_API int osp_pcm_get(unsigned char *out, int max)
+{
+    unsigned n = g_pcm_len;
+    if ((int)n > max) n = (unsigned)max;
+    memcpy(out, g_pcm, n);
+    return (int)n;
+}
+OSP_API unsigned osp_cb_scratch(void)   { return CB_SCRATCH; }
+
+OSP_API int osp_buflog_n(void) { return g_buflog_n; }
+OSP_API int osp_buflog_get(int i, unsigned *addr, unsigned *len)
+{
+    if (i < 0 || i >= g_buflog_n) return -1;
+    *addr = g_buflog_addr[i]; *len = g_buflog_len[i];
+    return 0;
+}
+
+OSP_API void osp_trace_enable(int on) { g_trace_on = on ? 1 : 0; g_trace_pos = 0; }
+OSP_API unsigned osp_trace_len(void)
+{
+    return g_trace_pos < TRACE_CAP ? g_trace_pos : TRACE_CAP;
+}
+/* Copy the trace out oldest-first. */
+OSP_API int osp_trace_get(unsigned *out, int max)
+{
+    unsigned n = osp_trace_len(), i, start;
+    if ((int)n > max) n = (unsigned)max;
+    start = g_trace_pos - n;
+    for (i = 0; i < n; i++)
+        out[i] = g_trace[(start + i) & (TRACE_CAP - 1u)];
+    return (int)n;
 }
 
 OSP_API int  osp_stop_reason(void)  { return g_stop_reason; }

@@ -59,6 +59,12 @@ class Host(object):
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]
         L.osp_add_resource.restype = ctypes.c_uint
+        L.osp_call_with_args.argtypes = [ctypes.c_uint,
+                                         ctypes.POINTER(ctypes.c_uint),
+                                         ctypes.c_int, ctypes.c_longlong]
+        L.osp_pcm_get.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        for n in ("osp_pcm_len", "osp_sample_rate", "osp_cb_scratch"):
+            getattr(L, n).restype = ctypes.c_uint
         if L.osp_init(ram) != 0:
             raise RuntimeError("osp_init failed")
         self.ram = ram
@@ -107,6 +113,32 @@ class Host(object):
         if not h:
             raise RuntimeError("no room for resource %r %d" % (restype, res_id))
         return h
+
+    def call_with_args(self, entry, args, max_instr=200_000_000):
+        arr = (ctypes.c_uint * len(args))(*args)
+        return self.lib.osp_call_with_args(entry, arr, len(args), max_instr)
+
+    # --- audio ------------------------------------------------------------
+    def pcm_reset(self):
+        self.lib.osp_pcm_reset()
+
+    @property
+    def pcm(self):
+        n = self.lib.osp_pcm_len()
+        buf = ctypes.create_string_buffer(n)
+        self.lib.osp_pcm_get(buf, n)
+        return buf.raw
+
+    @property
+    def buffers_taken(self): return self.lib.osp_buffers_taken()
+
+    @property
+    def short_buffers(self): return self.lib.osp_short_buffers()
+
+    @property
+    def sample_rate(self):
+        """Hz, from the SoundHeader the driver filled in (Fixed 16.16)."""
+        return self.lib.osp_sample_rate() / 65536.0
 
     @property
     def sentinel(self):

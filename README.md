@@ -68,8 +68,12 @@ machine and fatal on a clean one.
 ## Credit where it is due
 
 * **Musashi** — Karl Stenerud's 68000 core, the one MAME uses. MIT.
-* **Jayson Smith's EchoTalk** — the pattern this follows: vendor a small CPU
-  core, model only what the engine touches, and let the user supply the engine.
+* **Huge thanks to Jayson Smith ([@jaybird110127](https://github.com/jaybird110127))
+  and his work on EchoTalk**, which is the pattern this project follows: vendor a
+  small CPU core, model only what the engine touches, and let the user supply the
+  engine. His warning about giving the CPU enough time to finish is designed into
+  this host from the first commit — every budget here has a counter, and a
+  non-zero count is a logged fault rather than a silent truncation.
 * **Joseph Katz and Mark Barton** — who wrote MacinTalk, and whose next company
   is baked into its own pronunciation table: `[SOFTVOICE]=SAA4FTVOYS`.
 
