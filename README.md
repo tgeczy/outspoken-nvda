@@ -36,6 +36,11 @@ execution has since confirmed the parts it can reach:
   voice. There are **two voices, differing only in pitch — 110 Hz and 250 Hz**.
   Setting `CPUFlag` to 0 keeps the driver away from its only 68020 instructions,
   so a plain 68000 core suffices.
+* **[`docs/frame-format.md`](docs/frame-format.md)** — the synthesiser's
+  **8-byte frame**: three formant increments, three amplitudes, a voicing
+  selector and a gain. Also why the routine installed by
+  `SetStopSpeechCallback` is **not a notification** — it reads two bytes of
+  every frame, and the synthesiser cannot advance without it.
 * **[`docs/cpu-core-decision.md`](docs/cpu-core-decision.md)** — why Unicorn
   cannot run this and Musashi can.
 
