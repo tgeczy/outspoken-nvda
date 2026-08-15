@@ -90,7 +90,8 @@ def _stage_rom(cfg_dir):
     except Exception:
         return
     dest = os.path.join(cfg_dir, "outspoken-roms", "macintalk1")
-    for name in ("DRVR_1030.bin", "TALK_1001.bin", "RULZ_1129.bin"):
+    for name in ("DRVR_1030.bin", "TALK_1001.bin", "RULZ_1129.bin",
+                 "DICT_-4048.bin"):
         src = paths.find(name)
         if not src:
             continue
@@ -193,10 +194,12 @@ for p in (os.path.join(ADDON, "synthDrivers"),
 def rom_files():
     """The three engine files, or skip -- they are never in the repository."""
     import rom as rom_mod
-    found, missing = rom_mod.find()
-    if missing:
+    found, _missing = rom_mod.find()
+    need = list(rom_mod.REQUIRED) + ["RULZ_1129.bin"]
+    absent = [n for n in need if n not in found]
+    if absent:
         pytest.skip("engine not present (%s); run tools/extract_rom.py"
-                    % ", ".join(missing))
+                    % ", ".join(absent))
     return found
 
 

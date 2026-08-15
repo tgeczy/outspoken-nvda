@@ -68,3 +68,50 @@ def test_no_rule_reordering(rules):
     # [INTO] sits after a [IN] with an empty right context, which is why
     # first-match-in-file-order cannot reach it.
     assert "INTO" in focuses
+
+
+def _dictionary():
+    import nrl
+    import paths
+    p = paths.find("DICT_-4048.bin")
+    if not p:
+        pytest.skip("DICT not present; run tools/extract_rom.py")
+    return nrl.Dictionary(open(p, "rb").read())
+
+
+def test_dictionary_parses():
+    d = _dictionary()
+    assert sum(len(b) for b in d.buckets) >= 60
+
+
+@pytest.mark.parametrize("word,expected", [
+    # Berkeley's own answers to the two the 1984 rules get wrong.
+    ("search", "SERCH"),
+    ("dialog", "DIE ALOG"),
+    ("cancel", "CANSIL"),
+])
+def test_respells_the_known_exceptions(word, expected):
+    import nrl
+    assert nrl.respell(word, _dictionary()).strip() == expected
+
+
+def test_respelling_passes_unknown_words_through(rules):
+    import nrl
+    d = _dictionary()
+    for w in ("hello", "the quick brown fox", "zzz"):
+        assert nrl.respell(w, d).strip() == w.upper()
+
+
+def test_search_reaches_the_right_phonemes(rules):
+    """End to end: the whole point of loading the dictionary.
+
+    Without it `search` is SIY5RCH -- "sea-rch" -- because ` [EAR]^`=ER5
+    requires EAR at the start of a word, so S-EA-R-CH falls through to
+    `[EA]`=IY5. The rules are not wrong; they were always shipped behind this
+    list.
+    """
+    import nrl
+    plain = nrl.translate("search", rules)
+    fixed = nrl.translate(nrl.respell("search", _dictionary()), rules)
+    assert plain.startswith("SIY"), plain
+    assert fixed.startswith("SER"), fixed

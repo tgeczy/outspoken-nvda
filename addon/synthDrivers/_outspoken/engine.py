@@ -139,6 +139,17 @@ class Engine(object):
         self.rules = nrl.Rules(open(rom["RULZ_1129.bin"], "rb").read()) \
             if "RULZ_1129.bin" in rom else None
 
+        # Berkeley's exception list. Optional: without it the engine still
+        # speaks, it just says "sea-rch" for SEARCH, which is genuinely what
+        # the 1984 rules produce.
+        self.dictionary = None
+        if "DICT_-4048.bin" in rom:
+            try:
+                self.dictionary = nrl.Dictionary(
+                    open(rom["DICT_-4048.bin"], "rb").read())
+            except Exception:
+                self.dictionary = None
+
         self._dce, self._pb = WORK, WORK + 0x100
         self._open()
         self._install_hook()
@@ -241,6 +252,12 @@ class Engine(object):
         if len(t) == 1 and t.isalpha():
             # Typing echo sends one character, and it wants the letter's NAME.
             return nrl.letter_name(t, self.rules)
+        if self.dictionary is not None:
+            # Respell first, then apply the rules -- the dictionary's right-hand
+            # side is English, not phonemes. That is how Berkeley fixed
+            # pronunciation without touching the 1984 rule set, and it is why
+            # SEARCH is listed there as SERCH rather than as SER4CH.
+            text = nrl.respell(text, self.dictionary)
         return nrl.translate(text, self.rules)
 
     def close(self):

@@ -30,6 +30,7 @@ FILES = {
     "DRVR_1030.bin": "the 1984 MacinTalk engine, named '.sp'",
     "TALK_1001.bin": "MacinTalk Rules",
     "RULZ_1129.bin": "letter-to-sound rules (needed for English text)",
+    "DICT_-4048.bin": "Berkeley's exception dictionary (optional)",
 }
 
 #: `RULZ` only drives the English front end. Without it the synthesiser still
@@ -68,6 +69,10 @@ def find():
                 if n in FILES and n not in found:
                     found[n] = os.path.join(dirpath, n)
     return found, [n for n in FILES if n not in found]
+
+
+#: The dictionary only improves pronunciation; the engine speaks without it.
+OPTIONAL = ("DICT_-4048.bin",)
 
 
 def usable():

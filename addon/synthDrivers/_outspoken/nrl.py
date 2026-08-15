@@ -50,12 +50,14 @@ class Rules(object):
 
     def __init__(self, data):
         if len(data) < 112:
-            raise ValueError("RULZ too short to hold its offset table")
+            raise ValueError("too short to hold its offset table")
         offs = [struct.unpack(">I", data[i * 4:i * 4 + 4])[0] for i in range(28)]
-        if offs[0] != 112 or any(offs[i] >= offs[i + 1] for i in range(27)):
-            raise ValueError("RULZ offset table is not ascending from 112")
-        if offs[-1] >= len(data):
-            raise ValueError("RULZ offset table points past the end")
+        # Equal offsets are legal and mean an empty bucket -- the exception
+        # dictionary has several letters with no entries at all.
+        if offs[0] != 112 or any(offs[i] > offs[i + 1] for i in range(27)):
+            raise ValueError("offset table is not ascending from 112")
+        if offs[-1] > len(data):        # equal means a trailing empty bucket
+            raise ValueError("offset table points past the end")
 
         self.buckets = []
         for i in range(28):
@@ -81,6 +83,70 @@ class Rules(object):
         if ch.isdigit():
             return self.buckets[26]
         return self.buckets[27]
+
+
+class Dictionary(Rules):
+    """Berkeley's exception list -- `DICT` in outSPOKEN.
+
+    Structurally identical to `RULZ`: 28 big-endian offsets, then buckets of
+    `left[focus]right=replacement` entries. Two differences, both of which
+    matter:
+
+    * entries are separated by a **backtick**, not a backslash;
+    * the right-hand side is **respelled English**, not phonemes. `[SEARCH]` is
+      not given as `SER4CH`; it is given as `SERCH`, which then goes through
+      the letter-to-sound rules like any other word.
+
+    That is how Berkeley worked around the 1984 rules without touching them,
+    and it is why `search` comes out as "sea-rch" until this is loaded: the
+    rule ` [EAR]^` requires EAR at the start of a word, so `S-EA-R-CH` falls
+    through to `[EA]`=IY5. The engine is not wrong; it was simply always
+    shipped with this list in front of it.
+    """
+
+    SEP = b"`"
+
+    @staticmethod
+    def _parse(blob):
+        out = []
+        for raw in blob.split(b"`"):
+            if b"[" not in raw or b"]" not in raw or b"=" not in raw:
+                continue
+            left, rest = raw.split(b"[", 1)
+            focus, rest = rest.split(b"]", 1)
+            right, repl = rest.split(b"=", 1)
+            out.append((left.decode("latin-1"), focus.decode("latin-1"),
+                        right.decode("latin-1"), repl.decode("latin-1")))
+        return out
+
+
+def respell(text, dictionary):
+    """Apply the exception dictionary, returning English, not phonemes.
+
+    Longest focus wins, as in `translate()`. Anything not matched is passed
+    through unchanged, so this is safe to run over arbitrary text.
+    """
+    s = " " + text.upper() + " "
+    out, i = [], 1
+    while i < len(s) - 1:
+        best = None
+        for left, focus, right, repl in dictionary.bucket_for(s[i]):
+            if len(focus) <= (len(best[1]) if best else 0):
+                continue
+            if s[i:i + len(focus)] != focus:
+                continue
+            if not _match_left(s, i, left):
+                continue
+            if not _match_right(s, i + len(focus), right):
+                continue
+            best = (left, focus, right, repl)
+        if best:
+            out.append(best[3])
+            i += len(best[1])
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
 
 
 # --- context matching ----------------------------------------------------

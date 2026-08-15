@@ -41,7 +41,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WANTED = {
     "macintalk1": [("DRVR", 1030, "the 1984 engine, named '.sp'"),
                    ("TALK", 1001, "MacinTalk Rules"),
-                   ("RULZ", 1129, "letter-to-sound rules")],
+                   ("RULZ", 1129, "letter-to-sound rules"),
+                   ("DICT", None, "Berkeley's exception dictionaries"),
+                   ("PHNM", None, "phoneme table")],
     "macintalk2": [("Cecy", 1, "back end -- the synthesiser"),
                    ("Cecy", 3, "front end -- text to phonemes"),
                    ("ttsr", None, "pronunciation rules"),
