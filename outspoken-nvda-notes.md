@@ -308,3 +308,70 @@ precisely how EchoTalk handles the Textalker images, and it is the only part of
 the arrangement doing real legal work.
 
 Local investigation is fine. Publication needs the question answered first.
+
+---
+
+## Where the audio stands — 2026-08-15
+
+**PCM comes out of the 1984 engine.** 3.93 s of speech-shaped envelope for a
+sentence that should take about that long. It is not intelligible yet; the
+listener's description was "a bird flapping its wings real fast".
+
+### Verified correct
+
+* `bufferCmd` targets alternate **A, B, A, B** without a single repeat or skip,
+  every one declaring length 3870. The double-buffer handshake is sound.
+* Both `SoundHeader`s carry length 3870, rate `$56EE8BA3`, baseFrequency 60.
+* `CALLBACK` is installed at `chan+8` and fires.
+* The waveform table pointers at `$A4(a5)`..`$C0(a5)` are populated with real
+  addresses inside the driver image.
+* The frame buffer at `$42(a5)` contains non-zero frame data.
+
+### The actual defect
+
+**The oscillator phase increments at `(a5)` and `$2(a5)` are both zero.**
+
+The inner loop accumulates `add.w (a5), d1` and `add.l $2(a5), d2`, masks them
+to `$3FF03FF`, and uses the result to index the waveform tables. With zero
+increments the phase never advances, so the table lookup returns the same value
+forever — which is exactly what the captured audio shows: runs of ~190 identical
+bytes at a constant offset from silence, separated by near-silence. That
+alternation at roughly the pitch period is the "flapping".
+
+The frame buffer is also **sparse** — the first three 8-byte frames are nearly
+all zeros while later ones carry plausible values — so the suspicion is that a
+stage of the phoneme-to-frame pipeline (`+$07DC`, `+$086A`, `+$182C`, `+$09E2`,
+`+$0AA4`, `+$0D1E`, `+$1944`, `+$044A`, `+$1B70`, `+$2028`, `+$2284`, `+$2716`)
+is not completing, rather than the oscillator being wrong.
+
+### Two synthesis loops, not one
+
+They disagree about stride, and both consult the channel pointer per sample:
+
+| loop | with a channel | without |
+|---|---|---|
+| `+$2836` (interpolating) | `addq.l #2, a3` — writes the sample **and** a mean-interpolated midpoint | `#4` |
+| `+$298E` | `addq.l #1, a3` — one byte per sample | `#2` |
+
+So the engine's native rate is 11127.27 Hz in the first loop and 22254.5455 Hz
+in the second. Do not assume one rate for the whole utterance.
+
+### Also still open
+
+`Prime` never returns — after the utterance it emits silent buffers forever.
+`$9A(a5)` (characters consumed) reads 50 against a 49-character input with
+`$D0(a5)` still 49, so the outer loop at `+$0316` looks like it *should*
+terminate on the next pass and does not reach it.
+
+### Reference: how Berkeley set the channel up
+
+From `Ocod` segment 4, `+$5690`:
+
+```
+NewPtr($424)                  ; 1060 bytes -- a full SndChannel
+move.w #$80, $1E(a0)          ; qLength = 128
+SndNewChannel(&chan, 5, 0, NIL)   ; synth 5 = sampledSynth, no init flags
+```
+
+Our probe allocates 64 bytes and zeroes them, which is enough for `chan+8` and
+`chan+$20` but is not what the engine was built against.
