@@ -103,11 +103,29 @@ def setup(text, before_prime=None):
     # restores CACR on anything past a 68000.  Until it is set, the address is
     # zero and the first call jumps to 0.
     #
-    # Our hook says "keep going": moveq #0,d0 clears N, so the `bmi` that
-    # follows the call is never taken.
+    # It is not a notification.  It is part of the frame loader, and it owns
+    # the first two bytes of every frame.
+    #
+    # Frames are 8 bytes.  The steady loader at +$28DA consumes only 6, and the
+    # selector reads at +$294E take `-$5(a6)`, `-$4(a6)` and `-$3(a6)`, which
+    # are frame bytes 3, 4 and 5 only once a6 has reached f+8.  The two missing
+    # bytes are read here, exactly as the first-frame loader at +$27E4 reads
+    # them: f[0] and f[1], the low halves of the formant 1 and 2 increments.
+    #
+    # +$27E4 also fixes the flag contract -- it does `move.b (a6)+, $1(a5)` and
+    # then `bmi` straight to the end-of-speech `rts`.  Bit 7 of f[0] is the
+    # terminator, and after the first frame the `bmi` at +$28D8 is the ONLY way
+    # steady state ends.  A hook that always answers "keep going" runs off the
+    # end of the buffer and plays heap for ever, which is what it did: 2167
+    # buffers, 377 seconds, 0.3% non-silent.
+    #
+    # The second `move.b` clobbers N, so N is restored from the stored byte.
     stop_hook = WORK + 0x200
-    h.w16(stop_hook + 0, 0x7000)      # moveq #0, d0
-    h.w16(stop_hook + 2, 0x4E75)      # rts
+    for i, w in enumerate((0x1B5E, 0x0001,     # move.b (a6)+, $1(a5)
+                           0x1B5E, 0x0003,     # move.b (a6)+, $3(a5)
+                           0x4A2D, 0x0001,     # tst.b  $1(a5)  -- restore N
+                           0x4E75)):           # rts
+        h.w16(stop_hook + 2 * i, w)
     h.set_reg(osp.A7, STACK)
     r = h.call_with_args(DRV_BASE + 0x0034, [stop_hook], max_instr=1000)
     if r != 1:
