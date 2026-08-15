@@ -699,3 +699,38 @@ phase and reports zero playback reads.
 The engine's own memory is the best witness available. Three times now, reading
 the disassembly produced a plausible wrong answer and the watchpoint produced
 the right one in a minute. Reach for the watchpoint sooner.
+
+## "space attaches to the next letter" was never an interruption bug
+
+Reported after every one of four different fixes, and unchanged by all of them.
+The NVDA log says why:
+
+```
+17:26:10.818  KEY    space
+17:26:10.935  KEY    m
+17:26:10.950  SPEAK  'space'
+17:26:10.950  SPEAK  'm'
+```
+
+**NVDA holds the space announcement until the next key is pressed, then hands
+both over in the same millisecond.** There is no cancel between them. They are
+queued as a pair and played back to back.
+
+So nothing about `cancel()`, the `_audioOut` gate, or moving the gap from the
+tail to the head could ever have affected this symptom — and none of them did,
+which is precisely what was reported each time. Four rounds were spent on
+synchronisation for a problem that had none.
+
+What separates the two utterances is the inter-utterance gap and nothing else,
+and 113 ms is simply too short to hear as two announcements. It is a
+pause-length question.
+
+**The lesson, since it cost the most time in this project:** when a fix aimed
+at a mechanism produces *no change at all*, that is evidence about the
+mechanism, not about the fix. Three "no change" reports in a row should have
+sent me to the log to find out how the two utterances actually arrive, rather
+than to a fourth theory about how they were being cut apart.
+
+The leading/trailing split of the gap stays regardless — a gap on the end
+really is destroyed by an interruption, which is true and worth keeping. It
+simply was not the case in play here.
