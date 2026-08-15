@@ -188,6 +188,39 @@ Note the resource IDs. `DriverOpen` asks for **`RULZ` 129, `RULZ` 130 and
 `DriverOpen`'s fall-through path, so it is likely a `Control` csCode; worth
 confirming before treating the missing resource as a problem.
 
+## The last buffer is full, and its tail is silence — do not cut it
+
+Measured on `AY1 KAEN SPIY1K AXGEH1N`, ten buffers, every one 3870 samples:
+
+```
+final buffer, per tenth:  374  335   25    0    0    0    0    0    0    0
+                          ^^^^^^^^^^^^^ real speech        ^^^^^^^^^^^^^^^ silence
+trailing silence: 3037 samples = 136 ms
+```
+
+So `SetBufLength` does **not** fire here — the driver pads the last buffer with
+`$80` instead of shortening it, and `short: 0` is correct rather than a dropped
+buffer. Read the header length anyway; the mechanism exists and other phrases
+may use it.
+
+**The hazard this creates for the NVDA driver.** `Prime` returns while the last
+buffer still holds real speech in its first fifth. A driver that treats *"the
+engine returned"* as *"playback finished"* — starting the next chunk, or calling
+`cancel()`, at that moment — truncates roughly the final 130–170 ms of every
+utterance. That is about one word.
+
+The existing Amiga Narrator add-on reportedly does exactly this: in
+"select synthesizer, *pause*, dialog", the word "dialog" loses its end and the
+next chunk starts. Same engine family (see
+[`softvoice-lineage.md`](softvoice-lineage.md)), and the symptom matches the
+mechanism — per-chunk, always trailing, never random. We have not seen their
+code, so treat that as a hypothesis about ours to guard against, not a
+diagnosis of theirs.
+
+**Rule: feed every sample of every buffer to `nvwave` and let the player drain
+before the next utterance begins.** Completion is when the audio has played,
+never when `Prime` returned.
+
 ## What the host does **not** need
 
 No VBL task. No `_VInstall`. No interrupt model. No DAC. No 22254 Hz pacing. No
