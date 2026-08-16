@@ -234,6 +234,19 @@ static int      g_mem_traps;
 
 static unsigned g_ticks;          /* _TickCount, one per call */
 
+/* The Deferred Task Manager.
+ *
+ * This is what actually makes MacinTalk 2 synthesise.  Its sound callback does
+ * not render: it fills in a DeferredTask at storage+$B6 and installs it, and
+ * the *task* renders.  Nothing else reaches the sample state machine, so with
+ * $A082 stubbed the engine clears its buffers to silence, plays them, and
+ * never touches the voice's wave table at all. */
+static int      g_dt_pending;
+static int      g_in_deferred;
+static unsigned g_dt_proc, g_dt_parm;
+static int      g_dt_runs;
+
+
 /* A ring of recently executed addresses.  Reasoning about where 21 KB of
  * unfamiliar 68000 decided to give up is guesswork without this; with it, the
  * exit path is one `git diff`-sized read. */
@@ -373,6 +386,30 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
      * convenient: we take every sound buffer the instant it is offered and
      * fire the callback immediately, so nothing here ever waits on a clock.
      * A timer that never fires cannot stall what never waits. */
+    case 0xA082: {                     /* _DTInstall -- A0 = DeferredTask  */
+        /* Named from the record, not from recall.  A snapshot at the call
+         * site (Cecy 1 +$3BA2) reads:
+         *
+         *   +$00 qLink    00000000
+         *   +$04 qType    0007         <- dtQType
+         *   +$06 dtFlags  0000
+         *   +$08 dtAddr   00063A5A     <- back end +$3A5A
+         *   +$0C dtParam  00093BE8     <- the back end's storage
+         *   +$10 dtReserved 00000000
+         *
+         * which is DeferredTask field for field.  The task is entered with
+         * A1 = dtParam, and +$3A62 confirms it: `move.l a1,d0 / movea.l d0,a4`
+         * with a4 used as storage from there on.
+         *
+         * Running it here would be re-entering the CPU mid-instruction, so
+         * take the record now and run it once the machine is between calls --
+         * the same shape the sound callback already uses. */
+        g_dt_proc = m68k_read_memory_32(a0 + 8);
+        g_dt_parm = m68k_read_memory_32(a0 + 12);
+        g_dt_pending = 1;
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    }
     case 0xA058:                       /* _InsTime                         */
     case 0xA059:                       /* _RmvTime                         */
     case 0xA05A:                       /* _PrimeTime                       */
@@ -935,6 +972,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
 
 #define PCM_CAP       (8u * 1024u * 1024u)
 #define MAGIC_CB_RET  0x00F11000u
+#define MAGIC_DT_RET  0x00F11200u   /* a deferred task has returned */
 #define CB_SCRATCH    0x00F20000u   /* the SndCommand, copied out of the
                                      * caller's stack frame -- by the time the
                                      * callback runs, that frame is gone */
@@ -959,6 +997,7 @@ static int      g_cb_pending;
 static int      g_in_callback;
 static unsigned g_cb_chan;
 static int      g_cb_runs;        /* callbacks actually executed */
+
 
 /* Whether a sound callback may run while the engine is still mid-call.
  *
@@ -1372,6 +1411,40 @@ static void finish_open_component(void)
     m68k_set_reg(M68K_REG_PC, p->resume_pc);
 }
 
+/* Run one deferred task, outside m68k_execute.
+ *
+ * Same construction as run_pending_callback, with two differences: the task
+ * takes its argument in A1 rather than on the stack, and it ends in `rts`, so
+ * a magic return address on the stack is all that is needed to catch it. */
+static void run_pending_deferred(void)
+{
+    unsigned proc = g_dt_proc, parm = g_dt_parm;
+    unsigned save_pc, save_sp, save_a1, sp;
+
+    g_dt_pending = 0;
+    if (!proc) return;
+    g_dt_runs++;
+
+    save_pc = m68k_get_reg(NULL, M68K_REG_PC);
+    save_sp = m68k_get_reg(NULL, M68K_REG_SP);
+    save_a1 = m68k_get_reg(NULL, M68K_REG_A1);
+
+    sp = save_sp - 4;
+    m68k_write_memory_32(sp, MAGIC_DT_RET);
+    m68k_set_reg(M68K_REG_SP, sp);
+    m68k_set_reg(M68K_REG_A1, parm);
+    m68k_set_reg(M68K_REG_PC, proc);
+
+    g_in_deferred = 1;
+    while (g_in_deferred && g_stop_reason == STOP_RUNNING)
+        m68k_execute(100000);
+    g_in_deferred = 0;
+
+    m68k_set_reg(M68K_REG_PC, save_pc);
+    m68k_set_reg(M68K_REG_SP, save_sp);
+    m68k_set_reg(M68K_REG_A1, save_a1);
+}
+
 static void instr_hook(unsigned int pc)
 {
     if (g_trace_on) g_trace[g_trace_pos++ & (TRACE_CAP - 1u)] = pc;
@@ -1401,6 +1474,11 @@ static void instr_hook(unsigned int pc)
     /* A component's Open handler has returned.  Finish the OpenComponent that
      * started it -- outside m68k_execute, the way the sound callback does it,
      * rather than redirecting PC from inside the hook. */
+    if (pc == MAGIC_DT_RET) {
+        g_in_deferred = 0;
+        m68k_end_timeslice();
+        return;
+    }
     if (pc == MAGIC_COPEN_RET) {
         g_copen_ret = 1;
         m68k_end_timeslice();
@@ -1474,6 +1552,8 @@ OSP_API int osp_init(unsigned ram_size)
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
     g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
+    g_dt_pending = 0; g_in_deferred = 0; g_dt_runs = 0;
+    g_dt_proc = g_dt_parm = 0;
     g_heap_base = g_heap_end = g_heap_next = 0;
     g_mem_traps = 0;
     return 0;
@@ -1678,6 +1758,8 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
         m68k_execute(100000);
         if (g_cb_pending && !g_defer_cb && g_stop_reason == STOP_RUNNING)
             run_pending_callback();
+        if (g_dt_pending && g_stop_reason == STOP_RUNNING)
+            run_pending_deferred();
         if (g_copen_ret && g_stop_reason == STOP_RUNNING)
             finish_open_component();
     }
@@ -1704,12 +1786,16 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 OSP_API int osp_run_callbacks(int max_rounds, long long max_instr)
 {
     int n = 0;
-    while (g_cb_pending && n < max_rounds) {
+    while ((g_cb_pending || g_dt_pending) && n < max_rounds) {
         g_stop_reason = STOP_RUNNING;
         g_stop_vector = -1;
         g_instr_count = 0;
         g_instr_budget = max_instr;
-        run_pending_callback();
+        /* The callback installs the deferred task, and the deferred task is
+         * what renders, so both have to be drained or the chain stops half
+         * way with a buffer of silence already queued. */
+        if (g_cb_pending) run_pending_callback();
+        else              run_pending_deferred();
         n++;
         if (g_stop_reason != STOP_RUNNING) break;
     }
@@ -1763,6 +1849,7 @@ OSP_API unsigned osp_cb_scratch(void)   { return CB_SCRATCH; }
 
 OSP_API void osp_defer_callbacks(int on) { g_defer_cb = on ? 1 : 0; }
 OSP_API int osp_cb_runs(void) { return g_cb_runs; }
+OSP_API int osp_dt_runs(void) { return g_dt_runs; }
 OSP_API int osp_sndlog_n(void) { return g_sndlog_n; }
 OSP_API int osp_sndlog_get(int i)
 {
