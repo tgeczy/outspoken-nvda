@@ -19,11 +19,15 @@ What it looks for:
   * **MacinTalk 2** (`Extensions/MacinTalk 2`) -> its front end, back end,
     rules, dictionary and phoneme tables
   * **MacinTalk 2 voices** (`Extensions/Voices/*`) -> one folder each
+  * **MacinTalk Pro** (`Extensions/MacinTalk Pro`) -> its engine, its tables
+    and its 573 KB data-fork lexicon
+  * **MacinTalk Pro voices** -> one folder each, including the `gtss` unit
+    database and the per-voice code
 
 MacinTalk 3 is deliberately skipped: an existing NVDA add-on builds that engine
 natively from Apple's own source, and emulating it would be strictly worse.
-MacinTalk Pro is not extracted yet, but it is the same kind of component as
-MacinTalk 2 and is the intended follow-on.
+MacinTalk Pro is the same kind of component as MacinTalk 2 -- same 'ttsc' type,
+same standard component entry -- so the host glue is shared.
 
     py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv"
     py -3 tools/extract_rom.py "C:/path/to/outSPOKEN" --out rom
@@ -56,6 +60,28 @@ WANTED = {
     "voice":      [("ttvi", None, "voice info"),
                    ("ttvd", None, "voice description"),
                    ("ttvw", None, "voice data")],
+    # MacinTalk Pro is a 'ttsc' component like MacinTalk 2, so the same host
+    # glue serves it; see docs/macintalk2-components.md.  Its code is gtse 1
+    # and everything else here is table data.
+    "macintalkpro": [("gtse", None, "the engine (gtse 1) and its tables"),
+                     ("gtst", None, "text tables"),
+                     ("gtsa", None, "phoneme alphabets"),
+                     ("gtsp", None, "phoneme sets"),
+                     ("gtsg", None, "configuration"),
+                     ("gtsm", None, "module map"),
+                     ("gtsi", None, "index"),
+                     ("gala", None, "copyright"),
+                     ("thng", None, "component descriptor")],
+    # A Pro voice is nothing like a MacinTalk 2 one.  Alongside the standard
+    # ttvd it carries a 128-byte gtsv record, and `gtss` holds both the
+    # concatenative unit database (789-922 KB) and about 11 KB of per-voice
+    # *code*.  That is why asking only for ttvi/ttvd/ttvw returned 362 bytes
+    # out of an 870 KB file.
+    "provoice":   [("ttvd", None, "voice description"),
+                   ("gtsv", None, "voice record"),
+                   ("gtss", None, "unit database and per-voice code"),
+                   ("gtsg", None, "configuration"),
+                   ("gtsm", None, "wave map")],
 }
 
 
@@ -148,9 +174,15 @@ def main():
                 skipped.append((path, "outSPOKEN %s -- no bundled engine; "
                                       "it uses the Speech Manager" % creator))
                 continue
-            jobs.append((path, fork, WANTED["macintalk1"], "macintalk1"))
+            jobs.append((path, fork, WANTED["macintalk1"], "macintalk1", b""))
         elif base == "MacinTalk 2" or low.startswith("macintalk 2."):
-            jobs.append((path, fork, WANTED["macintalk2"], "macintalk2"))
+            jobs.append((path, fork, WANTED["macintalk2"], "macintalk2", b""))
+        elif base == "MacinTalk Pro" or low.startswith("macintalk pro"):
+            # Pro is the only one of these with a data fork that matters: 573 KB
+            # of lexicon, which no resource type covers.  Both halves are needed
+            # and only one of them is a resource fork, so carry it separately.
+            jobs.append((path, res or data, WANTED["macintalkpro"],
+                         "macintalkpro", data if res else b""))
         elif "/Voices/" in path or path.startswith("Voices/"):
             # Which engine a voice belongs to is written in its resource types,
             # not its name. A MacinTalk 2 voice carries ttvi + ttvd + ttvw; the
@@ -163,13 +195,14 @@ def main():
             nm = base.replace(".rsrc", "")
             if {"ttvi", "ttvd", "ttvw"} <= kinds:
                 jobs.append((path, fork, WANTED["voice"],
-                             "voices/" + _safe(nm)))
+                             "voices/" + _safe(nm), b""))
+            elif "gtss" in kinds:
+                jobs.append((path, fork, WANTED["provoice"],
+                             "voices/" + _safe(nm), b""))
             elif "ttvd" in kinds:
-                which = ("MacinTalk Pro -- not supported yet"
-                         if len(fork) > 200000 else
-                         "MacinTalk 3 -- a native NVDA add-on already builds "
-                         "that engine from Apple's source; use that instead")
-                skipped.append((nm, which))
+                skipped.append((nm, "MacinTalk 3 -- a native NVDA add-on "
+                                    "already builds that engine from Apple's "
+                                    "source; use that instead"))
 
     if not jobs:
         print("  Nothing recognised. Expected outSPOKEN, an Extensions/MacinTalk 2,\n"
@@ -177,7 +210,7 @@ def main():
         return 1
 
     total = 0
-    for path, fork, spec, sub in jobs:
+    for path, fork, spec, sub, datafork in jobs:
         outdir = os.path.join(a.out, sub)
         if a.list:
             try:
@@ -188,6 +221,11 @@ def main():
             print("  %-52s %s" % (path[:52], " ".join(kinds)))
             continue
         n, missing = take(fork, spec, outdir, path)
+        if datafork:
+            os.makedirs(outdir, exist_ok=True)
+            with open(os.path.join(outdir, "datafork.bin"), "wb") as fh:
+                fh.write(datafork)
+            n += 1
         total += n
         flag = "" if not missing else "   MISSING: " + "; ".join(missing)
         print("  %-52s %2d resources -> %s%s"

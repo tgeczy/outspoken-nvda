@@ -132,12 +132,19 @@ def installed(engine=None):
     extraction must not cost the user every other voice.  `bad` collects them
     so a caller can say so out loud.
     """
-    out, bad = [], []
+    out, bad, seen = [], [], set()
     for base in _voice_dirs():
         for folder in sorted(os.listdir(base)):
             p = os.path.join(base, folder)
             if not os.path.isdir(p):
                 continue
+            # First root wins, the same precedence `paths.find` uses.  Without
+            # this, having both $OUTSPOKEN_ROM and ./rom populated lists every
+            # voice twice -- and a duplicated voice reaches NVDA's voice list
+            # as two identical entries the user cannot tell apart.
+            if folder in seen:
+                continue
+            seen.add(folder)
             files = {}
             for f in os.listdir(p):
                 files[f.split("_")[0]] = os.path.join(p, f)
