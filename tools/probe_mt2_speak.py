@@ -102,6 +102,11 @@ def main():
         h.w32(VOICE_SPEC + 0, int.from_bytes(v.creator.encode("mac-roman"),
                                              "big"))
         h.w32(VOICE_SPEC + 4, v.id)
+        # The host plays Speech Manager: GetVoiceInfo('fref') answers with the
+        # ttvd id, which is what the engine actually opens the voice by.
+        ttvd_id = int(os.path.basename(v.files["ttvd"]).split("_")[1]
+                      .split(".")[0])
+        h.add_voice(v.creator, v.id, ttvd_id)
         mark = h.lib.osp_reslog_n()
         r, res = h.component_call(chan, SET_INFO,
                                   [SO_CURRENT_VOICE, VOICE_SPEC],
@@ -121,8 +126,15 @@ def main():
 
     before = len(h.traps)
     h.pcm_reset()
+    h.defer_callbacks(True)
     reason, result = h.component_call(chan, SPEAK, [TEXT_BUF, len(raw), 0],
                                       max_instr=400_000_000)
+
+    # SpeakBuffer returns as soon as the first buffer is queued, so the host
+    # has to keep being the Sound Manager until the engine stops asking.
+    rounds = h.run_callbacks()
+    print("  sound callbacks run: %d%s"
+          % (rounds, "   <-- STALLED, not finished" if rounds >= 4096 else ""))
 
     print("\n$A82A calls during the speak:")
     for d0, pc, csp, words, served in h.cm_log:

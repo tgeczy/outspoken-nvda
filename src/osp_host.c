@@ -364,6 +364,30 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         *d0_out = 0; *a0_out = a0;
         return 1;
     }
+    /* The Time Manager.  MacinTalk 2's back end installs eight tasks at
+     * Cecy 1 +$38F6, over 26-byte records whose filled fields -- long at +0,
+     * word at +4, long at +$A, word at +$E -- are TMTask's qLink, qType,
+     * tmCount and tmWakeUp.
+     *
+     * Accepting and ignoring them is right for this host rather than merely
+     * convenient: we take every sound buffer the instant it is offered and
+     * fire the callback immediately, so nothing here ever waits on a clock.
+     * A timer that never fires cannot stall what never waits. */
+    case 0xA058:                       /* _InsTime                         */
+    case 0xA059:                       /* _RmvTime                         */
+    case 0xA05A:                       /* _PrimeTime                       */
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA193: {                     /* _Microseconds -- A0 = UnsignedWide */
+        /* Only reached because we told SysEnvirons this is System 7.  It must
+         * advance, or anything measuring elapsed time sees zero forever; the
+         * instruction count is the one monotonic clock this host has. */
+        unsigned long long us = (unsigned long long)g_instr_count;
+        m68k_write_memory_32(a0 + 0, (unsigned)(us >> 32));
+        m68k_write_memory_32(a0 + 4, (unsigned)(us & 0xFFFFFFFFu));
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    }
     case 0xA146:                       /* _GetTrapAddress -- number in D0  */
         *a0_out = TRAPADDR_BASE + ((d0 & 0x0FFFu) * 4u);
         *d0_out = 0;
@@ -453,6 +477,17 @@ static short    g_res_err;
 typedef struct { unsigned type; short id; int found; } ResReq;
 static ResReq g_reslog[MAX_RESLOG];
 static int    g_reslog_n;
+
+/* Which voices the Speech Manager knows about.
+ *
+ * MacinTalk 2 does not find a voice by rummaging: it asks the Speech Manager
+ * for the voice's *file*, then opens that file and reads a resource id out of
+ * the answer.  We are the Speech Manager, so this table is that answer.  Python
+ * fills it from each voice's own `ttvd` -- see tools/voices.py. */
+#define MAX_VOICES 32
+typedef struct { unsigned creator, id; short res_id; } VoiceReg;
+static VoiceReg g_voices[MAX_VOICES];
+static int      g_voice_count;
 
 static void log_res(unsigned type, short id, int found)
 {
@@ -919,6 +954,26 @@ static int       g_buflog_n;
 static int      g_cb_pending;
 static int      g_in_callback;
 static unsigned g_cb_chan;
+static int      g_cb_runs;        /* callbacks actually executed */
+
+/* Whether a sound callback may run while the engine is still mid-call.
+ *
+ * `.sp` wanted it to: its Prime rendered a whole utterance synchronously, so
+ * answering the callback the instant the buffer was offered kept it running
+ * flat out.  MacinTalk 2 is double-buffered and asynchronous, and its callback
+ * (Cecy 1 +$3B1E) only refills on its *second* invocation -- the first just
+ * sets a flag.  Firing early therefore burns that first callback before the
+ * engine has queued anything for it to be about.
+ *
+ * So this is per-engine policy, set from Python, not a global truth. */
+static int      g_defer_cb;
+
+/* Every Sound Manager command, in order.  MacinTalk 2 drives audio
+ * asynchronously, so "why did it stop after one buffer" is a question about
+ * the *sequence* of commands, which no single counter can answer. */
+#define MAX_SNDLOG 512
+static unsigned short g_sndlog[MAX_SNDLOG];
+static int            g_sndlog_n;
 
 /* Take one buffer's worth of samples.
  *
@@ -973,6 +1028,7 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
         unsigned param2 = m68k_read_memory_32(cmdp + 4);
         int i;
 
+        if (g_sndlog_n < MAX_SNDLOG) g_sndlog[g_sndlog_n++] = (unsigned short)cmd;
         if (cmd == bufferCmd) {
             take_buffer(param2);
         } else if (cmd == callBackCmd) {
@@ -1019,6 +1075,46 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
     case 0xA800: {                      /* _SoundDispatch, selector in D0 */
         unsigned d0 = m68k_get_reg(NULL, M68K_REG_D0);
         unsigned selector = d0 & 0xFFFFu;
+
+        /* The Speech Manager rides on the Sound Manager's trap, so this is not
+         * a sound call at all:
+         *
+         *     GetVoiceInfo(VoiceSpec *voice, OSType 'fref', void *info)
+         *
+         * read off Cecy 1 +$7FC, where D0 is $0614000C -- twelve bytes of
+         * arguments in the low word -- and the selector pushed is 'fref',
+         * which Apple's Speech.h calls soVoiceFile.
+         *
+         * `info` is a VoiceFileInfo: an FSSpec (vRefNum, parID, Str63 name =
+         * 70 bytes) followed by **resID at +70**.  That resID is the whole
+         * point: the engine opens the file and immediately does
+         * _Get1Resource('ttvd', resID).  Our Resource Manager keeps one flat
+         * table and no files, so the FSSpec can be nominal, but the resID has
+         * to be right. */
+        if (d0 == 0x0614000Cu) {
+            unsigned info    = m68k_read_memory_32(csp + 0);
+            unsigned vspec   = m68k_read_memory_32(csp + 8);
+            unsigned creator = m68k_read_memory_32(vspec + 0);
+            unsigned vid     = m68k_read_memory_32(vspec + 4);
+            int k, found = 0;
+            short res_id = 0;
+            for (k = 0; k < g_voice_count; k++) {
+                if (g_voices[k].creator == creator && g_voices[k].id == vid) {
+                    res_id = g_voices[k].res_id; found = 1; break;
+                }
+            }
+            if (found) {
+                m68k_write_memory_16(info + 0, 0);      /* FSSpec.vRefNum   */
+                m68k_write_memory_32(info + 2, 0);      /* FSSpec.parID     */
+                m68k_write_memory_8 (info + 6, 0);      /* FSSpec.name, ""  */
+                m68k_write_memory_16(info + 70,
+                                     (unsigned)(unsigned short)res_id);
+            }
+            /* -244 is voiceNotFound, which is what the caller expects when a
+             * VoiceSpec names something that is not installed. */
+            tb_return(exc_sp, 12, found ? 0u : 0xFF0Cu, 2);
+            return 1;
+        }
         if (selector == 8) {            /* SndChannelStatus(chan, len, stat) */
             unsigned stat = m68k_read_memory_32(csp + 0);
             unsigned len = m68k_read_memory_16(csp + 4);
@@ -1098,6 +1194,22 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 4, 1, 2);
         return 1;
     }
+    case 0xA81A:                         /* _HOpenResFile -> short refNum    */
+        /* HOpenResFile(short vRefNum, long dirID, ConstStr255Param fileName,
+         *              SignedByte permission)
+         *
+         * Twelve bytes of arguments: the byte permission still costs two,
+         * because `move.b <ea>,-(a7)` on the 68000 keeps A7 even.
+         *
+         * The engine only wants a file to read the voice out of, and every
+         * resource we have is already in one flat table, so any positive
+         * refNum will do -- what matters is that it is not -1, which is the
+         * value Cecy 1 +$830 tests for. */
+        tb_return(exc_sp, 12, 1, 2);
+        return 1;
+    case 0xA99A:                         /* _CloseResFile(short)             */
+        tb_return(exc_sp, 2, 0, 0);
+        return 1;
     case 0xA9AF:                         /* _ResError -> short               */
         /* Only ever reached on a failure path -- MacinTalk 2 calls it to turn
          * "the Handle came back nil" into an error code to return. */
@@ -1214,6 +1326,7 @@ static void run_pending_callback(void)
 
     g_cb_pending = 0;
     if (!proc) return;
+    g_cb_runs++;
 
     save_pc = m68k_get_reg(NULL, M68K_REG_PC);
     save_sp = m68k_get_reg(NULL, M68K_REG_SP);
@@ -1349,13 +1462,14 @@ OSP_API int osp_init(unsigned ram_size)
     memset(g_policy, 0, sizeof g_policy);
     g_trap_count = g_trap_overflow = g_stub_count = g_fault_count = 0;
     g_stackpc_is_instruction = -1;
-    g_res_count = 0; g_reslog_n = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
+    g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
     g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
+    g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
     g_heap_base = g_heap_end = g_heap_next = 0;
     g_mem_traps = 0;
     return 0;
@@ -1502,6 +1616,17 @@ OSP_API int osp_cm_log_get(int i, unsigned *d0, unsigned *pc, unsigned *csp,
     return 1;
 }
 OSP_API int osp_cp_wraps(void) { return g_cp_wraps; }
+/* Tell the Speech Manager -- us -- that a voice exists, and which `ttvd` id it
+ * lives under.  Both halves come from the voice's own ttvd. */
+OSP_API int osp_add_voice(unsigned creator, unsigned id, int res_id)
+{
+    if (g_voice_count >= MAX_VOICES) return -1;
+    g_voices[g_voice_count].creator = creator;
+    g_voices[g_voice_count].id = id;
+    g_voices[g_voice_count].res_id = (short)res_id;
+    return g_voice_count++;
+}
+
 OSP_API int osp_reslog_n(void) { return g_reslog_n; }
 OSP_API int osp_reslog_get(int i, unsigned *type, int *id, int *found)
 {
@@ -1547,7 +1672,7 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 
     while (g_stop_reason == STOP_RUNNING) {
         m68k_execute(100000);
-        if (g_cb_pending && g_stop_reason == STOP_RUNNING)
+        if (g_cb_pending && !g_defer_cb && g_stop_reason == STOP_RUNNING)
             run_pending_callback();
         if (g_copen_ret && g_stop_reason == STOP_RUNNING)
             finish_open_component();
@@ -1561,6 +1686,32 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 /* Continue after a snapshot breakpoint, leaving PC, SP and every register
  * exactly as the break left them.  Needed to test what NVDA does constantly:
  * stop an utterance half way through and then start another one. */
+/* Keep answering the sound callback until the engine stops asking.
+ *
+ * MacinTalk 2's SpeakBuffer is asynchronous: it renders one buffer, queues it
+ * behind a callBackCmd and returns, and everything after that is driven by the
+ * Sound Manager calling back.  `.sp` never needed this because its Prime
+ * rendered a whole utterance synchronously -- here the host has to keep being
+ * the Sound Manager after the speak call has returned.
+ *
+ * Returns how many callbacks ran.  Hitting `max_rounds` is a stall, not a
+ * finish, and the caller should say so rather than treat the audio as
+ * complete. */
+OSP_API int osp_run_callbacks(int max_rounds, long long max_instr)
+{
+    int n = 0;
+    while (g_cb_pending && n < max_rounds) {
+        g_stop_reason = STOP_RUNNING;
+        g_stop_vector = -1;
+        g_instr_count = 0;
+        g_instr_budget = max_instr;
+        run_pending_callback();
+        n++;
+        if (g_stop_reason != STOP_RUNNING) break;
+    }
+    return n;
+}
+
 OSP_API int osp_resume(long long max_instr)
 {
     if (g_stop_reason != STOP_BREAK) return g_stop_reason;
@@ -1605,6 +1756,14 @@ OSP_API int osp_pcm_get(unsigned char *out, int max)
     return (int)n;
 }
 OSP_API unsigned osp_cb_scratch(void)   { return CB_SCRATCH; }
+
+OSP_API void osp_defer_callbacks(int on) { g_defer_cb = on ? 1 : 0; }
+OSP_API int osp_cb_runs(void) { return g_cb_runs; }
+OSP_API int osp_sndlog_n(void) { return g_sndlog_n; }
+OSP_API int osp_sndlog_get(int i)
+{
+    return (i >= 0 && i < g_sndlog_n) ? (int)g_sndlog[i] : -1;
+}
 
 OSP_API int osp_buflog_n(void) { return g_buflog_n; }
 OSP_API int osp_buflog_get(int i, unsigned *addr, unsigned *len)

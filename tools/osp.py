@@ -68,6 +68,7 @@ class Host(object):
                                          ctypes.c_int, ctypes.c_longlong]
         L.osp_pcm_get.argtypes = [ctypes.c_char_p, ctypes.c_int]
         L.osp_add_component.argtypes = [ctypes.c_uint] * 4
+        L.osp_add_voice.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_int]
         L.osp_open_instance.argtypes = [ctypes.c_int]
         L.osp_open_instance.restype = ctypes.c_uint
         L.osp_instance_storage.argtypes = [ctypes.c_uint]
@@ -156,6 +157,17 @@ class Host(object):
             raise RuntimeError("cannot open component %d" % component)
         return tok
 
+    def add_voice(self, creator, voice_id, ttvd_res_id):
+        """Register a voice with the Speech Manager side of the host.
+
+        MacinTalk 2 asks for a voice's *file*, not its resources, so the host
+        has to answer GetVoiceInfo('fref') with the ttvd id."""
+        i = self.lib.osp_add_voice(self._ostype(creator), voice_id,
+                                   ttvd_res_id)
+        if i < 0:
+            raise RuntimeError("no room for another voice")
+        return i
+
     def instance_storage(self, token):
         return self.lib.osp_instance_storage(token)
 
@@ -196,6 +208,21 @@ class Host(object):
             out.append((struct.pack(">I", t.value).decode("mac-roman", "replace"),
                         i.value, bool(f.value)))
         return out
+
+    def defer_callbacks(self, on=True):
+        """Hold sound callbacks until the engine is between calls.
+
+        Right for MacinTalk 2, wrong for `.sp`; see the note in osp_host.c."""
+        self.lib.osp_defer_callbacks(1 if on else 0)
+
+    def run_callbacks(self, max_rounds=4096, max_instr=200_000_000):
+        """Be the Sound Manager until the engine stops queueing buffers.
+
+        MacinTalk 2's speak call is asynchronous, so the audio after the first
+        buffer only appears if something keeps answering the callback.
+        Returns the number of callbacks run; hitting max_rounds is a stall."""
+        self.lib.osp_run_callbacks.argtypes = [ctypes.c_int, ctypes.c_longlong]
+        return self.lib.osp_run_callbacks(max_rounds, max_instr)
 
     @property
     def cp_wraps(self):
