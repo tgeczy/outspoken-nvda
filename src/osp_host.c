@@ -444,6 +444,26 @@ static short    g_res_err;
 
 #define RES_NOT_FOUND (-192)      /* resNotFound */
 
+/* Every resource the engine asked for, and whether we had it.
+ *
+ * `.sp` needed this once, to discover it wanted TALK 1 while outSPOKEN stores
+ * TALK 1001.  MacinTalk 2 asks for far more, and a voice that will not load
+ * reports only resNotFound -- which says nothing about *what* was missing. */
+#define MAX_RESLOG 256
+typedef struct { unsigned type; short id; int found; } ResReq;
+static ResReq g_reslog[MAX_RESLOG];
+static int    g_reslog_n;
+
+static void log_res(unsigned type, short id, int found)
+{
+    if (g_reslog_n < MAX_RESLOG) {
+        g_reslog[g_reslog_n].type = type;
+        g_reslog[g_reslog_n].id = id;
+        g_reslog[g_reslog_n].found = found;
+        g_reslog_n++;
+    }
+}
+
 static unsigned res_find(unsigned type, short id)
 {
     int i;
@@ -1048,6 +1068,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         short id = (short)m68k_read_memory_16(csp);
         unsigned type = m68k_read_memory_32(csp + 2);
         unsigned h = res_find(type, id);
+        log_res(type, id, h != 0);
         g_res_err = h ? 0 : RES_NOT_FOUND;
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
         tb_return(exc_sp, 6, h, 4);
@@ -1328,7 +1349,7 @@ OSP_API int osp_init(unsigned ram_size)
     memset(g_policy, 0, sizeof g_policy);
     g_trap_count = g_trap_overflow = g_stub_count = g_fault_count = 0;
     g_stackpc_is_instruction = -1;
-    g_res_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
+    g_res_count = 0; g_reslog_n = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
     g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
@@ -1481,6 +1502,15 @@ OSP_API int osp_cm_log_get(int i, unsigned *d0, unsigned *pc, unsigned *csp,
     return 1;
 }
 OSP_API int osp_cp_wraps(void) { return g_cp_wraps; }
+OSP_API int osp_reslog_n(void) { return g_reslog_n; }
+OSP_API int osp_reslog_get(int i, unsigned *type, int *id, int *found)
+{
+    if (i < 0 || i >= g_reslog_n) return 0;
+    *type = g_reslog[i].type; *id = g_reslog[i].id;
+    *found = g_reslog[i].found;
+    return 1;
+}
+
 OSP_API int osp_framelog_n(void) { return g_framelog_n; }
 OSP_API unsigned osp_framelog_get(int i, int k)
 {

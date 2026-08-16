@@ -183,6 +183,21 @@ class Host(object):
         return out
 
     @property
+    def resource_requests(self):
+        """Every (type, id, found) the engine asked the Resource Manager for.
+
+        A voice that will not load reports only resNotFound, which does not say
+        which resource was missing.  This does."""
+        out = []
+        t = ctypes.c_uint(); i = ctypes.c_int(); f = ctypes.c_int()
+        for k in range(self.lib.osp_reslog_n()):
+            self.lib.osp_reslog_get(k, ctypes.byref(t), ctypes.byref(i),
+                                    ctypes.byref(f))
+            out.append((struct.pack(">I", t.value).decode("mac-roman", "replace"),
+                        i.value, bool(f.value)))
+        return out
+
+    @property
     def cp_wraps(self):
         return self.lib.osp_cp_wraps()
 

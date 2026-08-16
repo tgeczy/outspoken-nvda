@@ -28,7 +28,14 @@ from probe_mt2_open import (FRONT_BASE, BACK_BASE, HEAP, HEAP_SIZE, STACK,
                             OPEN, rom, signed)                 # noqa: E402
 
 SPEAK, STOP, STATUS = 1, 2, 0
+#: Selector 6 takes (OSType, void *) and its first comparison is against
+#: 'char' -- soCharacterMode -- so it is SetSpeechInfo.  Selector 5 is the
+#: same shape and rejects a nil pointer, which makes it the getter.
+SET_INFO, GET_INFO = 6, 5
 TEXT_BUF = 0x00195000
+VOICE_SPEC = 0x00196100
+
+SO_CURRENT_VOICE = 0x63766F78          # 'cvox', from Apple's Speech.h
 
 #: A MacinTalk 2 voice is ttvi + ttvd + ttvw.  Ben is the smallest complete
 #: one, which makes it the cheapest thing to try first.
@@ -85,6 +92,28 @@ def main():
     if reason != 1 or signed(result) != 0:
         print("  cannot speak until Open succeeds -- run probe_mt2_open.py")
         return 1
+
+    # A VoiceSpec is {creator, id}, and both come straight out of the voice's
+    # own ttvd -- see tools/voices.py.
+    import voices
+    vs = [v for v in voices.installed()[0] if v.name == VOICE]
+    if vs:
+        v = vs[0]
+        h.w32(VOICE_SPEC + 0, int.from_bytes(v.creator.encode("mac-roman"),
+                                             "big"))
+        h.w32(VOICE_SPEC + 4, v.id)
+        mark = h.lib.osp_reslog_n()
+        r, res = h.component_call(chan, SET_INFO,
+                                  [SO_CURRENT_VOICE, VOICE_SPEC],
+                                  max_instr=50_000_000)
+        print("set 'cvox' to %s (creator %r id 0x%08X): %s, result %d"
+              % (v.name, v.creator, v.id, osp.STOP[r], signed(res)))
+        missing = [x for x in h.resource_requests[mark:] if not x[2]]
+        print("  resources it asked for: %s"
+              % ", ".join("%s %d%s" % (t, i, "" if ok else " MISSING")
+                          for t, i, ok in h.resource_requests[mark:]) or "none")
+        if missing:
+            print("  -> %d not registered" % len(missing))
 
     raw = text.encode("mac-roman", "replace")
     h.load(TEXT_BUF, raw)

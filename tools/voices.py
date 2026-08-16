@@ -29,6 +29,19 @@ why an mtk3 "voice" is a `ttvd` and nothing else), and Pro appends nothing
 because its voice data lives in separate files.  So `length` is 362 on every
 voice of every engine, and the extra is engine-private.
 
+**MacinTalk 2's 20 bytes are how it finds the rest of the voice.**  Its back
+end reads them at Cecy 1 +$862: it locks the `ttvd`, adds `VoiceDescription
+.length` to the block address to step over the standard struct, and then reads
+two resource ids out of the extension --
+
+    extension +$08   the `ttvi` id
+    extension +$12   the `ttvw` id
+
+-- fetching each with `_Get1Resource`.  So a MacinTalk 2 voice is
+self-describing: given its `ttvd`, the other two resources name themselves, and
+nothing has to be inferred from file names or ids.  `ttvi_ID` / `ttvw_ID` below
+report what the extension asks for so a mismatch is visible.
+
     py -3 tools/voices.py                 # everything under rom/voices
     py -3 tools/voices.py --engine mtk2   # just the MacinTalk 2 ten
 """
@@ -56,7 +69,7 @@ ENGINES = {
 class Voice(object):
     __slots__ = ("name", "comment", "creator", "id", "version", "gender",
                  "age", "script", "language", "region", "folder", "files",
-                 "extra")
+                 "extra", "ttvi_id", "ttvw_id")
 
     def __repr__(self):
         return "<%s %s %s>" % (self.creator, self.name, self.gender)
@@ -94,6 +107,12 @@ def describe(data):
         struct.unpack(">hhhhh", data[336:346])
     v.gender = GENDER.get(gender, "gender %d" % gender)
     v.extra = len(data) - VOICE_DESCRIPTION_LEN
+    # MacinTalk 2's extension names the other two resources; see above.
+    v.ttvi_id = v.ttvw_id = None
+    if v.creator == "mtk2" and v.extra >= 0x14:
+        ext = data[VOICE_DESCRIPTION_LEN:]
+        v.ttvi_id, v.ttvw_id = struct.unpack(">h", ext[8:10])[0], \
+            struct.unpack(">h", ext[0x12:0x14])[0]
     v.folder = None
     v.files = {}
     return v
@@ -159,6 +178,14 @@ def main():
         print("%-14s %-14s %-7s %5d %6d  %s"
               % (v.name, v.engine, v.gender, v.age, v.extra,
                  " ".join(sorted(v.files))))
+        if v.ttvi_id is not None:
+            have_i = v.files.get("ttvi", "")
+            have_w = v.files.get("ttvw", "")
+            print("%-14s   wants ttvi %d, ttvw %d%s"
+                  % ("", v.ttvi_id, v.ttvw_id,
+                     "" if (("_%d." % v.ttvi_id) in have_i
+                            and ("_%d." % v.ttvw_id) in have_w)
+                     else "   <-- does not match the extracted ids"))
         if args.comments:
             print("%-14s   %r" % ("", v.comment))
 
