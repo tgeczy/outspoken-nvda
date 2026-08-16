@@ -25,3 +25,4 @@ build/
 __pycache__/
 *.pyc
 .venv/
+*.nvda-addon

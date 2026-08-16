@@ -131,8 +131,20 @@ class SynthDriver(SynthDriver):
         explains the empty ROM folder at start-up either way.
         """
         try:
-            import osp                                        # noqa: F401
+            import ctypes
+            import osp
+            # Importing `osp` only works out a path; the DLL is what actually
+            # has to load, and it is the half that can be wrong.
+            #
+            # A 32-bit NVDA loading a 64-bit build raises
+            # "[WinError 193] %1 is not a valid Win32 application", and until
+            # this check existed that happened *after* the user had selected
+            # the synthesizer: it appeared in the list, took the selection, and
+            # then never spoke. Reported as "it loads but there is no speech",
+            # which is a much harder thing to diagnose than not being offered.
+            ctypes.CDLL(osp.DLL)
         except Exception:
+            log.debug("outSPOKEN: the emulator will not load", exc_info=True)
             return False
         # Either engine is enough. Requiring `.sp` would hide MacinTalk 2 from
         # a user who extracted only that, which their disk image decides, not
