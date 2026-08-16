@@ -37,6 +37,7 @@ import time
 import nvwave
 import speech.commands
 from logHandler import log
+from autoSettingsUtils.driverSetting import BooleanDriverSetting
 from synthDriverHandler import (SynthDriver, VoiceInfo, synthDoneSpeaking,
                                 synthIndexReached)
 
@@ -72,6 +73,17 @@ class SynthDriver(SynthDriver):
         SynthDriver.VoiceSetting(),
         SynthDriver.RateSetting(),
         SynthDriver.PitchSetting(),
+        # The 1984 rules cannot count: `RULZ` bucket 26 holds the ten digit
+        # names and nothing else, so `30` is spoken "three zero". Reading them
+        # as words is an addition on our side, and it is offered rather than
+        # imposed -- digit by digit is genuinely easier to follow for phone
+        # numbers, version strings and long identifiers, and some users want the
+        # engine exactly as it was.
+        BooleanDriverSetting(
+            "numberWords",
+            _("Read &numbers as words (thirty, not three zero)"),
+            defaultVal=True,
+        ),
     )
     supportedCommands = {speech.commands.IndexCommand}
     supportedNotifications = {synthIndexReached, synthDoneSpeaking}
@@ -93,6 +105,7 @@ class SynthDriver(SynthDriver):
     def __init__(self):
         super().__init__()
         self._rate, self._pitch = 50, 50
+        self._numberWords = True
         self._engineRate = 0
         self._voiceId = "male"
         self._engine = None
@@ -244,6 +257,21 @@ class SynthDriver(SynthDriver):
     def _set_pitch(self, value):
         self._pitch = max(0, min(100, int(value)))
 
+    def _get_numberWords(self):
+        return self._numberWords
+
+    def _set_numberWords(self, value):
+        """Takes effect on the next utterance, not this one.
+
+        The engine reads `number_mode` while translating, and translation
+        happens on the worker thread, so there is nothing to flush here -- but
+        also nothing to interrupt. Changing a setting must never cut off what
+        is currently being spoken.
+        """
+        self._numberWords = bool(value)
+        if self._engine is not None:
+            self._engine.number_mode = "words" if value else "digits"
+
     def _get_availableVoices(self):
         from collections import OrderedDict
         out = OrderedDict()
@@ -283,6 +311,8 @@ class SynthDriver(SynthDriver):
         try:
             import engine as engine_mod
             self._engine = engine_mod.Engine(found)
+            self._engine.number_mode = (
+                "words" if self._numberWords else "digits")
         except Exception:
             self._engineError = "engine failed to start"
             log.error("outSPOKEN: engine failed to start", exc_info=True)

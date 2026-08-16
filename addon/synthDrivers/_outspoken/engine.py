@@ -25,6 +25,7 @@ if _HERE not in sys.path:
 
 import osp                                                    # noqa: E402
 import nrl                                                    # noqa: E402
+import numwords                                               # noqa: E402
 
 DRV_BASE = 0x00040000
 HEAP, HEAP_SIZE = 0x00080000, 0x00080000
@@ -245,6 +246,10 @@ class Engine(object):
         self.h.w16(s + 0x32, max(40, min(2560, int(rate))))
 
     # -- speaking ----------------------------------------------------------
+    #: How to read digits.  None means "leave them to the engine", which spells
+    #: them out one at a time because that is all `RULZ` bucket 26 can do.
+    number_mode = "words"
+
     def translate(self, text):
         if self.rules is None:
             return text
@@ -252,6 +257,13 @@ class Engine(object):
         if len(t) == 1 and t.isalpha():
             # Typing echo sends one character, and it wants the letter's NAME.
             return nrl.letter_name(t, self.rules)
+        if self.number_mode in ("words", "digits"):
+            # Before the rules, never inside them: `30` has to become the word
+            # "thirty" while it is still English, because the rules only ever
+            # see letters. See numbers.py for why this is an addition rather
+            # than a restoration.
+            text = numwords.normalise(
+                text, spell_out=(self.number_mode == "digits"))
         if self.dictionary is not None:
             # Respell first, then apply the rules -- the dictionary's right-hand
             # side is English, not phonemes. That is how Berkeley fixed

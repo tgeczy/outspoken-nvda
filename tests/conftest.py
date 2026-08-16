@@ -181,6 +181,23 @@ def _install_fake_nvda():
     sdh.synthIndexReached = _Notifier()
     sys.modules["synthDriverHandler"] = sdh
 
+    # NVDA puts the checkbox-style settings in their own package. The driver
+    # only needs the class to exist at import time -- what the setting *does*
+    # is the driver's own property pair, which the tests exercise directly.
+    asu = types.ModuleType("autoSettingsUtils")
+    ds = types.ModuleType("autoSettingsUtils.driverSetting")
+    ds.DriverSetting = _Setting
+    ds.BooleanDriverSetting = _Setting
+    ds.NumericDriverSetting = _Setting
+    asu.driverSetting = ds
+    sys.modules["autoSettingsUtils"] = asu
+    sys.modules["autoSettingsUtils.driverSetting"] = ds
+
+    # `_` is a builtin under NVDA's gettext install; outside it, it is not.
+    import builtins
+    if not hasattr(builtins, "_"):
+        builtins._ = lambda s: s
+
 
 _install_fake_nvda()
 for p in (os.path.join(ADDON, "synthDrivers"),
