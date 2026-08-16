@@ -12,15 +12,28 @@ memory access stay on the C side, where they belong.
 import ctypes
 import os
 import struct
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+
+#: Which build to load, decided by the *running interpreter* rather than by the
+#: machine.
+#:
+#: NVDA was a 32-bit process for most of its life and is 64-bit only recently,
+#: so an add-on that ships one binary supports one era. `build.sh` already
+#: produces both; picking here is what lets the same add-on serve old and new
+#: NVDA from one folder. Loading the wrong one does not fail politely -- it is
+#: `OSError: [WinError 193] %1 is not a valid Win32 application`, which is
+#: exactly what several other synthesizers in this user's log are dying of.
+_BITS = 64 if sys.maxsize > 2 ** 32 else 32
+_NAME = "osp_host.dll" if _BITS == 64 else "osp_host_x86.dll"
+
 # Deployed inside the add-on the DLL sits beside this file; in the repo it
 # lives under build/. Checking both lets one module serve both places.
-_CANDIDATES = [os.path.join(HERE, "osp_host.dll"),
-               os.path.join(ROOT, "build", "osp_host.dll")]
+_CANDIDATES = [os.path.join(HERE, _NAME),
+               os.path.join(ROOT, "build", _NAME)]
 DLL = next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
-DLL_X86 = os.path.join(ROOT, "build", "osp_host_x86.dll")
 
 # m68k_register_t, in declaration order
 (D0, D1, D2, D3, D4, D5, D6, D7,
@@ -44,7 +57,9 @@ class Host(object):
     def __init__(self, ram=0x01000000, dll=None):
         path = dll or DLL
         if not os.path.isfile(path):
-            raise RuntimeError("%s not built -- run `sh build.sh`" % path)
+            raise RuntimeError(
+                "%s not found -- this is the %d-bit build, so run "
+                "`sh build.sh`, which produces both" % (path, _BITS))
         self.dll = path
         self.lib = ctypes.CDLL(path)
         L = self.lib
