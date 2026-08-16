@@ -83,6 +83,8 @@ def _catalogue():
             out.append((vid, "%s (MacinTalk 1)" % label, "sp", hz))
     try:
         import macintalk2
+        if not macintalk2.usable(rom.search_roots()):
+            return out
         files, mt2 = macintalk2.find(rom.search_roots())
         for v in mt2:
             out.append(("mtk2:" + v.name, "%s (MacinTalk 2)" % v.name,

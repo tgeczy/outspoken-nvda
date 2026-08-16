@@ -67,16 +67,29 @@ class Host(object):
                                          ctypes.POINTER(ctypes.c_uint),
                                          ctypes.c_int, ctypes.c_longlong]
         L.osp_pcm_get.argtypes = [ctypes.c_char_p, ctypes.c_int]
-        L.osp_add_component.argtypes = [ctypes.c_uint] * 4
-        L.osp_add_voice.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_int]
-        L.osp_open_instance.argtypes = [ctypes.c_int]
-        L.osp_open_instance.restype = ctypes.c_uint
-        L.osp_instance_storage.argtypes = [ctypes.c_uint]
-        L.osp_instance_storage.restype = ctypes.c_uint
-        L.osp_component_call.argtypes = [ctypes.c_uint, ctypes.c_int,
-                                         ctypes.POINTER(ctypes.c_uint),
-                                         ctypes.c_int, ctypes.c_longlong,
-                                         ctypes.POINTER(ctypes.c_uint)]
+        # The Component Manager half is bound optionally.
+        #
+        # An older osp_host.dll does not export it, and NVDA holds the DLL open
+        # while it is loaded, so a user can easily end up with new Python and
+        # an old binary. Binding these unconditionally made that fatal for
+        # *both* engines -- `.sp` needs none of this and went silent anyway,
+        # which is the worst failure this driver has. Missing here means
+        # MacinTalk 2 is unavailable and nothing else changes.
+        self.has_components = True
+        try:
+            L.osp_add_component.argtypes = [ctypes.c_uint] * 4
+            L.osp_add_voice.argtypes = [ctypes.c_uint, ctypes.c_uint,
+                                        ctypes.c_int]
+            L.osp_open_instance.argtypes = [ctypes.c_int]
+            L.osp_open_instance.restype = ctypes.c_uint
+            L.osp_instance_storage.argtypes = [ctypes.c_uint]
+            L.osp_instance_storage.restype = ctypes.c_uint
+            L.osp_component_call.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                             ctypes.POINTER(ctypes.c_uint),
+                                             ctypes.c_int, ctypes.c_longlong,
+                                             ctypes.POINTER(ctypes.c_uint)]
+        except AttributeError:
+            self.has_components = False
         for n in ("osp_pcm_len", "osp_sample_rate", "osp_cb_scratch"):
             getattr(L, n).restype = ctypes.c_uint
         if L.osp_init(ram) != 0:

@@ -20,6 +20,7 @@ first.  The driver rebuilds when the user picks a voice from another engine.
 
 Everything about the component protocol is in docs/macintalk2-components.md.
 """
+import ctypes
 import os
 import sys
 
@@ -93,8 +94,21 @@ def find(roots):
 
 
 def usable(roots):
+    """Also checks the DLL can actually do components.
+
+    A stale osp_host.dll is easy to end up with, because NVDA holds it open
+    while the synthesizer is loaded and it cannot be replaced in place. Listing
+    MacinTalk 2 voices against a binary that cannot run them would offer the
+    user voices that are guaranteed to be silent.
+    """
     files, found = find(roots)
-    return bool(files and found)
+    if not (files and found):
+        return False
+    try:
+        # Already loaded, so this is the same handle rather than a second copy.
+        return hasattr(ctypes.CDLL(osp.DLL), "osp_add_component")
+    except Exception:
+        return False
 
 
 class Engine(object):
