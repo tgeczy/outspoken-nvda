@@ -85,7 +85,7 @@ ENGINE_FILES = {
 class Voice(object):
     __slots__ = ("name", "comment", "creator", "id", "version", "gender",
                  "age", "script", "language", "region", "folder", "files",
-                 "extra", "ttvi_id", "ttvw_id")
+                 "extra", "ttvi_id", "ttvw_id", "names")
 
     def __repr__(self):
         return "<%s %s %s>" % (self.creator, self.name, self.gender)
@@ -93,6 +93,30 @@ class Voice(object):
     @property
     def engine(self):
         return ENGINES.get(self.creator, "unknown (%r)" % self.creator)
+
+
+#: Written by the extractor beside the `.bin`s. A Mac resource name is not a
+#: file name -- MacinTalk Pro's modules are `*TTS`, `*Wave`, `*Lex` -- so the
+#: names live in their own file rather than in the ones they name.
+NAMES_FILE = "names.tsv"
+
+
+def _read_names(path):
+    """-> {(type, id): mac name}, empty when the folder predates names."""
+    out = {}
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                row = line.strip()
+                if row.startswith("#") or "	" not in row:
+                    continue
+                rtype, rid, nm = row.split("	", 2)
+                out[(rtype, int(rid))] = nm
+    except (OSError, ValueError):
+        return {}
+    return out
 
 
 def _pstr(b):
@@ -131,6 +155,7 @@ def describe(data):
             struct.unpack(">h", ext[0x12:0x14])[0]
     v.folder = None
     v.files = {}
+    v.names = {}
     return v
 
 
@@ -193,9 +218,26 @@ def installed(engine=None, roots=None, speakable=False):
             if folder in seen:
                 continue
             seen.add(folder)
-            files = {}
+            # Only `<type>_<id>.bin` -- a voice folder holds other things now.
+            # `names.tsv` records the Mac resource names MacinTalk Pro looks
+            # its modules up by, and taking it for a resource cost every
+            # MacinTalk 2 voice at once: the key became "names.tsv", the id
+            # parse raised, and the loader dropped the lot. Be specific about
+            # what a resource file looks like rather than assuming the folder
+            # contains nothing else.
+            files, extra = {}, {}
             for f in os.listdir(p):
-                files[f.split("_")[0]] = os.path.join(p, f)
+                stem, ext = os.path.splitext(f)
+                if ext.lower() != ".bin" or "_" not in stem:
+                    extra[f] = os.path.join(p, f)
+                    continue
+                rtype, rid = stem.rsplit("_", 1)
+                try:
+                    int(rid)
+                except ValueError:
+                    extra[f] = os.path.join(p, f)
+                    continue
+                files[rtype] = os.path.join(p, f)
             if "ttvd" not in files:
                 bad.append((folder, "no ttvd"))
                 continue
@@ -206,6 +248,7 @@ def installed(engine=None, roots=None, speakable=False):
                 bad.append((folder, str(e)))
                 continue
             v.folder, v.files = p, files
+            v.names = _read_names(extra.get(NAMES_FILE))
             if engine is not None and v.creator != engine:
                 continue
             if speakable:

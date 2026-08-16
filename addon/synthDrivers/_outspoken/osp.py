@@ -80,6 +80,9 @@ class Host(object):
         L.osp_add_file.argtypes = [ctypes.c_char_p, ctypes.c_int,
                                    ctypes.c_char_p, ctypes.c_int]
         L.osp_add_file.restype = ctypes.c_int
+        L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                        ctypes.c_char_p, ctypes.c_int]
+        L.osp_name_resource.restype = ctypes.c_int
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]
@@ -184,6 +187,21 @@ class Host(object):
 
     #: Gestalt processor values, which is how the host names a CPU.
     CPU_68000, CPU_68010, CPU_68020, CPU_68030 = 1, 2, 3, 4
+
+    def name_resource(self, restype, res_id, name):
+        """Give a registered resource its Mac name.
+
+        **MacinTalk Pro looks its pieces up by name, not by id**: the engine is
+        modules called `*TTS`, `*Wave`, `*Lex` and so on, and a voice's unit
+        database is `EnglMBruceData`. Without this, Get1NamedResource has
+        nothing to match and Open fails with resNotFound.
+        """
+        if isinstance(name, str):
+            name = name.encode("mac-roman", "replace")
+        if len(name) > 63:
+            raise ValueError("a Mac resource name is at most 63 characters")
+        return self.lib.osp_name_resource(self._ostype(restype), res_id,
+                                          name, len(name)) == 0
 
     def add_file(self, name, data):
         """Register the one file the engine may open: its name and data fork.

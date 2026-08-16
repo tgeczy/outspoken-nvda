@@ -435,6 +435,100 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         *a0_out = a0; *d0_out = 0;
         m68k_write_memory_16(MEM_ERR_ADDR, 0);
         return 1;
+    /* ---- the File Manager, for one file ------------------------------- *
+     *
+     * All of these take a ParamBlockRec in A0 and return the error in D0, and
+     * the HFS spellings are the flat ones with bit 9 set: $A20A is _HOpenRF,
+     * $A214 is _HGetVol, $A215 is _HSetVol.  `base` has already masked that
+     * off, so one case serves both.
+     *
+     * IOParam offsets used below: ioResult 16, ioNamePtr 18, ioVRefNum 22,
+     * ioRefNum 24, ioMisc 28, ioBuffer 32, ioReqCount 36, ioActCount 40,
+     * ioPosMode 44, ioPosOffset 46. */
+    case 0xA000:                       /* _Open   -- the data fork          */
+    case 0xA00A:                       /* _OpenRF -- and the resource fork  */
+        m68k_write_memory_16(a0 + 24, (unsigned)FAKE_DF_REF);
+        m68k_write_memory_16(a0 + 16, 0);
+        g_file_open = 1;
+        g_file_pos = 0;
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA001:                       /* _Close                            */
+        g_file_open = 0;
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA002: {                     /* _Read                             */
+        unsigned buf = m68k_read_memory_32(a0 + 32);
+        int req  = (int)m68k_read_memory_32(a0 + 36);
+        int mode = (int)(short)m68k_read_memory_16(a0 + 44);
+        int off  = (int)m68k_read_memory_32(a0 + 46);
+        int pos, got, i, err = 0;
+        if (!g_file_bytes) {
+            m68k_write_memory_16(a0 + 16, 0xFFDCu);        /* ioErr, -36 */
+            *d0_out = (unsigned)(-36); *a0_out = a0;
+            return 1;
+        }
+        switch (mode & 3) {
+            case 1:  pos = off; break;                     /* fsFromStart */
+            case 2:  pos = g_file_len + off; break;        /* fsFromLEOF  */
+            case 3:  pos = g_file_pos + off; break;        /* fsFromMark  */
+            default: pos = g_file_pos; break;              /* fsAtMark    */
+        }
+        if (pos < 0) pos = 0;
+        if (pos > g_file_len) pos = g_file_len;
+        got = req < 0 ? 0 : req;
+        if (got > g_file_len - pos) { got = g_file_len - pos; err = -39; }
+        for (i = 0; i < got; i++)
+            m68k_write_memory_8(buf + (unsigned)i,
+                                g_file_bytes[pos + i]);
+        g_file_pos = pos + got;
+        m68k_write_memory_32(a0 + 40, (unsigned)got);      /* ioActCount  */
+        m68k_write_memory_16(a0 + 16, (unsigned)(unsigned short)err);
+        *d0_out = (unsigned)err;                           /* eofErr, -39 */
+        *a0_out = a0;
+        return 1;
+    }
+    case 0xA044: {                     /* _SetFPos                          */
+        int mode = (int)(short)m68k_read_memory_16(a0 + 44);
+        int off  = (int)m68k_read_memory_32(a0 + 46);
+        int pos;
+        switch (mode & 3) {
+            case 1:  pos = off; break;
+            case 2:  pos = g_file_len + off; break;
+            case 3:  pos = g_file_pos + off; break;
+            default: pos = g_file_pos; break;
+        }
+        if (pos < 0) pos = 0;
+        if (pos > g_file_len) pos = g_file_len;
+        g_file_pos = pos;
+        m68k_write_memory_32(a0 + 46, (unsigned)pos);
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    }
+    case 0xA018:                       /* _GetFPos                          */
+        m68k_write_memory_32(a0 + 36, 0);
+        m68k_write_memory_32(a0 + 46, (unsigned)g_file_pos);
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA011:                       /* _GetEOF -- length in ioMisc       */
+        m68k_write_memory_32(a0 + 28, (unsigned)g_file_len);
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA014:                       /* _GetVol / _HGetVol                */
+        file_put_name(m68k_read_memory_32(a0 + 18));
+        m68k_write_memory_16(a0 + 22, FAKE_VREFNUM);
+        m68k_write_memory_32(a0 + 48, FAKE_DIRID);         /* ioWDDirID     */
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA015:                       /* _SetVol / _HSetVol -- only one    */
+        m68k_write_memory_16(a0 + 16, 0);
+        *d0_out = 0; *a0_out = a0;
+        return 1;
     case 0xA060:                       /* _HFSDispatch -- selector in D0    */
         /* Selector 8 is PBGetFCBInfo, and the param block proves it rather
          * than a table doing: MacinTalk Pro fills ioCompletion at +12,
@@ -629,8 +723,13 @@ static void tb_return(unsigned exc_sp, unsigned param_bytes,
  * host-side so a detached resource can be handed back unmodified.  See
  * res_find and _DetachResource below -- this is not belt and braces, it is
  * the fix for MacinTalk 2's voice switching. */
+/* `name` is the Mac resource name, which MacinTalk Pro looks resources up BY:
+ * its own code is `gtse 1` called `*TTS`, and Bruce's 789 KB unit database is
+ * `gtss 3` called `EnglMBruceData`.  Empty for the engines that only ever ask
+ * by id. */
 typedef struct { unsigned type; short id; unsigned handle;
-                 unsigned char *bytes; int len; int detached; } ResEntry;
+                 unsigned char *bytes; int len; int detached;
+                 char name[64]; } ResEntry;
 static ResEntry g_res[MAX_RES];
 static int      g_res_count;
 static int      g_res_load = 1;
@@ -699,6 +798,39 @@ static unsigned res_find(unsigned type, short id)
     int i;
     for (i = 0; i < g_res_count; i++)
         if (g_res[i].type == type && g_res[i].id == id) {
+            ResEntry *r = &g_res[i];
+            if (r->detached && r->bytes) {
+                unsigned blk = m68k_read_memory_32(r->handle);
+                if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
+                r->detached = 0;
+            }
+            return r->handle;
+        }
+    return 0;
+}
+
+/* The Resource Manager compares names without regard to case, so we do too. */
+static int res_name_eq(const char *a, const unsigned char *b, int blen)
+{
+    int i;
+    for (i = 0; i < blen; i++) {
+        int x = a[i], y = b[i];
+        if (!x) return 0;
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (x != y) return 0;
+    }
+    return a[blen] == 0;
+}
+
+/* -> the handle of a named resource, restoring it exactly as res_find does. */
+static unsigned res_find_named(unsigned type, const unsigned char *name,
+                               int namelen)
+{
+    int i;
+    for (i = 0; i < g_res_count; i++)
+        if (g_res[i].type == type
+                && res_name_eq(g_res[i].name, name, namelen)) {
             ResEntry *r = &g_res[i];
             if (r->detached && r->bytes) {
                 unsigned blk = m68k_read_memory_32(r->handle);
@@ -1413,22 +1545,36 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         g_res_load = m68k_read_memory_8(csp + 1) ? 1 : 0;
         tb_return(exc_sp, 2, 0, 0);
         return 1;
+    case 0xA9A1:                         /* _GetNamedResource(type, name)     */
     case 0xA820: {                       /* _Get1NamedResource(type, name)    */
-        /* We index by (type, id) and keep no names, because the extractor
-         * writes `type_id.bin` and drops them -- so this cannot be answered
-         * yet. It is served anyway, returning nil and resNotFound, because
-         * STUBBING it is worse than failing it: the caller reserves four bytes
-         * for the Handle and a stub never writes them, so the engine carries
-         * on with whatever was on the stack. That is how a stack address ended
-         * up being passed to _SizeResource as a Handle -- non-zero, so it
-         * passed the nil test, and the failure surfaced two calls later.
+        /* **This is how MacinTalk Pro finds everything.** It is a modular
+         * engine addressed by name rather than by id: `*TTS`, `*Wave`, `*Snd`,
+         * `*Lex`, `*Cmd`, `*XPh`, `*XAl`, `*PhX`, `*AlX`, `*WvX`, plus
+         * `EnglPhon` and `EnglAllo`; a voice is `EnglMBruceData`,
+         * `EnglMBruceCode`, `EnglMBruce` and `EnglMBruceWave`.
          *
-         * The type is logged so the probe says what was wanted. */
+         * Serving it matters even when the answer is nil: the caller reserves
+         * four bytes for the Handle, and a stub never writes them, so the
+         * engine carries on with whatever was on the stack. That is how a
+         * stack address once reached _SizeResource as a Handle -- non-zero, so
+         * it passed the nil test, and the failure surfaced two calls later
+         * as memFullErr. */
+        unsigned name = m68k_read_memory_32(csp);
         unsigned type = m68k_read_memory_32(csp + 4);
-        log_res(type, -1, 0);
-        g_res_err = RES_NOT_FOUND;
+        unsigned char buf[64];
+        unsigned h = 0;
+        int n = 0, i;
+        if (name) {
+            n = (int)m68k_read_memory_8(name);
+            if (n > 63) n = 63;
+            for (i = 0; i < n; i++)
+                buf[i] = (unsigned char)m68k_read_memory_8(name + 1u + (unsigned)i);
+            h = res_find_named(type, buf, n);
+        }
+        log_res(type, (short)(h ? 0 : -1), h != 0);
+        g_res_err = h ? 0 : RES_NOT_FOUND;
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
-        tb_return(exc_sp, 8, 0, 4);
+        tb_return(exc_sp, 8, h, 4);
         return 1;
     }
     case 0xA9A5: {                       /* _SizeResource(h) -> long          */
@@ -1953,10 +2099,30 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     g_res[g_res_count].bytes = (unsigned char *)malloc((size_t)len);
     g_res[g_res_count].len = len;
     g_res[g_res_count].detached = 0;
+    memset(g_res[g_res_count].name, 0, sizeof(g_res[g_res_count].name));
     if (g_res[g_res_count].bytes)
         memcpy(g_res[g_res_count].bytes, data, (size_t)len);
     g_res_count++;
     return mp;
+}
+
+/* Give a registered resource its Mac name, so Get1NamedResource can find it.
+ *
+ * Separate from osp_add_resource rather than another argument to it, because
+ * the engines that came first never needed names and their callers should not
+ * have to say so.  -> 0, or -1 if that resource was never registered. */
+OSP_API int osp_name_resource(unsigned type, int id,
+                              const char *name, int len)
+{
+    int i;
+    if (len < 0 || len > 63) return -1;
+    for (i = 0; i < g_res_count; i++)
+        if (g_res[i].type == type && g_res[i].id == (short)id) {
+            memset(g_res[i].name, 0, sizeof(g_res[i].name));
+            memcpy(g_res[i].name, name, (size_t)len);
+            return 0;
+        }
+    return -1;
 }
 
 /* Register the one file: its name, and its data fork.

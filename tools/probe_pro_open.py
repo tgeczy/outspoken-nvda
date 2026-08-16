@@ -90,6 +90,26 @@ def split(name):
         return None
 
 
+def read_names(folder):
+    """-> {(type, id): mac name} from the extractor's `names.tsv`.
+
+    A Mac resource name is not a file name -- Pro's modules are `*TTS`,
+    `*Wave`, `*Lex` -- so they are recorded beside the `.bin`s rather than in
+    them. Absent means an extraction from before names were kept.
+    """
+    out = {}
+    p = os.path.join(folder, "names.tsv")
+    if not os.path.isfile(p):
+        return out
+    with open(p, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("#") or "\t" not in line:
+                continue
+            rtype, rid, nm = line.rstrip("\n").split("\t", 2)
+            out[(rtype, int(rid))] = nm
+    return out
+
+
 def main():
     want = sys.argv[1] if len(sys.argv) > 1 else None
     d = engine_dir()
@@ -131,11 +151,12 @@ def main():
     # holds 64 resources; Pro is 50 once `thng` is set aside and a voice is 8,
     # so ONE voice fits and three do not. That is a real constraint on the
     # eventual module, not a limitation of this probe.
-    n, skipped, ttvd_id = 0, [], None
+    n, skipped, ttvd_id, named = 0, [], None, 0
     for label, folder in (("engine", d), ("voice", voice.folder)):
+        names = read_names(folder)
         for name in sorted(os.listdir(folder)):
-            if name == "datafork.bin":
-                continue               # not a resource; see the note below
+            if name in ("datafork.bin", "names.tsv"):
+                continue               # not resources; see the notes below
             got = split(name)
             if not got:
                 continue
@@ -149,12 +170,21 @@ def main():
             except RuntimeError as e:
                 print("  ! %s %d (%d bytes): %s" % (rtype, rid, len(data), e))
                 continue
+            # Pro finds its modules by name -- `*TTS`, `EnglMBruceData` -- so
+            # this is not decoration, it is the whole lookup.
+            mac = names.get((rtype, rid))
+            if mac and h.name_resource(rtype, rid, mac):
+                named += 1
             if rtype == "ttvd":
                 ttvd_id = rid
             n += 1
-    print("registered     %d resources (%s set aside), heap %d KB of %d KB"
-          % (n, " ".join(skipped) or "none",
+    print("registered     %d resources, %d of them named (%s set aside), "
+          "heap %d KB of %d KB"
+          % (n, named, " ".join(skipped) or "none",
              h.lib.osp_heap_used() // 1024, HEAP_SIZE // 1024))
+    if not named:
+        print("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
+              "    modules by name and cannot open without them")
 
     # The data fork, which is not a resource and is where the lexicon lives.
     # Pro finds its own file during Open -- PBGetFCBInfo then FSMakeFSSpec --

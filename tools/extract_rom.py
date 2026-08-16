@@ -117,6 +117,14 @@ def open_image(path):
     return out
 
 
+#: Where a folder's resource names are recorded.  Written beside the `.bin`s
+#: rather than encoded into their file names, because a Mac resource name is
+#: not a file name: MacinTalk Pro's modules are called `*TTS`, `*Wave`, `*Lex`
+#: and so on, and `*` is illegal in a Windows path.  Sanitising would silently
+#: lose the thing the engine looks resources up BY.
+NAMES_FILE = "names.tsv"
+
+
 def take(fork, spec, outdir, label):
     """Write the resources `spec` asks for. -> (written, missing)."""
     try:
@@ -128,7 +136,7 @@ def take(fork, spec, outdir, label):
     for r in rs:
         by.setdefault(r.type, []).append(r)
     os.makedirs(outdir, exist_ok=True)
-    n, missing = 0, []
+    n, missing, names = 0, [], []
     for rtype, rid, desc in spec:
         got = [r for r in by.get(rtype, []) if rid is None or r.id == rid]
         if not got:
@@ -137,7 +145,19 @@ def take(fork, spec, outdir, label):
         for r in got:
             name = "%s_%d.bin" % (_safe(r.type).strip() or "res", r.id)
             open(os.path.join(outdir, name), "wb").write(r.data)
+            if r.name:
+                names.append((r.type, r.id, r.name))
             n += 1
+    # **MacinTalk Pro looks its pieces up by name, not by id**, so throwing
+    # these away made the engine unusable however complete the extraction was.
+    # Its own code is `gtse 1` named `*TTS`, and a voice's 789 KB unit database
+    # is `EnglMBruceData`; `Get1NamedResource` is how it finds either.
+    if names:
+        with open(os.path.join(outdir, NAMES_FILE), "w",
+                  encoding="utf-8", newline="\n") as fh:
+            fh.write("# type\tid\tname -- what Get1NamedResource asks for\n")
+            for rtype, rid, nm in sorted(names, key=lambda x: (x[0], x[1])):
+                fh.write("%s\t%d\t%s\n" % (rtype, rid, nm))
     return n, missing
 
 
