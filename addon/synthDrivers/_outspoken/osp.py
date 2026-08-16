@@ -67,6 +67,16 @@ class Host(object):
                                          ctypes.POINTER(ctypes.c_uint),
                                          ctypes.c_int, ctypes.c_longlong]
         L.osp_pcm_get.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_add_component.argtypes = [ctypes.c_uint] * 4
+        L.osp_add_voice.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_int]
+        L.osp_open_instance.argtypes = [ctypes.c_int]
+        L.osp_open_instance.restype = ctypes.c_uint
+        L.osp_instance_storage.argtypes = [ctypes.c_uint]
+        L.osp_instance_storage.restype = ctypes.c_uint
+        L.osp_component_call.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                         ctypes.POINTER(ctypes.c_uint),
+                                         ctypes.c_int, ctypes.c_longlong,
+                                         ctypes.POINTER(ctypes.c_uint)]
         for n in ("osp_pcm_len", "osp_sample_rate", "osp_cb_scratch"):
             getattr(L, n).restype = ctypes.c_uint
         if L.osp_init(ram) != 0:
@@ -121,6 +131,102 @@ class Host(object):
     def call_with_args(self, entry, args, max_instr=200_000_000):
         arr = (ctypes.c_uint * len(args))(*args)
         return self.lib.osp_call_with_args(entry, arr, len(args), max_instr)
+
+    # --- the Component Manager --------------------------------------------
+    # MacinTalk 2 and Pro are components rather than drivers, so the host also
+    # answers $A82A.  See docs/macintalk2-components.md.
+
+    @staticmethod
+    def _ostype(v):
+        if isinstance(v, str):
+            v = v.encode("mac-roman")
+        return struct.unpack(">I", v[:4].ljust(4, b" "))[0]
+
+    def add_component(self, ctype, subtype, manuf, entry):
+        """Register a component's code, as its `thng` resource would."""
+        i = self.lib.osp_add_component(self._ostype(ctype),
+                                       self._ostype(subtype),
+                                       self._ostype(manuf), entry)
+        if i < 0:
+            raise RuntimeError("no room for another component")
+        return i
+
+    def open_instance(self, component):
+        tok = self.lib.osp_open_instance(component)
+        if not tok:
+            raise RuntimeError("cannot open component %d" % component)
+        return tok
+
+    def add_voice(self, creator, voice_id, ttvd_res_id):
+        """Register a voice with the Speech Manager side of the host.
+
+        MacinTalk 2 asks for a voice's *file*, not its resources, so the host
+        has to answer GetVoiceInfo('fref') with the ttvd id."""
+        i = self.lib.osp_add_voice(self._ostype(creator), voice_id,
+                                   ttvd_res_id)
+        if i < 0:
+            raise RuntimeError("no room for another voice")
+        return i
+
+    def instance_storage(self, token):
+        return self.lib.osp_instance_storage(token)
+
+    def component_call(self, token, what, args=(), max_instr=200_000_000):
+        """-> (stop reason, result).  `args` is in declared order."""
+        arr = (ctypes.c_uint * max(len(args), 1))(*args)
+        res = ctypes.c_uint()
+        r = self.lib.osp_component_call(token, what, arr, len(args),
+                                        max_instr, ctypes.byref(res))
+        if r < 0:
+            raise RuntimeError("osp_component_call rejected the call (%d)" % r)
+        return r, res.value
+
+    @property
+    def cm_log(self):
+        """Every $A82A seen: (d0, pc, csp, [4 stack longs], served)."""
+        out = []
+        d0 = ctypes.c_uint(); pc = ctypes.c_uint(); csp = ctypes.c_uint()
+        sv = ctypes.c_int(); words = (ctypes.c_uint * 4)()
+        for i in range(self.lib.osp_cm_log_n()):
+            self.lib.osp_cm_log_get(i, ctypes.byref(d0), ctypes.byref(pc),
+                                    ctypes.byref(csp), words, ctypes.byref(sv))
+            out.append((d0.value, pc.value, csp.value, list(words),
+                        bool(sv.value)))
+        return out
+
+    @property
+    def resource_requests(self):
+        """Every (type, id, found) the engine asked the Resource Manager for.
+
+        A voice that will not load reports only resNotFound, which does not say
+        which resource was missing.  This does."""
+        out = []
+        t = ctypes.c_uint(); i = ctypes.c_int(); f = ctypes.c_int()
+        for k in range(self.lib.osp_reslog_n()):
+            self.lib.osp_reslog_get(k, ctypes.byref(t), ctypes.byref(i),
+                                    ctypes.byref(f))
+            out.append((struct.pack(">I", t.value).decode("mac-roman", "replace"),
+                        i.value, bool(f.value)))
+        return out
+
+    def defer_callbacks(self, on=True):
+        """Hold sound callbacks until the engine is between calls.
+
+        Right for MacinTalk 2, wrong for `.sp`; see the note in osp_host.c."""
+        self.lib.osp_defer_callbacks(1 if on else 0)
+
+    def run_callbacks(self, max_rounds=4096, max_instr=200_000_000):
+        """Be the Sound Manager until the engine stops queueing buffers.
+
+        MacinTalk 2's speak call is asynchronous, so the audio after the first
+        buffer only appears if something keeps answering the callback.
+        Returns the number of callbacks run; hitting max_rounds is a stall."""
+        self.lib.osp_run_callbacks.argtypes = [ctypes.c_int, ctypes.c_longlong]
+        return self.lib.osp_run_callbacks(max_rounds, max_instr)
+
+    @property
+    def cp_wraps(self):
+        return self.lib.osp_cp_wraps()
 
     # --- audio ------------------------------------------------------------
     def pcm_reset(self):
@@ -221,6 +327,13 @@ class Host(object):
             out.append((pc.value, w.value, d0.value, a0.value, a1.value,
                         bool(sv.value)))
         return out
+
+    def trap_d0in(self, i):
+        """D0 as the *caller* set it -- the selector, for the traps that take
+        one there.  `traps` reports the D0 we answered with, which for
+        _Gestalt and _GetTrapAddress is the less interesting half."""
+        self.lib.osp_trap_d0in.restype = ctypes.c_uint
+        return self.lib.osp_trap_d0in(i)
 
     @property
     def stackpc_convention(self):

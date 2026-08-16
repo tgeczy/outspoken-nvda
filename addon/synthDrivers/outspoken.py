@@ -59,6 +59,38 @@ OUT_RATE = 22254
 #: the Amiga narrator's documented robotic mode, which has not been found.
 _VOICES = [("male", "Male", 110), ("female", "Female", 250)]
 
+
+def _catalogue():
+    """Every voice the user can actually run, across every engine present.
+
+    Built, never hardcoded. Which engines a user has depends entirely on what
+    they extracted from their own disk image, so a fixed list would offer
+    voices that cannot speak -- and a synthesizer that lists a voice and then
+    says nothing is worse than one that does not list it.
+
+    -> [(id, label, kind, payload)] where `kind` picks the engine module and
+    `payload` is whatever that module needs: a base pitch for `.sp`, a Voice
+    record for MacinTalk 2.
+    """
+    out = []
+    found, _missing = rom.find()
+    if all(n in found for n in rom.REQUIRED) and "RULZ_1129.bin" in found:
+        # `male` and `female`, unprefixed, because NVDA persists the voice id
+        # and these two shipped first. Renaming them to `sp:male` would silently
+        # reset the voice of every existing user on upgrade. Labels are free to
+        # change; ids are not.
+        for vid, label, hz in _VOICES:
+            out.append((vid, "%s (MacinTalk 1)" % label, "sp", hz))
+    try:
+        import macintalk2
+        files, mt2 = macintalk2.find(rom.search_roots())
+        for v in mt2:
+            out.append(("mtk2:" + v.name, "%s (MacinTalk 2)" % v.name,
+                        "mtk2", v))
+    except Exception:
+        log.debug("outSPOKEN: MacinTalk 2 unavailable", exc_info=True)
+    return out
+
 #: The engine is useful from about 60 to 900 -- a letter takes 0.30 s at 150,
 #: 0.18 s at 250, 0.07 s at 400. Geometric, so the midpoint is a comfortable
 #: 232 instead of spending most of the slider in the slow half.
@@ -100,14 +132,21 @@ class SynthDriver(SynthDriver):
             import osp                                        # noqa: F401
         except Exception:
             return False
-        return rom.usable()
+        # Either engine is enough. Requiring `.sp` would hide MacinTalk 2 from
+        # a user who extracted only that, which their disk image decides, not
+        # us.
+        return bool(_catalogue())
 
     def __init__(self):
         super().__init__()
         self._rate, self._pitch = 50, 50
         self._numberWords = True
         self._engineRate = 0
-        self._voiceId = "male"
+        self._voiceCatalogue = None
+        self._voiceId = None
+        cat = self._catalogue()
+        if cat:
+            self._voiceId = cat[0][0]
         self._engine = None
         self._engineError = None
         self._stopped = False
@@ -275,21 +314,58 @@ class SynthDriver(SynthDriver):
     def _get_availableVoices(self):
         from collections import OrderedDict
         out = OrderedDict()
-        for vid, label, _hz in _VOICES:
+        for vid, label, _kind, _payload in self._catalogue():
             out[vid] = VoiceInfo(vid, label, language="en")
         return out
+
+    def _catalogue(self):
+        """Cached, because NVDA asks for the voice list very often and this
+        walks the ROM folder and parses every `ttvd` it finds."""
+        if self._voiceCatalogue is None:
+            self._voiceCatalogue = _catalogue()
+        return self._voiceCatalogue
+
+    def _entry(self, vid=None):
+        vid = vid or self._voiceId
+        for e in self._catalogue():
+            if e[0] == vid:
+                return e
+        cat = self._catalogue()
+        return cat[0] if cat else None
 
     def _get_voice(self):
         return self._voiceId
 
     def _set_voice(self, value):
-        if any(v[0] == value for v in _VOICES):
-            self._voiceId = value
+        want = self._entry(value)
+        if want is None or want[0] == self._voiceId:
+            return
+        was = self._entry()
+        self._voiceId = want[0]
+        if self._engine is None:
+            return
+        if was is not None and was[2] == want[2] == "mtk2":
+            # Same engine: MacinTalk 2 can change voice in place, because all
+            # of them are already registered. See macintalk2.Engine.select.
+            if self._engine.select(want[3]):
+                self._applySettings(self._engine)
+                return
+        if was is not None and was[2] == want[2] == "sp":
+            self._applySettings(self._engine)
+            return
+        # Crossing between engines. osp_init() resets the emulator's globals,
+        # so two cannot be live at once -- the old one has to go first.
+        try:
+            self._engine.close()
+        except Exception:
+            pass
+        self._engine = None
+        self._engineError = None
 
     def _baseHz(self):
-        for vid, _label, hz in _VOICES:
-            if vid == self._voiceId:
-                return hz
+        e = self._entry()
+        if e is not None and e[2] == "sp":
+            return e[3]
         return 110
 
     def _applySettings(self, eng):
@@ -302,20 +378,27 @@ class SynthDriver(SynthDriver):
     def _ensureEngine(self):
         if self._engine is not None or self._engineError is not None:
             return self._engine
-        found, missing = rom.find()
-        if any(n not in found for n in rom.REQUIRED) or \
-                "RULZ_1129.bin" not in found:
+        entry = self._entry()
+        if entry is None:
             self._engineError = "ROM not present"
-            log.warning("outSPOKEN: engine not available.\n" + rom.describe())
+            log.warning("outSPOKEN: no engine available.\n" + rom.describe())
             return None
+        kind, payload = entry[2], entry[3]
         try:
-            import engine as engine_mod
-            self._engine = engine_mod.Engine(found)
+            if kind == "mtk2":
+                import macintalk2
+                files, allv = macintalk2.find(rom.search_roots())
+                self._engine = macintalk2.Engine(files, allv, payload)
+            else:
+                found, _missing = rom.find()
+                import engine as engine_mod
+                self._engine = engine_mod.Engine(found)
             self._engine.number_mode = (
                 "words" if self._numberWords else "digits")
         except Exception:
             self._engineError = "engine failed to start"
-            log.error("outSPOKEN: engine failed to start", exc_info=True)
+            log.error("outSPOKEN: %s engine failed to start" % kind,
+                      exc_info=True)
         return self._engine
 
     def _report(self):

@@ -47,13 +47,28 @@ def _expected_bytes(eng, texts):
 
 def test_check_requires_the_engine():
     import outspoken
-    import rom
-    assert outspoken.SynthDriver.check() == rom.usable()
+    assert outspoken.SynthDriver.check() == bool(outspoken._catalogue())
 
 
-def test_two_voices(driver):
+def test_the_1984_voice_ids_never_change(driver):
+    """NVDA persists the voice id, so renaming these resets every existing
+    user's voice on upgrade. Labels may change freely; these two may not."""
     voices = driver._get_availableVoices()
-    assert list(voices) == ["male", "female"]
+    assert list(voices)[:2] == ["male", "female"]
+    assert all(v.startswith("mtk2:") for v in list(voices)[2:])
+
+
+def test_every_listed_voice_can_be_selected(driver):
+    """A voice in the list that cannot be chosen is worse than one absent.
+
+    Goes through _set_voice/_get_voice rather than the `voice` property: the
+    fake SynthDriver here is a plain object, so `driver.voice = x` would just
+    set an attribute and read it straight back, and the test would pass
+    without touching the driver at all.
+    """
+    for vid in driver._get_availableVoices():
+        driver._set_voice(vid)
+        assert driver._get_voice() == vid
 
 
 def test_queued_speech_is_not_dropped(driver, rom_files):
