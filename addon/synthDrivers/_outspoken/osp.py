@@ -311,6 +311,22 @@ class Host(object):
     @property
     def buffers_taken(self): return self.lib.osp_buffers_taken()
 
+    def buflog_n(self):
+        return self.lib.osp_buflog_n()
+
+    def buflog_lengths(self, since=0):
+        """Sample counts of the bufferCmds taken, from `since` onward.
+
+        `pcm_reset` does not clear this log, so a caller that wants one
+        utterance takes the index before speaking and slices from there.
+        """
+        out = []
+        a = ctypes.c_uint(); n = ctypes.c_uint()
+        for i in range(since, self.lib.osp_buflog_n()):
+            self.lib.osp_buflog_get(i, ctypes.byref(a), ctypes.byref(n))
+            out.append(n.value)
+        return out
+
     @property
     def short_buffers(self): return self.lib.osp_short_buffers()
 

@@ -350,6 +350,7 @@ class Engine(object):
             return b""
         h = self.h
         h.pcm_reset()
+        mark = h.buflog_n()
         h.load(TEXT_BUF, raw)
         reason, _res = h.component_call(self.chan, SPEAK,
                                         [TEXT_BUF, len(raw), 0],
@@ -377,9 +378,10 @@ class Engine(object):
         # by the "ch" of the item before it. Draining here keeps each utterance
         # to its own audio.
         pcm = h.pcm
+        lengths = h.buflog_lengths(mark)
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return _trim(pcm)
+        return _trim(_drop_restated(pcm, lengths))
 
     def stop(self):
         """Deliberately does not touch the emulator. Read this before "fixing".
@@ -433,6 +435,46 @@ def _signed(v):
 #: 8-bit unsigned silence. The engine clears its buffers to this before it
 #: renders into them, so a partly-used final buffer ends in a run of it.
 _SILENT = 0x80
+
+
+def _drop_restated(pcm, lengths):
+    """Drop a final buffer that merely restates the one before it.
+
+    MacinTalk 2 double-buffers, and when it finishes it can hand the Sound
+    Manager the *other* half again without refilling it. On real hardware the
+    channel has been stopped by then and nobody hears it; we take every
+    bufferCmd offered, so the last chunk of speech arrived twice. Heard as
+    "select synthesizer-er", and on a single letter as the sound followed by a
+    little tail of itself.
+
+    The signature is exact, and both halves of it matter:
+
+        s                    live buffers ... 4, 6   identical, gap 2  -> drop
+        type here to search  live buffers ... 9, 11  identical, gap 2  -> drop
+        a, b, c, d, e        live buffers ... 15, 17 identical, gap 2  -> drop
+        hello, world. ...    live buffers ... 20, 21 differ,    gap 1  -> keep
+        quote                live buffers ... 5, 6   differ,    gap 1  -> keep
+
+    Comparing whole buffers rather than cutting at the first silent one is
+    what makes this safe: silent buffers occur *inside* an utterance wherever
+    there is a pause, four times over in "a, b, c, d, e", so a rule based on
+    silence alone would truncate at the first comma.
+    """
+    if len(lengths) < 2:
+        return pcm
+    bounds, off = [], 0
+    for n in lengths:
+        bounds.append((off, off + n))
+        off += n
+    live = [i for i, (a, b) in enumerate(bounds)
+            if any(c != _SILENT for c in pcm[a:b])]
+    if len(live) < 2:
+        return pcm
+    last, prev = live[-1], live[-2]
+    if pcm[bounds[last][0]:bounds[last][1]] == \
+            pcm[bounds[prev][0]:bounds[prev][1]]:
+        return pcm[:bounds[prev][1]]
+    return pcm
 
 
 def _trim(pcm, keep=1200, lead=220):
