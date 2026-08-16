@@ -251,6 +251,46 @@ static int      g_mem_traps;
  * code -- or worse, an allocation *success* reported as a failure. */
 #define MEM_ERR_ADDR  0x0220u
 
+/* ------------------------------------------------ one file, and only one -
+ *
+ * MacinTalk Pro's Open goes looking for the file it is running from.  It calls
+ * OpenComponentResFile for a refNum, PBGetFCBInfo to turn that into a volume,
+ * a directory and a name, and FSMakeFSSpec to pack the three into an FSSpec it
+ * keeps at +$1C of its globals -- see gtse 1 +$6E8 and +$F42.  A non-zero
+ * result from any of it is fatal to Open.
+ *
+ * It wants that FSSpec because its 572,928-byte lexicon lives in the file's
+ * DATA fork, which no resource type covers and the Resource Manager cannot
+ * reach.
+ *
+ * So the host has to be a File Manager.  Only just, though: there is exactly
+ * one file, it is the one the engine already believes it is running from, and
+ * nothing is ever written.  No volume, no directory, no second file, no
+ * catalogue -- the same posture as the resource registry, which is one flat
+ * table and no files at all.
+ */
+#define FAKE_VREFNUM  0xFFFFu     /* -1: the default volume, on every Mac    */
+#define FAKE_DIRID    2u          /* the root directory id on any HFS volume */
+#define FAKE_DF_REF   2           /* the data fork's refNum. OpenComponent-  */
+                                  /* ResFile already hands out 1 for the     */
+                                  /* resource fork, so this must not be 1.   */
+
+static unsigned char *g_file_bytes;      /* the data fork, host-side */
+static int            g_file_len;
+static int            g_file_pos;        /* the mark, as the File Manager has */
+static int            g_file_open;
+static unsigned char  g_file_name[64];   /* Str63, laid out as the Mac holds it */
+
+/* Write our Str63 wherever a caller asked for the name. */
+static void file_put_name(unsigned ptr)
+{
+    int i, n;
+    if (!ptr) return;
+    n = g_file_name[0];
+    for (i = 0; i <= n; i++)
+        m68k_write_memory_8(ptr + (unsigned)i, g_file_name[i]);
+}
+
 /* _GetTrapAddress answers, one distinct address per trap word.
  *
  * These are never executed, only compared: `TrapAvailable()` asks for a trap
@@ -395,6 +435,25 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         *a0_out = a0; *d0_out = 0;
         m68k_write_memory_16(MEM_ERR_ADDR, 0);
         return 1;
+    case 0xA060:                       /* _HFSDispatch -- selector in D0    */
+        /* Selector 8 is PBGetFCBInfo, and the param block proves it rather
+         * than a table doing: MacinTalk Pro fills ioCompletion at +12,
+         * ioNamePtr at +18, ioVRefNum at +22, ioRefNum at +24 and ioFCBIndx
+         * at +28, then reads ioFCBVRefNum back from +52 and ioFCBParID from
+         * +58 -- which is FCBPBRec, field for field.
+         *
+         * "Which file is this open refNum?" has one answer here. */
+        if (d0 == 8u) {
+            m68k_write_memory_16(a0 + 16, 0);            /* ioResult        */
+            file_put_name(m68k_read_memory_32(a0 + 18)); /* ioNamePtr       */
+            m68k_write_memory_32(a0 + 40, (unsigned)g_file_len);  /* ioFCBEOF */
+            m68k_write_memory_32(a0 + 44, (unsigned)g_file_len);  /* ioFCBPLen */
+            m68k_write_memory_16(a0 + 52, FAKE_VREFNUM); /* ioFCBVRefNum    */
+            m68k_write_memory_32(a0 + 58, FAKE_DIRID);   /* ioFCBParID      */
+            *d0_out = 0; *a0_out = a0;
+            return 1;
+        }
+        return 0;                      /* anything else is news; let it stub */
     case 0xA1AD:                       /* _Gestalt -- selector D0, resp A0 */
         /* Reached through the TrapAvailable() pattern at Cecy 1 +$58A4, and
          * the engine carries its own answer table for the case where Gestalt
@@ -578,6 +637,7 @@ static int      g_res_load = 1;
 static short    g_res_err;
 
 #define RES_NOT_FOUND (-192)      /* resNotFound */
+
 
 /* Every resource the engine asked for, and whether we had it.
  *
@@ -1353,6 +1413,85 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         g_res_load = m68k_read_memory_8(csp + 1) ? 1 : 0;
         tb_return(exc_sp, 2, 0, 0);
         return 1;
+    case 0xA820: {                       /* _Get1NamedResource(type, name)    */
+        /* We index by (type, id) and keep no names, because the extractor
+         * writes `type_id.bin` and drops them -- so this cannot be answered
+         * yet. It is served anyway, returning nil and resNotFound, because
+         * STUBBING it is worse than failing it: the caller reserves four bytes
+         * for the Handle and a stub never writes them, so the engine carries
+         * on with whatever was on the stack. That is how a stack address ended
+         * up being passed to _SizeResource as a Handle -- non-zero, so it
+         * passed the nil test, and the failure surfaced two calls later.
+         *
+         * The type is logged so the probe says what was wanted. */
+        unsigned type = m68k_read_memory_32(csp + 4);
+        log_res(type, -1, 0);
+        g_res_err = RES_NOT_FOUND;
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 8, 0, 4);
+        return 1;
+    }
+    case 0xA9A5: {                       /* _SizeResource(h) -> long          */
+        /* How big is this resource.  Answerable exactly, because the pristine
+         * copy kept for _DetachResource carries the length -- and a wrong
+         * answer here is expensive: the engine sizes an allocation from it,
+         * and stubbed it read whatever was on the stack and asked for that
+         * many bytes.  Open failed with memFullErr and an almost empty heap. */
+        ResEntry *r = res_by_handle(m68k_read_memory_32(csp));
+        g_res_err = r ? 0 : RES_NOT_FOUND;
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 4, r ? (unsigned)r->len : 0xFFFFFFFFu, 4);
+        return 1;                        /* -1 is the documented failure     */
+    }
+    case 0xA9A6:                         /* _GetResAttrs(h) -> short          */
+        /* Nothing is purgeable, preloaded, protected or changed here: the
+         * resources come from a folder and never go back. */
+        tb_return(exc_sp, 4, 0, 2);
+        return 1;
+    case 0xA906: {                       /* _NewString(str) -> StringHandle   */
+        /* gtse 1 +$65EA reserves a long, pushes a pointer to a Pascal string
+         * inside a table it is walking, and stores the result as a Handle --
+         * treating nil as MemErr and failing.  47 of them during Open.
+         *
+         * Worth serving even though Open already returned noErr without it:
+         * stubbed, the reserved long was never written, and the engine kept
+         * whatever was on the stack.  It was non-zero often enough to pass the
+         * nil test, so Open succeeded holding 47 handles to nothing. */
+        unsigned src = m68k_read_memory_32(csp);
+        unsigned n = src ? m68k_read_memory_8(src) : 0;
+        unsigned h = heap_new_handle(n + 1);
+        if (h) {
+            unsigned blk = m68k_read_memory_32(h), i;
+            for (i = 0; i <= n; i++)
+                m68k_write_memory_8(blk + i, m68k_read_memory_8(src + i));
+        }
+        m68k_write_memory_16(MEM_ERR_ADDR, h ? 0u : 0xFF94u);
+        tb_return(exc_sp, 4, h, 4);
+        return 1;
+    }
+    case 0xAA52:                         /* _HighLevelFSDispatch, sel in D0   */
+        /* Selector 1 is FSMakeFSSpec, read off its arguments rather than
+         * recalled: gtse 1 +$F76 reserves a word for the result and pushes a
+         * word, a long, a pointer and a pointer -- (vRefNum, dirID, fileName,
+         * spec) -- and the three inputs are exactly what it just read out of
+         * PBGetFCBInfo.  The 70-byte FSSpec it fills lands at +$1C of the
+         * engine's globals, and +$1C plus 70 is +$62, which is the next field
+         * the code writes. */
+        if (d0 == 1u) {
+            unsigned spec = m68k_read_memory_32(csp);
+            unsigned name = m68k_read_memory_32(csp + 4);
+            unsigned dir  = m68k_read_memory_32(csp + 8);
+            unsigned vref = m68k_read_memory_16(csp + 12);
+            m68k_write_memory_16(spec + 0, vref);
+            m68k_write_memory_32(spec + 2, dir);
+            /* The caller may pass the name it just got back, or nil to mean
+             * "the file itself"; either way there is one file here. */
+            (void)name;
+            file_put_name(spec + 6);
+            tb_return(exc_sp, 14, 0, 2);
+            return 1;
+        }
+        return 0;
     case 0xA994:                         /* _CurResFile -> short             */
         tb_return(exc_sp, 0, 1, 2);
         return 1;
@@ -1684,6 +1823,8 @@ OSP_API int osp_init(unsigned ram_size)
         if (g_res[v].bytes) free(g_res[v].bytes);
         g_res[v].bytes = NULL; g_res[v].len = 0; g_res[v].detached = 0;
     }
+    if (g_file_bytes) free(g_file_bytes);
+    g_file_bytes = NULL; g_file_len = 0; g_file_pos = 0; g_file_open = 0;
     g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
@@ -1709,6 +1850,8 @@ OSP_API void osp_shutdown(void)
         g_res[i].bytes = NULL; g_res[i].len = 0; g_res[i].detached = 0;
     }
     g_res_count = 0;
+    if (g_file_bytes) free(g_file_bytes);
+    g_file_bytes = NULL; g_file_len = 0; g_file_pos = 0; g_file_open = 0;
     if (g_ram) free(g_ram);
     g_ram = NULL; g_ram_size = 0;
 }
@@ -1814,6 +1957,29 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
         memcpy(g_res[g_res_count].bytes, data, (size_t)len);
     g_res_count++;
     return mp;
+}
+
+/* Register the one file: its name, and its data fork.
+ *
+ * Kept host-side rather than copied into emulated RAM. MacinTalk Pro's lexicon
+ * is 572,928 bytes and it reads it a piece at a time through the File Manager,
+ * so there is no reason for all of it to sit in the 68000's address space --
+ * unlike a resource, which the engine gets a Handle to and dereferences. */
+OSP_API int osp_add_file(const unsigned char *name, int namelen,
+                         const unsigned char *data, int len)
+{
+    if (namelen < 0 || namelen > 63 || len < 0) return -1;
+    if (g_file_bytes) free(g_file_bytes);
+    g_file_bytes = (unsigned char *)malloc((size_t)len ? (size_t)len : 1u);
+    if (!g_file_bytes) return -1;
+    memcpy(g_file_bytes, data, (size_t)len);
+    g_file_len = len;
+    g_file_pos = 0;
+    g_file_open = 0;
+    memset(g_file_name, 0, sizeof(g_file_name));
+    g_file_name[0] = (unsigned char)namelen;
+    memcpy(g_file_name + 1, name, (size_t)namelen);
+    return 0;
 }
 
 /* --- the Component Manager, from Python ------------------------------- */

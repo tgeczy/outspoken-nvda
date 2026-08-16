@@ -77,6 +77,9 @@ class Host(object):
         L.osp_heap_init.argtypes = [ctypes.c_uint, ctypes.c_uint]
         L.osp_set_cpu.argtypes = [ctypes.c_int]
         L.osp_set_cpu.restype = ctypes.c_int
+        L.osp_add_file.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                   ctypes.c_char_p, ctypes.c_int]
+        L.osp_add_file.restype = ctypes.c_int
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]
@@ -181,6 +184,20 @@ class Host(object):
 
     #: Gestalt processor values, which is how the host names a CPU.
     CPU_68000, CPU_68010, CPU_68020, CPU_68030 = 1, 2, 3, 4
+
+    def add_file(self, name, data):
+        """Register the one file the engine may open: its name and data fork.
+
+        MacinTalk Pro locates the file it is running from during Open, and its
+        572,928-byte lexicon lives in that file's data fork, which no resource
+        type covers. There is no file *system* here -- one file, never written.
+        """
+        if isinstance(name, str):
+            name = name.encode("mac-roman", "replace")
+        if len(name) > 63:
+            raise ValueError("a Mac file name is at most 63 characters")
+        if self.lib.osp_add_file(name, len(name), data, len(data)) != 0:
+            raise RuntimeError("could not register the file")
 
     def set_cpu(self, proc):
         """Pick the CPU. Call before loading code; 68000 is the default.

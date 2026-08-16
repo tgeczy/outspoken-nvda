@@ -155,6 +155,18 @@ def main():
     print("registered     %d resources (%s set aside), heap %d KB of %d KB"
           % (n, " ".join(skipped) or "none",
              h.lib.osp_heap_used() // 1024, HEAP_SIZE // 1024))
+
+    # The data fork, which is not a resource and is where the lexicon lives.
+    # Pro finds its own file during Open -- PBGetFCBInfo then FSMakeFSSpec --
+    # so it has to be registered before the component is opened, not before it
+    # first speaks.
+    fork = os.path.join(d, "datafork.bin")
+    if os.path.isfile(fork):
+        raw = open(fork, "rb").read()
+        h.add_file("MacinTalk Pro", raw)
+        print("data fork      %d bytes, host-side" % len(raw))
+    else:
+        print("data fork      MISSING -- re-run tools/extract_rom.py")
     if ttvd_id is not None:
         h.add_voice(voice.creator, voice.id, ttvd_id)
 
