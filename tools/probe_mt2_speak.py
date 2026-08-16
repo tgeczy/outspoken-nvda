@@ -15,6 +15,11 @@ The selector map, read off the front end's handlers rather than recalled:
 
     py -3 tools/probe_mt2_speak.py
     py -3 tools/probe_mt2_speak.py "some other words"
+    py -3 tools/probe_mt2_speak.py "some other words" RoboVox
+
+The ten MacinTalk 2 voices are Ben, Boris, Brenda, Mariel, Marvin, Mr. Hughes,
+Otis, RoboVox, Votron and Xero; `py -3 tools/voices.py --engine mtk2` lists
+whichever of them you have extracted.
 """
 import os
 import sys
@@ -61,6 +66,7 @@ def load_voice(h, name):
 
 def main():
     text = sys.argv[1] if len(sys.argv) > 1 else "Hello, this is MacinTalk."
+    voice_name = sys.argv[2] if len(sys.argv) > 2 else VOICE
     front = open(rom("Cecy_3.bin"), "rb").read()
     back = open(rom("Cecy_1.bin"), "rb").read()
 
@@ -77,8 +83,9 @@ def main():
         p = paths.find("%s_%d.bin" % (rtype, rid))
         if p:
             h.add_resource(rtype, rid, open(p, "rb").read())
-    got = load_voice(h, VOICE)
-    print("voice %s: %s" % (VOICE, ", ".join(got) if got else "NOT FOUND"))
+    got = load_voice(h, voice_name)
+    print("voice %s: %s"
+          % (voice_name, ", ".join(got) if got else "NOT FOUND"))
 
     fe = h.add_component("ttsc", "mtk2", "mtk2", FRONT_BASE)
     h.add_component("t2be", "t2be", "mtk2", BACK_BASE)
@@ -96,7 +103,7 @@ def main():
     # A VoiceSpec is {creator, id}, and both come straight out of the voice's
     # own ttvd -- see tools/voices.py.
     import voices
-    vs = [v for v in voices.installed()[0] if v.name == VOICE]
+    vs = [v for v in voices.installed()[0] if v.name == voice_name]
     if vs:
         v = vs[0]
         h.w32(VOICE_SPEC + 0, int.from_bytes(v.creator.encode("mac-roman"),
@@ -194,7 +201,7 @@ def main():
         print("  sample rate:   %.1f Hz -> %.2f seconds"
               % (rate, len(h.pcm) / rate))
         out = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "build", "mt2.wav")
+            os.path.abspath(__file__))), "build", "mt2-%s.wav" % voice_name.replace(" ", "_"))
         write_wav(out, h.pcm, rate)
         print("  wrote          %s" % out)
     return 0
