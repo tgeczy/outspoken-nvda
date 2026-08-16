@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Tell the user, once, that the ROM folder is empty.
+"""Tell the user the engine folder is empty, and keep telling them.
 
 The engine is not ours to ship, so a fresh install cannot speak until the user
 supplies it. That needs saying somewhere, and a settings panel would be a lot
-of scaffolding around one folder -- so it is one dialog, on first run only,
-with a button that opens the folder.
+of scaffolding around one folder -- so it is a dialog with a button that opens
+the folder.
+
+**It asks again on every start-up until either the engine is there or the user
+says no.** It used to ask exactly once ever, and recorded that it had asked
+*before* the dialog was even shown: anyone who dismissed it without reading --
+which is most people, for a dialog that arrives six seconds after start-up --
+never saw it again and was left with a synthesizer that silently refused to
+appear in the list. Repeating a question is a much smaller harm than that, and
+"No" is honoured permanently.
 
 The check runs off the main thread after a short delay: NVDA is still starting
 up when global plugins load, and a modal dialog thrown at that moment is a good
@@ -27,14 +35,23 @@ if _ENGINE_DIR not in sys.path:
 
 import rom                                                    # noqa: E402
 
-#: A marker beside the ROM folder, so the dialog appears once rather than at
-#: every start-up. Deleting it asks again, which is the obvious repair.
-_MARKER = "asked-once"
+#: Written only when the user explicitly says "stop asking".
+#:
+#: This used to be written *before* the dialog appeared, so it showed exactly
+#: once in the add-on's life. Anyone who dismissed it without reading -- which
+#: is most people, most of the time, for a dialog that arrives six seconds
+#: after start-up -- never saw it again and was left with a synthesizer that
+#: silently refused to appear. Asking again each start-up is the kinder
+#: failure, so long as there is a way to say no and be believed.
+_MARKER = "do-not-ask"
 
 _MESSAGE = (
-    "ROM for outSPOKEN is not present.\n\n"
-    "Press OK to open the empty ROM folder in Windows Explorer, where you can "
-    "paste a working outSPOKEN ROM."
+    "MacinTalk has no engine to run yet.\n\n"
+    "This add-on ships no part of MacinTalk. You supply it from your own copy, "
+    "and until then the synthesizer will not appear in NVDA's list at all.\n\n"
+    "Yes  -  open the folder the engine goes in\n"
+    "No  -  do not ask again\n"
+    "Cancel  -  remind me next time NVDA starts"
 )
 
 
@@ -52,20 +69,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             if all(n in found for n in rom.REQUIRED):
                 return
             folder = rom.config_dir()
-            marker = os.path.join(folder, _MARKER)
-            if os.path.exists(marker):
+            if os.path.exists(os.path.join(folder, _MARKER)):
                 return
             os.makedirs(folder, exist_ok=True)
-            with open(marker, "w") as f:
-                f.write("Delete this file to be asked about the ROM again.\n")
             wx.CallAfter(self._ask, folder)
         except Exception:
             log.error("outSPOKEN: ROM check failed", exc_info=True)
 
     def _ask(self, folder):
+        """Ask, and only record a refusal when the user actually gives one."""
         try:
-            if gui.messageBox(_MESSAGE, "outSPOKEN",
-                              wx.OK | wx.CANCEL | wx.ICON_INFORMATION) == wx.OK:
+            answer = gui.messageBox(_MESSAGE, "MacinTalk",
+                                    wx.YES_NO_CANCEL | wx.ICON_INFORMATION)
+            if answer == wx.YES:
                 os.startfile(folder)
+            elif answer == wx.NO:
+                with open(os.path.join(folder, _MARKER), "w") as f:
+                    f.write("Delete this file to be asked about the engine "
+                            "again.\n")
+            # wx.CANCEL, and closing the dialog, both leave no marker, so the
+            # question comes back next start-up. That is the default on
+            # purpose: the alternative is a synthesizer the user cannot find
+            # and has no way to be told about.
         except Exception:
             log.error("outSPOKEN: could not open the ROM folder", exc_info=True)
