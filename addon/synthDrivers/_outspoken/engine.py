@@ -273,11 +273,20 @@ class Engine(object):
         return nrl.translate(text, self.rules)
 
     def close(self):
-        """Retire this engine. Any later call is a no-op rather than a fault."""
+        """Retire this engine. Any later call is a no-op rather than a fault.
+
+        Unloads the DLL as well, so switching to another synthesizer releases
+        the file instead of locking it for the rest of NVDA's life. See
+        osp.Host.close.
+        """
         self._dead = True
         try:
             _LIVE.remove(self)
         except ValueError:
+            pass
+        try:
+            self.h.close()
+        except Exception:
             pass
 
     def stop(self):

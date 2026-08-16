@@ -365,9 +365,25 @@ class Engine(object):
             pass
 
     def close(self):
+        """Close the component, then unload the DLL.
+
+        The component gets its own Close first so it can release what it
+        allocated; then the library goes, which is what unlocks the file for
+        the next build. See osp.Host.close.
+        """
+        if self._dead:
+            return
         self._dead = True
         try:
+            _LIVE.remove(self)
+        except ValueError:
+            pass
+        try:
             self.h.component_call(self.chan, CLOSE, [], max_instr=20_000_000)
+        except Exception:
+            pass
+        try:
+            self.h.close()
         except Exception:
             pass
 

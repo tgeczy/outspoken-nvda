@@ -45,6 +45,7 @@ class Host(object):
         path = dll or DLL
         if not os.path.isfile(path):
             raise RuntimeError("%s not built -- run `sh build.sh`" % path)
+        self.dll = path
         self.lib = ctypes.CDLL(path)
         L = self.lib
         L.osp_init.argtypes = [ctypes.c_uint]
@@ -95,6 +96,46 @@ class Host(object):
         if L.osp_init(ram) != 0:
             raise RuntimeError("osp_init failed")
         self.ram = ram
+
+    # --- lifecycle ----------------------------------------------------------
+    def close(self):
+        """Shut the emulator down and unload the DLL.
+
+        **ctypes never calls FreeLibrary.** A CDLL object being garbage
+        collected does not unload the library, so `osp_host.dll` stays mapped
+        for the life of the NVDA process -- and therefore stays *locked* -- long
+        after the user has switched to another synthesizer. Replacing it then
+        needs NVDA to exit completely, which is how a user ends up running new
+        Python against an old binary without knowing it.
+
+        Windows reference-counts loaded modules and every `Host()` adds one, so
+        this drains rather than frees once. The loop is bounded because a stuck
+        handle should leave the file locked, not hang NVDA.
+
+        Safe to call twice; the driver's terminate path is not always the only
+        caller.
+        """
+        lib, self.lib = getattr(self, "lib", None), None
+        if lib is None:
+            return
+        try:
+            lib.osp_shutdown()
+        except Exception:
+            pass
+        if os.name != "nt":
+            return
+        try:
+            k32 = ctypes.windll.kernel32
+            k32.GetModuleHandleW.restype = ctypes.c_void_p
+            k32.GetModuleHandleW.argtypes = (ctypes.c_wchar_p,)
+            name = os.path.basename(self.dll)
+            for _ in range(16):
+                h = k32.GetModuleHandleW(self.dll) or k32.GetModuleHandleW(name)
+                if not h:
+                    break
+                k32.FreeLibrary(ctypes.c_void_p(h))
+        except Exception:
+            pass
 
     # --- memory -----------------------------------------------------------
     def load(self, addr, data):
