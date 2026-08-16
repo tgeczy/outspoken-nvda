@@ -118,11 +118,16 @@ def main():
                   % (csp, " ".join("0x%08X" % w for w in words)))
 
     print("\nToolbox and OS traps:")
-    for pc, word, d0, a0, a1, served in h.traps:
+    for i, (pc, word, d0, a0, a1, served) in enumerate(h.traps):
         where = ("front+0x%05X" % (pc - FRONT_BASE) if pc < BACK_BASE
                  else "back+0x%05X" % (pc - BACK_BASE))
-        print("  %-16s %-22s D0=0x%08X A0=0x%08X %s"
-              % (where, trap_name(word), d0, a0,
+        d0in = h.trap_d0in(i)
+        # A selector is far more legible as the four characters it is.
+        chars = "".join(chr(c) if 32 <= c < 127 else "."
+                        for c in d0in.to_bytes(4, "big"))
+        print("  %-16s %-22s D0in=0x%08X %-6s A0=0x%08X %s"
+              % (where, trap_name(word), d0in,
+                 "'%s'" % chars if d0in > 0x20202020 else "", a0,
                  "" if served else "<-- STUBBED"))
 
     print("\n  stop:          %s" % osp.STOP[reason], end="")
@@ -151,7 +156,10 @@ def main():
         print("  storage block  0x%X" % blk)
         if blk:
             print("      +$21A (allocation flag) = %d" % h.r16(blk + 0x21A))
-            print("      +$004 (back-end instance) = 0x%08X" % h.r32(blk + 4))
+            print("      +$004 = 0x%08X" % h.r32(blk + 4))
+            print("      +$006 / $00A / $00E (the three tables) = "
+                  "0x%08X 0x%08X 0x%08X"
+                  % (h.r32(blk + 6), h.r32(blk + 0xA), h.r32(blk + 0xE)))
     return 0 if reason == 1 else 1
 
 

@@ -286,6 +286,13 @@ class Host(object):
                         bool(sv.value)))
         return out
 
+    def trap_d0in(self, i):
+        """D0 as the *caller* set it -- the selector, for the traps that take
+        one there.  `traps` reports the D0 we answered with, which for
+        _Gestalt and _GetTrapAddress is the less interesting half."""
+        self.lib.osp_trap_d0in.restype = ctypes.c_uint
+        return self.lib.osp_trap_d0in(i)
+
     @property
     def stackpc_convention(self):
         v = self.lib.osp_stackpc_convention()

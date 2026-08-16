@@ -185,6 +185,10 @@ typedef struct {
     unsigned pc;          /* address of the A-trap word itself */
     unsigned short word;
     unsigned d0, a0, a1, sp;
+    /* D0 as the caller set it.  `d0` above is what we answered with, and for
+     * the traps that take their argument in D0 -- _Gestalt, _GetTrapAddress,
+     * _NewHandle -- that overwrites the only record of what was asked. */
+    unsigned d0_in;
     int      served;      /* 0 = we stubbed it, 1 = a handler ran */
 } TrapRec;
 
@@ -334,6 +338,32 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         m68k_write_memory_16(MEM_ERR_ADDR, h ? 0u : 0xFF94u);
         return 1;
     }
+    case 0xA1AD:                       /* _Gestalt -- selector D0, resp A0 */
+        /* Reached through the TrapAvailable() pattern at Cecy 1 +$58A4, and
+         * the engine carries its own answer table for the case where Gestalt
+         * is missing.  We report it present -- the selector it asks for is in
+         * the trap log's D0-in column, and the answer below is chosen from
+         * that rather than from what a Mac would have said. */
+        *a0_out = 0;
+        *d0_out = 0;                   /* noErr */
+        return 1;
+    case 0xA090: {                     /* _SysEnvirons(version, SysEnvRec*) */
+        /* Cecy 1 +$100A asks for version 2 and compares systemVersion with
+         * $0700 to decide whether it is on System 7.  These resources came
+         * off a System 7 disk, so saying so is the truthful answer. */
+        unsigned rec = a0;
+        m68k_write_memory_16(rec + 0, 2);        /* environsVersion         */
+        m68k_write_memory_16(rec + 2, 9);        /* machineType             */
+        m68k_write_memory_16(rec + 4, 0x0700);   /* systemVersion, System 7 */
+        m68k_write_memory_16(rec + 6, 1);        /* processor: env68000     */
+        m68k_write_memory_8 (rec + 8, 0);        /* hasFPU                  */
+        m68k_write_memory_8 (rec + 9, 0);        /* hasColorQD              */
+        m68k_write_memory_16(rec + 10, 0);       /* keyBoardType            */
+        m68k_write_memory_16(rec + 12, 0);       /* atDrvrVersNum           */
+        m68k_write_memory_16(rec + 14, 0);       /* sysVRefNum              */
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    }
     case 0xA146:                       /* _GetTrapAddress -- number in D0  */
         *a0_out = TRAPADDR_BASE + ((d0 & 0x0FFFu) * 4u);
         *d0_out = 0;
@@ -461,6 +491,13 @@ static unsigned res_find(unsigned type, short id)
 #define INSTANCE_BASE  0x00F2C000u
 #define INSTANCE_TOK(i) (INSTANCE_BASE + (unsigned)(i) * 4u)
 
+/* A `Component` and a `ComponentInstance` are different things and the engine
+ * holds both at once -- FindNextComponent hands back the former, OpenComponent
+ * turns it into the latter.  Separate token ranges so mixing them up is caught
+ * here rather than becoming a plausible-looking wrong answer. */
+#define COMPONENT_BASE 0x00F2C100u
+#define COMPONENT_TOK(i) (COMPONENT_BASE + (unsigned)(i) * 4u)
+
 /* Where a `D0 = 0` call's ComponentParameters is copied so the frame we build
  * on top of it cannot clobber the arguments it describes.
  *
@@ -484,6 +521,7 @@ typedef struct {
 typedef struct {
     int      component;             /* index into g_comp; -1 when free */
     unsigned storage;               /* the Handle set through selector $11 */
+    unsigned refcon;                /* a long the component parks on itself */
 } Instance;
 
 static Component g_comp[MAX_COMPONENTS];
@@ -491,6 +529,31 @@ static int       g_comp_count;
 static Instance  g_inst[MAX_INSTANCES];
 static int       g_inst_count;
 static int       g_cp_slot, g_cp_wraps;
+
+/* OpenComponent is the one call a tail call cannot express.
+ *
+ * Every other selector either answers immediately or hands control to exactly
+ * one callee, so the callee can return straight to the original caller.  Open
+ * has to do both: run the component's own Open handler, *and then* give the
+ * caller an instance rather than whatever that handler returned.  Two returns,
+ * one of which is ours.
+ *
+ * So the handler is sent back to a magic address instead, and the pending
+ * record here says what to do when execution reaches it.  A stack rather than
+ * a single slot, because a component's Open may open another component --
+ * which is exactly what the front end does to the back end. */
+#define MAGIC_COPEN_RET 0x00F11100u
+
+#define MAX_PENDING 8
+typedef struct {
+    unsigned result_slot;   /* the caller's, where the instance belongs */
+    unsigned resume_pc;     /* where the caller carries on              */
+    unsigned inst_token;    /* handed back if the handler said noErr    */
+    unsigned callee_result; /* where the handler left its own result    */
+} PendingOpen;
+static PendingOpen g_pending[MAX_PENDING];
+static int         g_pending_n;
+static int         g_copen_ret;   /* set by instr_hook, acted on outside */
 
 /* Every `$A82A` selector seen, whether or not we knew it.  The first run's log
  * is what settles this engine's surface, exactly as the trap log settled
@@ -500,10 +563,18 @@ typedef struct { unsigned d0, pc, csp, w0, w1, w2, w3; int served; } CmRec;
 static CmRec g_cmlog[MAX_CMLOG];
 static int   g_cmlog_n;
 
+static int comp_of(unsigned token)
+{
+    unsigned i;
+    if (token < COMPONENT_BASE) return -1;
+    i = (token - COMPONENT_BASE) / 4u;
+    return i < (unsigned)g_comp_count ? (int)i : -1;
+}
+
 static int inst_of(unsigned token)
 {
     unsigned i;
-    if (token < INSTANCE_BASE) return -1;
+    if (token < INSTANCE_BASE || token >= COMPONENT_BASE) return -1;
     i = (token - INSTANCE_BASE) / 4u;
     if (i >= (unsigned)g_inst_count || g_inst[i].component < 0) return -1;
     return (int)i;
@@ -597,6 +668,78 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         break;
     }
 
+    case 0x00000004u: {         /* FindNextComponent(prev, desc) -> Component */
+        /* Cecy 3 +$17E2 builds a 20-byte ComponentDescription on its own
+         * frame -- type 't2be', subType 0, manufacturer 'mtk2', flags 0 -- and
+         * returns -240 (`noSynthFound`, straight out of Apple's Speech.h) when
+         * this comes back nil.  A zero field is a wildcard, which is why the
+         * subType of 0 still has to match our back end's 't2be'. */
+        unsigned desc = m68k_read_memory_32(csp + 0);
+        unsigned prev = m68k_read_memory_32(csp + 4);
+        unsigned wt = m68k_read_memory_32(desc + 0);
+        unsigned ws = m68k_read_memory_32(desc + 4);
+        unsigned wm = m68k_read_memory_32(desc + 8);
+        unsigned found = 0;
+        int k, start = 0, pi = comp_of(prev);
+
+        if (pi >= 0) start = pi + 1;        /* "next", so resume past it */
+        for (k = start; k < g_comp_count; k++) {
+            if (wt && g_comp[k].type != wt) continue;
+            if (ws && g_comp[k].subtype != ws) continue;
+            if (wm && g_comp[k].manuf != wm) continue;
+            found = COMPONENT_TOK(k);
+            break;
+        }
+        tb_return(exc_sp, 8, found, 4);
+        served = 1;
+        break;
+    }
+
+    case 0x00000007u: {         /* OpenComponent(Component) -> instance       */
+        /* Cecy 3 +$183E returns -241 (`synthOpenFailed`) when this comes back
+         * nil, so a nil answer here is the front end giving up on the back end
+         * entirely.  Creating the instance is the easy half; the component's
+         * own Open handler has to run before the caller may use it. */
+        unsigned ctok = m68k_read_memory_32(csp + 0);
+        unsigned tok, cp, newsp;
+        int ci = comp_of(ctok), ii;
+
+        if (ci < 0) break;                        /* unknown Component */
+        if (g_inst_count >= MAX_INSTANCES) break;
+        if (g_pending_n >= MAX_PENDING) break;
+
+        ii = g_inst_count++;
+        g_inst[ii].component = ci;
+        g_inst[ii].storage = 0;                   /* the handler will set it */
+        g_inst[ii].refcon = 0;
+        tok = INSTANCE_TOK(ii);
+
+        cp = CP_SCRATCH + (unsigned)(g_cp_slot % CP_SLOTS) * CP_SLOT_SZ;
+        if (++g_cp_slot % CP_SLOTS == 0) g_cp_wraps++;
+        m68k_write_memory_8(cp + 0, 0);           /* flags                  */
+        m68k_write_memory_8(cp + 1, 4);           /* paramSize              */
+        m68k_write_memory_16(cp + 2, 0xFFFFu);    /* what = -1, Open        */
+        m68k_write_memory_32(cp + 4, tok);        /* params[0] = self       */
+
+        /* Well clear of the caller's frame; the callee grows downward. */
+        newsp = csp - 32u;
+        m68k_write_memory_32(newsp + 12, 0);      /* the callee's result    */
+        m68k_write_memory_32(newsp + 8, cp);      /* params, first declared */
+        m68k_write_memory_32(newsp + 4, 0);       /* storage: nil at open   */
+        m68k_write_memory_32(newsp + 0, MAGIC_COPEN_RET);
+
+        {
+            PendingOpen *p = &g_pending[g_pending_n++];
+            p->result_slot = csp + 4;
+            p->resume_pc = resume_pc;
+            p->inst_token = tok;
+            p->callee_result = newsp + 12;
+        }
+        enter_callee(exc_sp, newsp, g_comp[ci].entry);
+        served = 1;
+        break;
+    }
+
     case 0x00000015u: {         /* one argument, a *word* result              */
         /* Cecy 3 +$14FC reserves two bytes, passes self, and treats a result
          * <= 0 as failure; on success it immediately fills three pointer
@@ -621,6 +764,20 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
          * CloseComponentResFile in all but the name.  Note the argument is a
          * word, not a long -- two bytes of arguments, not four. */
         tb_return(exc_sp, 2, 0, 2);
+        served = 1;
+        break;
+    }
+
+    case 0x0000000Du: {         /* park a long on the instance                */
+        /* Cecy 1 +$1F6 pushes self and a Handle it has just allocated, takes
+         * no result and reads nothing back, then carries straight on.  The
+         * component is parking something on its own instance for later --
+         * a refcon in all but the name.  Storage is already spoken for by
+         * $11, and this is a different pointer, so it needs its own slot. */
+        unsigned value = m68k_read_memory_32(csp + 0);
+        int ii = inst_of(m68k_read_memory_32(csp + 4));
+        if (ii >= 0) g_inst[ii].refcon = value;
+        tb_return(exc_sp, 8, 0, 0);
         served = 1;
         break;
     }
@@ -777,6 +934,33 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
         if (g_cb_pending) m68k_end_timeslice();
         return 1;
     }
+    case 0xA807: {                      /* _SndNewChannel                 */
+        /* SndNewChannel(SndChannelPtr *chan, short synth, long init,
+         *               SndCallBackUPP userRoutine)
+         *
+         * Read off the call site at Cecy 1 +$A64: two bytes of result space,
+         * then chan, synth (a *word*), init, userRoutine -- 14 bytes.
+         *
+         * `.sp` never needed this because it was handed a channel; MacinTalk 2
+         * makes its own, and the callback it registers here is the one the
+         * existing sound model already looks for at SndChannel+8.  So filling
+         * that field in is what wires MacinTalk 2's audio into the path `.sp`
+         * already uses. */
+        unsigned user_routine = m68k_read_memory_32(csp + 0);
+        unsigned chanpp = m68k_read_memory_32(csp + 10);
+        unsigned chan = heap_alloc(1064);       /* SndChannel + its queue */
+        if (chan) {
+            m68k_write_memory_32(chan + 8, user_routine);   /* callBack */
+            m68k_write_memory_32(chanpp, chan);
+        }
+        tb_return(exc_sp, 14, chan ? 0u : 0xFF94u, 2);
+        return 1;
+    }
+    case 0xA801:                        /* _SndDisposeChannel(chan, quiet) */
+        /* Nothing to tear down: the bump allocator does not free, and we take
+         * every buffer the moment it is offered, so no queue can be left. */
+        tb_return(exc_sp, 6, 0, 2);
+        return 1;
     case 0xA800: {                      /* _SoundDispatch, selector in D0 */
         unsigned d0 = m68k_get_reg(NULL, M68K_REG_D0);
         unsigned selector = d0 & 0xFFFFu;
@@ -926,6 +1110,7 @@ static void service_atrap(void)
         TrapRec *t = &g_traps[g_trap_count];
         t->pc = trap_pc; t->word = word; t->served = served;
         t->d0 = d0; t->a0 = a0;
+        t->d0_in = m68k_get_reg(NULL, M68K_REG_D0);
         t->a1 = m68k_get_reg(NULL, M68K_REG_A1);
         t->sp = sp;
         g_trap_count++;
@@ -993,6 +1178,27 @@ static void run_pending_callback(void)
     m68k_set_reg(M68K_REG_SP, save_sp);
 }
 
+/* The second half of OpenComponent, run with the machine stopped.
+ *
+ * The component's Open handler has just returned to the magic address.  Its
+ * own result says whether it succeeded; the caller wants an instance, or nil
+ * if it did not.  Then put the caller back exactly where the tail-call
+ * convention would have left it: SP on its result slot, PC past the trap. */
+static void finish_open_component(void)
+{
+    PendingOpen *p;
+    unsigned res;
+
+    g_copen_ret = 0;
+    if (g_pending_n <= 0) return;
+    p = &g_pending[--g_pending_n];
+
+    res = m68k_read_memory_32(p->callee_result);
+    m68k_write_memory_32(p->result_slot, res == 0 ? p->inst_token : 0);
+    m68k_set_reg(M68K_REG_SP, p->result_slot);
+    m68k_set_reg(M68K_REG_PC, p->resume_pc);
+}
+
 static void instr_hook(unsigned int pc)
 {
     if (g_trace_on) g_trace[g_trace_pos++ & (TRACE_CAP - 1u)] = pc;
@@ -1016,6 +1222,14 @@ static void instr_hook(unsigned int pc)
     }
     if (pc == MAGIC_CB_RET) {
         g_in_callback = 0;
+        m68k_end_timeslice();
+        return;
+    }
+    /* A component's Open handler has returned.  Finish the OpenComponent that
+     * started it -- outside m68k_execute, the way the sound callback does it,
+     * rather than redirecting PC from inside the hook. */
+    if (pc == MAGIC_COPEN_RET) {
+        g_copen_ret = 1;
         m68k_end_timeslice();
         return;
     }
@@ -1082,6 +1296,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_res_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
+    g_pending_n = 0; g_copen_ret = 0;
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
@@ -1172,6 +1387,7 @@ OSP_API unsigned osp_open_instance(int component)
     i = g_inst_count++;
     g_inst[i].component = component;
     g_inst[i].storage = 0;
+    g_inst[i].refcon = 0;
     return INSTANCE_TOK(i);
 }
 
@@ -1262,6 +1478,8 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
         m68k_execute(100000);
         if (g_cb_pending && g_stop_reason == STOP_RUNNING)
             run_pending_callback();
+        if (g_copen_ret && g_stop_reason == STOP_RUNNING)
+            finish_open_component();
     }
 
     return g_stop_reason;
@@ -1375,6 +1593,11 @@ OSP_API int osp_trace_get(unsigned *out, int max)
     for (i = 0; i < n; i++)
         out[i] = g_trace[(start + i) & (TRACE_CAP - 1u)];
     return (int)n;
+}
+
+OSP_API unsigned osp_trap_d0in(int i)
+{
+    return (i >= 0 && i < g_trap_count) ? g_traps[i].d0_in : 0u;
 }
 
 OSP_API int  osp_stop_reason(void)  { return g_stop_reason; }
