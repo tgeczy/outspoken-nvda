@@ -64,6 +64,23 @@ ENGINES = {
     "gala": "MacinTalk Pro",
 }
 
+#: What has to be in `rom/` before an engine's voices can be spoken at all.
+#:
+#: **A voice folder is not enough, and the two arrive separately.** The
+#: extractor pulls MacinTalk Pro's Victoria, Bruce and Agnes out of any disk
+#: image that carries them -- roughly 900 KB each -- whether or not that image
+#: also had the engine that reads them, and whether or not this project can
+#: drive it yet. So a user can easily hold three Pro voices and nothing able to
+#: speak them.
+#:
+#: `mtk3` is deliberately absent rather than missing: a native NVDA add-on
+#: builds that engine from Apple's own source, so those voices are never ours
+#: to offer however complete the extraction is.
+ENGINE_FILES = {
+    "mtk2": ("Cecy_1.bin", "Cecy_3.bin"),
+    "gala": ("gtse_1.bin",),
+}
+
 
 class Voice(object):
     __slots__ = ("name", "comment", "creator", "id", "version", "gender",
@@ -132,14 +149,38 @@ def _voice_dirs(roots=None):
             yield d
 
 
-def installed(engine=None, roots=None):
+def engine_installed(creator, roots=None):
+    """-> True if the engine that speaks `creator`'s voices is in `rom/`.
+
+    Asks for the engine's own code, not for its voices: having Victoria says
+    nothing about whether MacinTalk Pro is there to read her.
+    """
+    need = ENGINE_FILES.get(creator)
+    if not need:
+        return False
+    left = set(need)
+    for root in (roots if roots is not None else _roots()):
+        for _dirpath, _dirs, names in os.walk(root):
+            left -= set(names)
+            if not left:
+                return True
+    return not left
+
+
+def installed(engine=None, roots=None, speakable=False):
     """Every voice under `<rom>/voices`, in name order.
 
     A folder that will not decode is skipped, not raised -- one damaged
     extraction must not cost the user every other voice.  `bad` collects them
     so a caller can say so out loud.
+
+    `speakable=True` drops voices whose engine is not installed, and **anything
+    building NVDA's voice list wants it.**  A synthesizer that lists a voice
+    and then says nothing is worse than one that does not list it, and the
+    extractor hands out Pro voices to anyone whose disk image had them.
     """
     out, bad, seen = [], [], set()
+    havEngine = {}
     for base in _voice_dirs(roots):
         for folder in sorted(os.listdir(base)):
             p = os.path.join(base, folder)
@@ -165,8 +206,15 @@ def installed(engine=None, roots=None):
                 bad.append((folder, str(e)))
                 continue
             v.folder, v.files = p, files
-            if engine is None or v.creator == engine:
-                out.append(v)
+            if engine is not None and v.creator != engine:
+                continue
+            if speakable:
+                if v.creator not in havEngine:
+                    havEngine[v.creator] = engine_installed(v.creator, roots)
+                if not havEngine[v.creator]:
+                    bad.append((folder, "%s is not installed" % v.engine))
+                    continue
+            out.append(v)
     out.sort(key=lambda v: v.name.lower())
     return out, bad
 
@@ -203,14 +251,32 @@ def main():
         if args.comments:
             print("%-14s   %r" % ("", v.comment))
 
-    by_engine = {}
+    by_engine, missing = {}, {}
     for v in voices:
         by_engine[v.engine] = by_engine.get(v.engine, 0) + 1
+        if v.creator not in missing:
+            missing[v.creator] = not engine_installed(v.creator)
     print("\n  %d voices: %s"
           % (len(voices),
              ", ".join("%d %s" % (n, e) for e, n in sorted(by_engine.items()))))
     for folder, why in bad:
         print("  skipped %s -- %s" % (folder, why))
+    # Listing a voice whose engine is absent is the diagnostic this tool is
+    # for, so they stay in the table -- but saying nothing about it would let
+    # a user believe an extraction is finished when half of it is missing.
+    for creator, gone in sorted(missing.items()):
+        if not gone:
+            continue
+        what = ENGINES.get(creator, creator)
+        if creator in ENGINE_FILES:
+            print("\n  %s is NOT installed (%s), so its voices above cannot\n"
+                  "  speak and NVDA will not offer them. Extract it from the\n"
+                  "  same disk image the voices came from."
+                  % (what, ", ".join(ENGINE_FILES[creator])))
+        else:
+            print("\n  %s is not emulated here -- a native NVDA add-on builds\n"
+                  "  that engine from Apple's own source; use that instead."
+                  % what)
     return 0
 
 

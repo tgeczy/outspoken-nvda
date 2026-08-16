@@ -81,6 +81,7 @@ WANTED = {
                    ("gtsv", None, "voice record"),
                    ("gtss", None, "unit database and per-voice code"),
                    ("gtsg", None, "configuration"),
+                   ("gtsi", None, "index"),
                    ("gtsm", None, "wave map")],
 }
 

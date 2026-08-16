@@ -89,7 +89,12 @@ def find(roots):
                 files.setdefault(n, os.path.join(dirpath, n))
     if not all(r in files for r in REQUIRED):
         return {}, []
-    found, _bad = voicelib.installed("mtk2", roots=roots)
+    # `speakable` asks the same question a second way -- is this engine really
+    # installed, not just some of its voices -- and it is the rule every engine
+    # module shares. See voices.ENGINE_FILES; MacinTalk Pro is the case that
+    # makes it matter, because the extractor hands out its ~900 KB voices to
+    # anyone whose disk image had them, engine or no engine.
+    found, _bad = voicelib.installed("mtk2", roots=roots, speakable=True)
     return files, found
 
 
