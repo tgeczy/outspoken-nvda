@@ -110,15 +110,25 @@ def read_names(folder):
     return out
 
 
-def main():
-    want = sys.argv[1] if len(sys.argv) > 1 else None
+def build(want=None, quiet=False):
+    """Register everything and Open the component.
+
+    -> (host, instance token, voice, Open result). Shared with
+    probe_pro_speak.py, because getting Pro to the point of being open is
+    twenty lines of exact detail and having two copies of it would mean
+    fixing the next discovery twice.
+    """
+    def say(*a):
+        if not quiet:
+            print(*a)
+
     d = engine_dir()
 
     code_path = os.path.join(d, "gtse_1.bin")
     if not os.path.isfile(code_path):
         raise SystemExit("no gtse_1.bin in %s -- that is the engine itself" % d)
     code = open(code_path, "rb").read()
-    print("MacinTalk Pro  gtse 1  %d bytes at 0x%X" % (len(code), CODE))
+    say("MacinTalk Pro  gtse 1  %d bytes at 0x%X" % (len(code), CODE))
 
     allv, _bad = voicelib.installed("gala")
     if not allv:
@@ -131,7 +141,7 @@ def main():
     if voice is None:
         raise SystemExit("no such Pro voice: %s (have %s)"
                          % (want, ", ".join(v.name for v in allv)))
-    print("voice          %s, %s, %d files" % (voice.name, voice.gender,
+    say("voice          %s, %s, %d files" % (voice.name, voice.gender,
                                                len(os.listdir(voice.folder))))
 
     h = osp.Host()
@@ -168,7 +178,7 @@ def main():
             try:
                 h.add_resource(rtype, rid, data)
             except RuntimeError as e:
-                print("  ! %s %d (%d bytes): %s" % (rtype, rid, len(data), e))
+                say("  ! %s %d (%d bytes): %s" % (rtype, rid, len(data), e))
                 continue
             # Pro finds its modules by name -- `*TTS`, `EnglMBruceData` -- so
             # this is not decoration, it is the whole lookup.
@@ -178,12 +188,12 @@ def main():
             if rtype == "ttvd":
                 ttvd_id = rid
             n += 1
-    print("registered     %d resources, %d of them named (%s set aside), "
+    say("registered     %d resources, %d of them named (%s set aside), "
           "heap %d KB of %d KB"
           % (n, named, " ".join(skipped) or "none",
              h.lib.osp_heap_used() // 1024, HEAP_SIZE // 1024))
     if not named:
-        print("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
+        say("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
               "    modules by name and cannot open without them")
 
     # The data fork, which is not a resource and is where the lexicon lives.
@@ -194,20 +204,26 @@ def main():
     if os.path.isfile(fork):
         raw = open(fork, "rb").read()
         h.add_file("MacinTalk Pro", raw)
-        print("data fork      %d bytes, host-side" % len(raw))
+        say("data fork      %d bytes, host-side" % len(raw))
     else:
-        print("data fork      MISSING -- re-run tools/extract_rom.py")
+        say("data fork      MISSING -- re-run tools/extract_rom.py")
     if ttvd_id is not None:
         h.add_voice(voice.creator, voice.id, ttvd_id)
 
     # thng 128: type 'ttsc', subtype 0, manufacturer 'gala'.
     comp = h.add_component("ttsc", b"\0\0\0\0", "gala", CODE)
     tok = h.open_instance(comp)
-    print("component      %d, instance 0x%08X\n" % (comp, tok))
+    say("component      %d, instance 0x%08X\n" % (comp, tok))
 
     h.set_reg(osp.A7, STACK)
     h.set_reg(osp.SR, 0x2700)
     reason, result = h.component_call(tok, OPEN, [tok], max_instr=200_000_000)
+    return h, tok, voice, (reason, result)
+
+
+def main():
+    want = sys.argv[1] if len(sys.argv) > 1 else None
+    h, tok, voice, (reason, result) = build(want)
 
     print("$A82A calls, in order:")
     if not h.cm_log:

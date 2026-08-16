@@ -83,6 +83,7 @@ class Host(object):
         L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                         ctypes.c_char_p, ctypes.c_int]
         L.osp_name_resource.restype = ctypes.c_int
+        L.osp_instance_error.restype = ctypes.c_int
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]

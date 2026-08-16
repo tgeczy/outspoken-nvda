@@ -45,6 +45,9 @@ static unsigned       g_ram_size;
  * actually running: 1 = 68000, 2 = 68010, 3 = 68020, 4 = 68030.  See
  * osp_set_cpu and the _Gestalt case. */
 static int            g_gestalt_proc = 1;
+/* The last error a component reported through SetComponentInstanceError.
+ * Only diagnosis; it is what the engine was about to return anyway. */
+static short          g_instance_error;
 /* Bytes the CPU pushes for an exception.  The 68000 pushes SR and PC and
  * nothing else; **the 68010 and up add a format/vector word**, so every frame
  * is 8 bytes and every `rte` pops 8.  Getting this wrong is not subtle and is
@@ -537,6 +540,18 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
          * +58 -- which is FCBPBRec, field for field.
          *
          * "Which file is this open refNum?" has one answer here. */
+        if (d0 == 7u) {
+            /* PBGetWDInfo(WDPBRec): ioWDVRefNum at +32 and ioWDDirID at +48,
+             * which is where _GetVol above already puts them.  Pro asks for
+             * this between setting the volume and opening a file, and stubbed
+             * it concluded the file was not there -- resFNotFound, -193. */
+            m68k_write_memory_16(a0 + 16, 0);            /* ioResult        */
+            file_put_name(m68k_read_memory_32(a0 + 18)); /* ioNamePtr       */
+            m68k_write_memory_16(a0 + 32, FAKE_VREFNUM); /* ioWDVRefNum     */
+            m68k_write_memory_32(a0 + 48, FAKE_DIRID);   /* ioWDDirID       */
+            *d0_out = 0; *a0_out = a0;
+            return 1;
+        }
         if (d0 == 8u) {
             m68k_write_memory_16(a0 + 16, 0);            /* ioResult        */
             file_put_name(m68k_read_memory_32(a0 + 18)); /* ioNamePtr       */
@@ -1226,6 +1241,21 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         break;
     }
 
+    case 0x0000000Bu: {         /* SetComponentInstanceError(self, OSErr)     */
+        /* gtse 1 +$1E0 reaches this only on the way out of a FAILED selector:
+         * it tests its error, checks it has storage, then pushes the instance
+         * and the error as a word.  Six bytes of arguments, no result.
+         *
+         * Worth serving for the diagnosis alone -- this is the engine saying
+         * out loud which error it is about to return, and osp_instance_error
+         * hands it to the probe.  Unserved it halted, which turned "the rate
+         * call failed" into "unhandled exception" and hid the reason. */
+        g_instance_error = (short)m68k_read_memory_16(csp);
+        tb_return(exc_sp, 6, 0, 0);
+        served = 1;
+        break;
+    }
+
     case 0x00000010u: {         /* GetComponentInstanceStorage(self)          */
         int ii = inst_of(m68k_read_memory_32(csp));
         tb_return(exc_sp, 4, ii < 0 ? 0 : g_inst[ii].storage, 4);
@@ -1545,6 +1575,48 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         g_res_load = m68k_read_memory_8(csp + 1) ? 1 : 0;
         tb_return(exc_sp, 2, 0, 0);
         return 1;
+    case 0xA99C:                         /* _CountResources(type)  -> short   */
+    case 0xA80D: {                       /* _Count1Resources(type) -> short   */
+        /* The engine enumerates by type -- count them, then walk them by
+         * index -- to find which voices and modules are present.
+         *
+         * Stubbed, the count was whatever the caller's reserved word already
+         * held: it came back as thousands, and the walk that followed made
+         * 3,954 _ReleaseResource calls and took 26,245 memory faults reading
+         * from addresses like 0x70726F6B.  Nothing about that looks like a
+         * missing trap until you count the calls. */
+        unsigned type = m68k_read_memory_32(csp);
+        int i, n = 0;
+        for (i = 0; i < g_res_count; i++)
+            if (g_res[i].type == type) n++;
+        g_res_err = 0;
+        m68k_write_memory_16(RES_ERR_ADDR, 0);
+        tb_return(exc_sp, 4, (unsigned)n, 2);
+        return 1;
+    }
+    case 0xA99D:                         /* _GetIndResource(type, i)          */
+    case 0xA80E: {                       /* _Get1IndResource(type, i) -> Hdl  */
+        /* One-based, as the Resource Manager is, and in the order they were
+         * registered -- which is the order they came out of the file. */
+        int idx = (int)(short)m68k_read_memory_16(csp);
+        unsigned type = m68k_read_memory_32(csp + 2);
+        unsigned h = 0;
+        int i, seen = 0;
+        for (i = 0; i < g_res_count && !h; i++)
+            if (g_res[i].type == type && ++seen == idx) {
+                ResEntry *r = &g_res[i];
+                if (r->detached && r->bytes) {
+                    unsigned blk = m68k_read_memory_32(r->handle);
+                    if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
+                    r->detached = 0;
+                }
+                h = r->handle;
+            }
+        g_res_err = h ? 0 : RES_NOT_FOUND;
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 6, h, 4);
+        return 1;
+    }
     case 0xA9A1:                         /* _GetNamedResource(type, name)     */
     case 0xA820: {                       /* _Get1NamedResource(type, name)    */
         /* **This is how MacinTalk Pro finds everything.** It is a modular
@@ -1663,6 +1735,22 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * refNum will do -- what matters is that it is not -1, which is the
          * value Cecy 1 +$830 tests for. */
         tb_return(exc_sp, 12, 1, 2);
+        return 1;
+    case 0xA9C4:                         /* _OpenRFPerm -> short refNum      */
+        /* OpenRFPerm(ConstStr255Param fileName, short vRefNum,
+         *            SignedByte permission)
+         *
+         * Eight bytes of arguments -- the byte permission still costs two,
+         * because `move.b <ea>,-(a7)` keeps A7 even -- and a word result the
+         * caller keeps as a refNum, checking _ResError straight after.
+         *
+         * Same answer as _HOpenResFile: every resource we have is already in
+         * one flat table, so what matters is a positive refNum and a clean
+         * ResErr. Stubbed, MacinTalk Pro decided the voice file was not there
+         * and failed 'cvox' with resFNotFound, -193. */
+        g_res_err = 0;
+        m68k_write_memory_16(RES_ERR_ADDR, 0);
+        tb_return(exc_sp, 8, 1, 2);
         return 1;
     case 0xA99A:                         /* _CloseResFile(short)             */
         tb_return(exc_sp, 2, 0, 0);
@@ -1941,6 +2029,7 @@ OSP_API int osp_init(unsigned ram_size)
      * MacinTalk 2 are 68000 code and stay that way. */
     g_gestalt_proc = 1;
     g_exc_frame = 6u;
+    g_instance_error = 0;
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_init();
     m68k_set_instr_hook_callback(instr_hook);
@@ -2032,6 +2121,8 @@ OSP_API unsigned osp_r32(unsigned a) { return m68k_read_memory_32(a); }
  * `proc` is the Gestalt processor value, 1..4, which keeps the CPU and the
  * answer we give about it in one place and impossible to disagree.  Call it
  * straight after osp_init, before loading any code. */
+OSP_API int osp_instance_error(void) { return g_instance_error; }
+
 OSP_API int osp_set_cpu(int proc)
 {
     unsigned type;
