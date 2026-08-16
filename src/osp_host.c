@@ -553,6 +553,15 @@ typedef struct {
 } PendingOpen;
 static PendingOpen g_pending[MAX_PENDING];
 static int         g_pending_n;
+/* The frame arithmetic for each CallComponentFunctionWithStorage.
+ *
+ * Kept because it earned its place: the SR-clobber above was invisible from
+ * the 68000 side -- the trace showed the right instructions in the right order
+ * and every register looked plausible -- and one look at csp, paramSize and
+ * the computed newsp side by side made it obvious. */
+#define MAX_FRAMELOG 16
+static unsigned    g_framelog[MAX_FRAMELOG][6];
+static int         g_framelog_n;
 static int         g_copen_ret;   /* set by instr_hook, acted on outside */
 
 /* Every `$A82A` selector seen, whether or not we knew it.  The first run's log
@@ -581,11 +590,21 @@ static int inst_of(unsigned token)
 }
 
 /* Put the exception frame where `rte` will land on `entry` with SP == newsp.
- * The same trick tb_return uses, aimed into a callee instead of past a trap. */
-static void enter_callee(unsigned exc_sp, unsigned newsp, unsigned entry)
+ * The same trick tb_return uses, aimed into a callee instead of past a trap.
+ *
+ * `sr` is passed in, and must have been read before the caller wrote anything.
+ * This is not defensiveness -- it is a bug that already happened.  With twelve
+ * bytes of arguments the new frame lands *below* the old one, and the return
+ * address written at `newsp` covers `exc_sp` and `exc_sp+1`, which is exactly
+ * where the saved SR lives.  Reading SR here, after that write, picked up the
+ * low half of a return address instead: supervisor bit clear, so `rte` dropped
+ * to user mode, A7 became the (zero) USP, and the callee ran with SP = 0
+ * scribbling on low memory.  Every earlier call happened to have four bytes of
+ * arguments, which puts the new frame exactly on top of the old one and hides
+ * this completely. */
+static void enter_callee(unsigned sr, unsigned newsp, unsigned entry)
 {
     unsigned frame = newsp - EXC_FRAME;
-    unsigned sr = m68k_read_memory_16(exc_sp);
     m68k_write_memory_16(frame, sr);
     m68k_write_memory_32(frame + 2, entry);
     m68k_set_reg(M68K_REG_SP, frame);
@@ -597,6 +616,9 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
                                 unsigned resume_pc)
 {
     unsigned char tmp[CP_SLOT_SZ];
+    /* Read before any case writes: several of them build a frame that overlaps
+     * the exception frame this comes from.  See enter_callee. */
+    unsigned sr = m68k_read_memory_16(exc_sp);
     unsigned i;
     int served = 0;
 
@@ -612,6 +634,11 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         unsigned newsp;
 
         if (psize > 255u) psize = 255u;
+        if (g_framelog_n < MAX_FRAMELOG) {
+            unsigned *f = g_framelog[g_framelog_n++];
+            f[0] = csp;   f[1] = params;         f[2] = psize;
+            f[3] = handler; f[4] = csp + 4u - psize; f[5] = exc_sp;
+        }
         /* Bounce through C: params may itself live on the stack we are about
          * to rewrite, and a straight copy would then read its own output. */
         for (i = 0; i < psize; i++)
@@ -624,7 +651,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
          * every unpacked one -- four handlers across both components agree. */
         m68k_write_memory_32(newsp + 4u + psize, storage);
         m68k_write_memory_32(newsp, resume_pc);
-        enter_callee(exc_sp, newsp, handler);
+        enter_callee(sr, newsp, handler);
         served = 1;
         break;
     }
@@ -649,8 +676,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         m68k_write_memory_32(newsp + 8u, cp);                  /* params     */
         m68k_write_memory_32(newsp + 4u, g_inst[ii].storage);  /* storage    */
         m68k_write_memory_32(newsp, resume_pc);
-        enter_callee(exc_sp, newsp,
-                     g_comp[g_inst[ii].component].entry);
+        enter_callee(sr, newsp, g_comp[g_inst[ii].component].entry);
         served = 1;
         break;
     }
@@ -735,7 +761,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
             p->inst_token = tok;
             p->callee_result = newsp + 12;
         }
-        enter_callee(exc_sp, newsp, g_comp[ci].entry);
+        enter_callee(sr, newsp, g_comp[ci].entry);
         served = 1;
         break;
     }
@@ -768,15 +794,24 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         break;
     }
 
-    case 0x0000000Du: {         /* park a long on the instance                */
-        /* Cecy 1 +$1F6 pushes self and a Handle it has just allocated, takes
-         * no result and reads nothing back, then carries straight on.  The
-         * component is parking something on its own instance for later --
-         * a refcon in all but the name.  Storage is already spoken for by
-         * $11, and this is a different pointer, so it needs its own slot. */
-        unsigned value = m68k_read_memory_32(csp + 0);
+    case 0x0000000Du: {         /* SetComponentInstanceStorage(self, storage) */
+        /* $D and $11 have the same shape -- (self, a long), no result -- and
+         * both are called once during each component's Open, so the shape
+         * cannot tell them apart.  The engine's own later use does.
+         *
+         * The front end allocates two blocks: $21C, handed to $11 early, and
+         * $322, handed to $D at the very end of Open.  It writes the back-end
+         * ComponentInstance into **the $322 block at +$4**, and its handlers
+         * then reach that instance as `$4(deref(storage))` -- at Cecy 3 +$171E
+         * and +$5F8.  Only the $322 block satisfies that, so $D is the one
+         * setting storage and $11 is parking something else.
+         *
+         * The back end agrees: it gives $11 a `_NewPtr` block and $D a real
+         * Handle, and its handlers dereference storage once, which is only
+         * meaningful for the Handle. */
+        unsigned storage = m68k_read_memory_32(csp + 0);
         int ii = inst_of(m68k_read_memory_32(csp + 4));
-        if (ii >= 0) g_inst[ii].refcon = value;
+        if (ii >= 0) g_inst[ii].storage = storage;
         tb_return(exc_sp, 8, 0, 0);
         served = 1;
         break;
@@ -789,13 +824,13 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
         break;
     }
 
-    case 0x00000011u: {         /* SetComponentInstanceStorage(self, storage) */
-        /* Two arguments and no result slot -- the call site at Cecy 3 +$17E
+    case 0x00000011u: {         /* park a long on the instance -- see $D      */
+        /* Two arguments and no result slot: the call site at Cecy 3 +$17E
          * never reserves one, so writing four bytes there would land in the
          * caller's locals. */
-        unsigned storage = m68k_read_memory_32(csp + 0);
+        unsigned value = m68k_read_memory_32(csp + 0);
         int ii = inst_of(m68k_read_memory_32(csp + 4));
-        if (ii >= 0) g_inst[ii].storage = storage;
+        if (ii >= 0) g_inst[ii].refcon = value;
         tb_return(exc_sp, 8, 0, 0);
         served = 1;
         break;
@@ -1296,7 +1331,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_res_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
-    g_pending_n = 0; g_copen_ret = 0;
+    g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
@@ -1446,6 +1481,12 @@ OSP_API int osp_cm_log_get(int i, unsigned *d0, unsigned *pc, unsigned *csp,
     return 1;
 }
 OSP_API int osp_cp_wraps(void) { return g_cp_wraps; }
+OSP_API int osp_framelog_n(void) { return g_framelog_n; }
+OSP_API unsigned osp_framelog_get(int i, int k)
+{
+    return (i >= 0 && i < g_framelog_n && k >= 0 && k < 6)
+        ? g_framelog[i][k] : 0u;
+}
 
 OSP_API unsigned osp_tick_count(void) { return g_ticks; }
 
