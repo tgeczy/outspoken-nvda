@@ -71,7 +71,10 @@ WANTED = {
                      ("gtsm", None, "module map"),
                      ("gtsi", None, "index"),
                      ("gala", None, "copyright"),
-                     ("thng", None, "component descriptor")],
+                     ("thng", None, "component descriptor"),
+                     # Not decoration.  Pro's Open asks for its own `vers 1`
+                     # (gtse 1 +$6E8) and returns synthOpenFailed without it.
+                     ("vers", None, "version")],
     # A Pro voice is nothing like a MacinTalk 2 one.  Alongside the standard
     # ttvd it carries a 128-byte gtsv record, and `gtss` holds both the
     # concatenative unit database (789-922 KB) and about 11 KB of per-voice
@@ -82,7 +85,8 @@ WANTED = {
                    ("gtss", None, "unit database and per-voice code"),
                    ("gtsg", None, "configuration"),
                    ("gtsi", None, "index"),
-                   ("gtsm", None, "wave map")],
+                   ("gtsm", None, "wave map"),
+                   ("vers", None, "version")],
 }
 
 

@@ -75,6 +75,8 @@ class Host(object):
         L.osp_read_block.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_int]
         L.osp_set_reg.argtypes = [ctypes.c_int, ctypes.c_uint]
         L.osp_heap_init.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        L.osp_set_cpu.argtypes = [ctypes.c_int]
+        L.osp_set_cpu.restype = ctypes.c_int
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]
@@ -176,6 +178,20 @@ class Host(object):
 
     def heap(self, base, size):
         self.lib.osp_heap_init(base, size)
+
+    #: Gestalt processor values, which is how the host names a CPU.
+    CPU_68000, CPU_68010, CPU_68020, CPU_68030 = 1, 2, 3, 4
+
+    def set_cpu(self, proc):
+        """Pick the CPU. Call before loading code; 68000 is the default.
+
+        MacinTalk Pro's Open asks Gestalt('proc') and refuses a 68000 or a
+        68010 outright -- so it wants a 68020, and that is a real requirement
+        rather than a name. `.sp` and MacinTalk 2 are 68000 code and must not
+        be moved off it.
+        """
+        if self.lib.osp_set_cpu(proc) != 0:
+            raise ValueError("no such CPU: %r" % proc)
 
     def mem_traps(self, on=True):
         self.lib.osp_enable_mem_traps(1 if on else 0)

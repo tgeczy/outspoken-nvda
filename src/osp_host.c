@@ -41,6 +41,21 @@
 
 static unsigned char *g_ram;
 static unsigned       g_ram_size;
+/* What Gestalt('proc') answers, and it must agree with the CPU Musashi is
+ * actually running: 1 = 68000, 2 = 68010, 3 = 68020, 4 = 68030.  See
+ * osp_set_cpu and the _Gestalt case. */
+static int            g_gestalt_proc = 1;
+/* Bytes the CPU pushes for an exception.  The 68000 pushes SR and PC and
+ * nothing else; **the 68010 and up add a format/vector word**, so every frame
+ * is 8 bytes and every `rte` pops 8.  Getting this wrong is not subtle and is
+ * not immediate: the trap is served, the `rte` returns two bytes off, and the
+ * engine runs millions of instructions of nonsense before dying somewhere
+ * unrelated.  Set by osp_set_cpu; see tb_return and enter_callee. */
+static unsigned       g_exc_frame = 6u;
+/* Format 0, vector 10 (line 1010) at offset 40.  Only used when we build a
+ * frame ourselves, where the value is never inspected -- but the format nibble
+ * decides how many bytes `rte` pops, so it has to be format 0. */
+#define EXC_FORMAT_ALINE 0x0028u
 
 /* Exception vectors are pointed at this page, one slot of 8 bytes each, so a
  * stop can name the vector that caused it.  Vector 10 is the A-line trap and
@@ -49,6 +64,19 @@ static unsigned       g_ram_size;
 #define MAGIC_EXC_BASE  0x00F00000u
 #define MAGIC_EXC_SLOT  8u
 #define MAGIC_SENTINEL  0x00F10000u
+
+/* The one Memory Manager zone.  Our heap is a single flat bump allocator, so
+ * there genuinely is only one -- and saying so consistently is what MacinTalk
+ * Pro checks for.  It allocates its instance storage, asks _HandleZone which
+ * zone that handle is in and _GetZone which zone is current, and if the two
+ * disagree it disposes the storage and returns synthOpenFailed (-241) without
+ * having read a single resource.  Stubbing those two traps returned garbage,
+ * and garbage is not equal to garbage.
+ *
+ * Sits above the trap-address page and the component tables; see the map by
+ * TRAPADDR_BASE.  Filled in by osp_heap_init, because the fields worth
+ * answering honestly are the heap's own limits. */
+#define MAGIC_ZONE      0x00F2D000u
 
 #define STOP_RUNNING    0
 #define STOP_SENTINEL   1
@@ -351,13 +379,49 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         m68k_write_memory_16(MEM_ERR_ADDR, h ? 0u : 0xFF94u);
         return 1;
     }
+    /* Every one of these answers with the single zone.  A client that wants
+     * to know where a block lives, or which zone is current, or where the
+     * system and application zones are, gets the same truthful answer: there
+     * is one heap here.  MacinTalk Pro's Open compares two of them. */
+    case 0xA11A:                       /* _GetZone         -> THz in A0     */
+    case 0xA126:                       /* _HandleZone(h)   -> THz in A0     */
+    case 0xA148:                       /* _PtrZone(p)      -> THz in A0     */
+    case 0xA06A:                       /* _SystemZone      -> THz in A0     */
+    case 0xA02C:                       /* _ApplicationZone -> THz in A0     */
+        *a0_out = MAGIC_ZONE; *d0_out = 0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
+    case 0xA01B:                       /* _SetZone(THz) -- there is only one */
+        *a0_out = a0; *d0_out = 0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
     case 0xA1AD:                       /* _Gestalt -- selector D0, resp A0 */
         /* Reached through the TrapAvailable() pattern at Cecy 1 +$58A4, and
          * the engine carries its own answer table for the case where Gestalt
          * is missing.  We report it present -- the selector it asks for is in
          * the trap log's D0-in column, and the answer below is chosen from
-         * that rather than from what a Mac would have said. */
-        *a0_out = 0;
+         * that rather than from what a Mac would have said.
+         *
+         * Zero for almost everything, which reads as "the feature is there and
+         * it is off", and is what MacinTalk 2 has always been told.  Exactly
+         * two selectors are answered, because exactly two are gates:
+         *
+         * MacinTalk Pro's Open builds a requirements record at gtse 1 +$1044
+         * and tests it at +$282.  `sysv` below $0700 fails, and `proc` equal
+         * to 1 or 2 -- a 68000 or a 68010 -- fails.  Either way it writes
+         * #$ff0f into the error and disposes its own storage:
+         * **synthOpenFailed, -241, before it reads a single resource.**
+         *
+         * So Pro genuinely requires a 68020. `proc` reports whatever CPU is
+         * actually configured rather than a flattering constant -- claiming an
+         * 020 while running the 68000 core would invite 020-only instructions
+         * into an emulator that cannot execute them. */
+        if (d0 == 0x73797376u)         /* 'sysv' */
+            *a0_out = 0x0700u;         /* System 7, as _SysEnvirons says too */
+        else if (d0 == 0x70726F63u)    /* 'proc' */
+            *a0_out = g_gestalt_proc;
+        else
+            *a0_out = 0;
         *d0_out = 0;                   /* noErr */
         return 1;
     case 0xA090: {                     /* _SysEnvirons(version, SysEnvRec*) */
@@ -473,24 +537,29 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
  * bytes below where we want the caller's SP to end up, and let `rte` do the
  * arithmetic for us.
  */
-#define EXC_FRAME 6u
+/* Six on a 68000, eight on everything later. See g_exc_frame. */
+#define EXC_FRAME g_exc_frame
 
 static void tb_return(unsigned exc_sp, unsigned param_bytes,
                       unsigned result, int result_size)
 {
     unsigned caller_sp = exc_sp + EXC_FRAME;
     unsigned result_slot = caller_sp + param_bytes;
-    unsigned new_sp, sr, pc;
+    unsigned new_sp, sr, pc, fmt = 0;
 
     if (result_size == 4)      m68k_write_memory_32(result_slot, result);
     else if (result_size == 2) m68k_write_memory_16(result_slot, result);
     else                       result_slot = caller_sp + param_bytes;
 
     new_sp = result_slot - EXC_FRAME;
-    sr = m68k_read_memory_16(exc_sp);          /* read both before writing, */
-    pc = m68k_read_memory_32(exc_sp + 2);      /* the ranges can overlap    */
+    sr = m68k_read_memory_16(exc_sp);          /* read them all before any  */
+    pc = m68k_read_memory_32(exc_sp + 2);      /* write, the ranges overlap */
+    if (EXC_FRAME > 6u) fmt = m68k_read_memory_16(exc_sp + 6);
     m68k_write_memory_16(new_sp, sr);
     m68k_write_memory_32(new_sp + 2, pc);
+    /* The format word moves with the frame. `rte` reads it to decide how much
+     * to pop, so leaving the old one behind desynchronises the stack. */
+    if (EXC_FRAME > 6u) m68k_write_memory_16(new_sp + 6, fmt);
     m68k_set_reg(M68K_REG_SP, new_sp);
 }
 
@@ -745,6 +814,9 @@ static void enter_callee(unsigned sr, unsigned newsp, unsigned entry)
     unsigned frame = newsp - EXC_FRAME;
     m68k_write_memory_16(frame, sr);
     m68k_write_memory_32(frame + 2, entry);
+    /* Built by hand rather than by the CPU, so the format word has to be
+     * supplied too -- `rte` pops by format, not by CPU type. */
+    if (EXC_FRAME > 6u) m68k_write_memory_16(frame + 6, EXC_FORMAT_ALINE);
     m68k_set_reg(M68K_REG_SP, frame);
 }
 
@@ -1580,6 +1652,10 @@ OSP_API int osp_init(unsigned ram_size)
     g_trace_pos = 0; g_trace_on = 0;
     g_snap_pc = 0; g_snap_n = 0; g_snap_halt = 0;
 
+    /* 68000 unless an engine asks for more; see osp_set_cpu.  `.sp` and
+     * MacinTalk 2 are 68000 code and stay that way. */
+    g_gestalt_proc = 1;
+    g_exc_frame = 6u;
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_init();
     m68k_set_instr_hook_callback(instr_hook);
@@ -1657,10 +1733,50 @@ OSP_API unsigned osp_r8 (unsigned a) { return m68k_read_memory_8(a); }
 OSP_API unsigned osp_r16(unsigned a) { return m68k_read_memory_16(a); }
 OSP_API unsigned osp_r32(unsigned a) { return m68k_read_memory_32(a); }
 
+/* Choose the CPU, because not every engine runs on the same one.
+ *
+ * MacinTalk Pro checks Gestalt('proc') during Open and refuses anything below
+ * a 68020 -- see the _Gestalt case -- so "Pro" is a hardware requirement and
+ * not just a name.  `.sp` and MacinTalk 2 are 68000 code and are left alone;
+ * only one engine is live at a time, so this is per-engine rather than global.
+ *
+ * `proc` is the Gestalt processor value, 1..4, which keeps the CPU and the
+ * answer we give about it in one place and impossible to disagree.  Call it
+ * straight after osp_init, before loading any code. */
+OSP_API int osp_set_cpu(int proc)
+{
+    unsigned type;
+    switch (proc) {
+        case 1: type = M68K_CPU_TYPE_68000; break;
+        case 2: type = M68K_CPU_TYPE_68010; break;
+        case 3: type = M68K_CPU_TYPE_68020; break;
+        case 4: type = M68K_CPU_TYPE_68030; break;
+        default: return -1;
+    }
+    g_gestalt_proc = proc;
+    /* The 68010 introduced the format/vector word and everything after it kept
+     * it, so only the 68000 has a six-byte frame. */
+    g_exc_frame = (proc == 1) ? 6u : 8u;
+    m68k_set_cpu_type(type);
+    m68k_pulse_reset();
+    return 0;
+}
+
 OSP_API void osp_heap_init(unsigned base, unsigned size)
 {
     g_heap_base = g_heap_next = base;
     g_heap_end = base + size;
+    /* Fill in the one zone (see MAGIC_ZONE).  Only the fields a client can
+     * reasonably read are set; a caller that walks the free list would need
+     * far more, and the trap log will say so if one ever does.  Written here
+     * rather than at osp_init because the honest answers are the heap's. */
+    m68k_write_memory_32(MAGIC_ZONE +  0, g_heap_end);        /* bkLim      */
+    m68k_write_memory_32(MAGIC_ZONE +  4, 0);                 /* purgePtr   */
+    m68k_write_memory_32(MAGIC_ZONE +  8, 0);                 /* hFstFree   */
+    m68k_write_memory_32(MAGIC_ZONE + 12, size);              /* zcbFree    */
+    m68k_write_memory_32(MAGIC_ZONE + 16, 0);                 /* gzProc     */
+    m68k_write_memory_16(MAGIC_ZONE + 20, 64);                /* moreMast   */
+    m68k_write_memory_32(MAGIC_ZONE + 48, base);              /* allocPtr   */
 }
 OSP_API void osp_enable_mem_traps(int on) { g_mem_traps = on ? 1 : 0; }
 OSP_API unsigned osp_heap_used(void) { return g_heap_next - g_heap_base; }
