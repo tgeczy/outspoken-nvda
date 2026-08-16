@@ -244,7 +244,12 @@ class SynthDriver(SynthDriver):
                 except queue.Empty:
                     break
         if self._engine:
-            self._engine.stop()          # one byte; safe across threads
+            # Each engine decides what it can safely do from this thread.
+            # `.sp` writes one byte into emulated memory; MacinTalk 2 has no
+            # equivalent and does nothing, because a component call here would
+            # drive the 68000 while the worker is also driving it. See
+            # macintalk2.Engine.stop.
+            self._engine.stop()
         # ALWAYS stop the player. This was once gated on a flag meant to avoid
         # restarting the output stream needlessly -- but that flag tracked the
         # worker being busy, not the player having audio, and the worker goes

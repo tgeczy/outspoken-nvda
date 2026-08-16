@@ -279,16 +279,33 @@ class Engine(object):
         return {"rate": self._rate}
 
     # -- speaking ----------------------------------------------------------
-    def translate(self, text):
-        """MacinTalk 2 has its own front end, so this is only the number pass.
+    #: Punctuation MacinTalk 2 pronounces as a word, which has to go because
+    #: NVDA has already named whatever the user asked to hear.
+    #:
+    #: Measured, not assumed. Speaking "x <c> x" for every punctuation
+    #: character and comparing against "x x": `-` and `'` come out *shorter*
+    #: than the baseline, `, ; :` add only a pause, and everything below is a
+    #: second of extra speech. That is why "(x64)" was read as "left paren open
+    #: paren x sixty four right paren close parenthesis" -- NVDA supplied the
+    #: names and the engine supplied them again.
+    #:
+    #: `, . ; : ! ? - '` are kept: they are prosody here, not vocabulary.
+    SPOKEN_PUNCTUATION = "()[]{}<>@#$%^&*+=/\\|~`\"_"
 
-        Returning the text unchanged is deliberate and is why the driver can
-        treat both engines alike: whatever `translate` returns is what `speak`
-        is handed.
+    def translate(self, text):
+        """MacinTalk 2 has its own front end, so this only prepares the text.
+
+        Whatever this returns is what `speak` is handed, which is how the
+        driver can treat both engines alike.
         """
         if self.number_mode in ("words", "digits"):
             text = numwords.normalise(
                 text, spell_out=(self.number_mode == "digits"))
+        # A space, not nothing: removing the character outright would run the
+        # words either side together into one.
+        for ch in self.SPOKEN_PUNCTUATION:
+            if ch in text:
+                text = text.replace(ch, " ")
         return text
 
     def busy(self):
@@ -351,18 +368,25 @@ class Engine(object):
         return _trim(h.pcm)
 
     def stop(self):
-        """StopSpeech(kImmediate).
+        """Deliberately does not touch the emulator. Read this before "fixing".
 
-        Unlike `.sp` this is a real call rather than a flag poke, so it can
-        only run between utterances -- the driver already serialises on its
-        worker thread.
+        The obvious implementation is StopSpeech(kImmediate) -- selector 2 --
+        and it is wrong here, dangerously so. `cancel()` runs on NVDA's **main**
+        thread while `speak()` is running on the worker, and a component call
+        drives the 68000. Two threads stepping one CPU corrupts its state: it
+        sounded like buzzing, utterances ran to six seconds of near-silence for
+        the word "button", and the pump hit its buffer ceiling.
+
+        `.sp` can stop from another thread because its stop is a single byte
+        written into emulated memory. MacinTalk 2 has no equivalent, so the
+        honest answer is not to try.
+
+        Nothing is lost. Rendering an utterance takes 15-150 ms, and cancel's
+        real work -- draining the queues and stopping the player -- is what
+        actually interrupts. At worst one short buffer finishes rendering into
+        a queue that is about to be emptied.
         """
-        if self._dead:
-            return
-        try:
-            self.h.component_call(self.chan, STOP, [0], max_instr=20_000_000)
-        except Exception:
-            pass
+        return
 
     def close(self):
         """Close the component, then unload the DLL.
@@ -397,19 +421,28 @@ def _signed(v):
 _SILENT = 0x80
 
 
-def _trim(pcm, keep=1200):
-    """Drop the trailing silence, leaving a short tail.
+def _trim(pcm, keep=1200, lead=220):
+    """Drop the silence at both ends, leaving a little at each.
 
-    The last buffer is only partly filled and the engine pads the rest, so
-    without this every utterance carries up to 4096 samples -- nearly a fifth
-    of a second -- of nothing at the end. On a screen reader that is felt
-    directly as latency between one item and the next.
+    **The leading silence is the one that is felt.** MacinTalk 2 primes its
+    double buffer before it renders anything, so every utterance began with
+    about 0.38 s of nothing -- a third of a second of dead air before each
+    typed character, heard as a pause and then the tail of the sound arriving
+    late. Trailing silence matters too, since the final buffer is only part
+    used, but that one only costs latency before the *next* item.
 
-    `keep` leaves about 50 ms, because cutting hard on the final sample clicks.
+    `keep` leaves about 50 ms at the end and `lead` about 10 ms at the start,
+    because cutting hard on a sample clicks.
     """
-    end = len(pcm)
-    while end > 0 and pcm[end - 1] == _SILENT:
-        end -= 1
-    if end == len(pcm):
+    if not pcm:
         return pcm
-    return pcm[:min(len(pcm), end + keep)]
+    n = len(pcm)
+    start = 0
+    while start < n and pcm[start] == _SILENT:
+        start += 1
+    if start >= n:
+        return b""                      # nothing but silence: say nothing
+    end = n
+    while end > start and pcm[end - 1] == _SILENT:
+        end -= 1
+    return pcm[max(0, start - lead):min(n, end + keep)]
