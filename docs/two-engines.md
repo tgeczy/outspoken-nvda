@@ -104,17 +104,21 @@ defect in this emulation.
   Junior, Whisper, Zarvox and Trinoids are about 1,160 bytes each. They are
   parameter sets for the 358 KB `MacinTalk 3` component, a formant synthesiser.
 * **MacinTalk Pro (`gala`) voices are huge** -- Bruce 801 KB, Agnes 870 KB,
-  Victoria 935 KB. A concatenative engine, entirely separate.
+  Victoria 935 KB. A concatenative engine: a different synthesis technique,
+  but *not* a different architecture -- see
+  [`macintalk2-components.md`](macintalk2-components.md), it is a `ttsc`
+  component with the same entry convention as MacinTalk 2.
 
-`the WinTalker project` already builds the formant one from Apple source
-(`MT4.h`, `formantSynth.c`, `Src/Wavinout.c`'s `voiceNames[]`), and its
-`NVDA_addon/` already lists all seventeen: Fred, Kathy, Princess, Junior,
+A native port already builds the formant one from Apple source
+(`MT4.h`, `formantSynth.c`, `Wavinout.c`'s `voiceNames[]`), and its
+NVDA add-on already lists all seventeen: Fred, Kathy, Princess, Junior,
 Ralph, Whisper, Zarvox, Trinoids, Bubbles, Boing, Bells, Hysterical, Deranged,
 Good News, Bad News, Pipe Organ, Cellos.
 
 **So Fred is not missing from anywhere. It is a different project, and it is
 already built.** The MacinTalk Pro voices -- Bruce, Victoria, Agnes -- are the
-only ones nothing here or there covers.
+only ones nothing covers today, and they are this project's eventual target
+because they share MacinTalk 2's component architecture.
 
 ## The open difference: we are too bright
 
@@ -170,7 +174,7 @@ Candidates, in the order worth testing:
 * **`.SPEECH` — Apple, Tim Schaaff, 1992–94.** MacinTalk 2, 3 and Pro. A
   separate line sharing no code with the above.
 
-Sibling branches, not ancestor and descendant. The Apple branch is already
-solved elsewhere: `the WinTalker project` holds `MacInTalkSrc.zip` and a working
-`NVDA_addon/` with x64 and x86 `WinTalker.dll` built from it. If both voices are
-wanted in NVDA they are two synthesisers, not two voices of one.
+Sibling branches, not ancestor and descendant. MacinTalk 3 is already solved
+elsewhere: Apple's own MacinTalk source has been ported natively to Windows and
+ships as a working NVDA add-on with x64 and x86 DLLs. If both are wanted in NVDA
+they are two synthesisers, not two voices of one.

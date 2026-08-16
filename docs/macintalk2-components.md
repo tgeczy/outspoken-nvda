@@ -87,6 +87,78 @@ accessors. The exact numbers are worth confirming empirically rather than from
 memory: the host should log every `$A82A` selector it sees on the first run,
 exactly as the `.sp` trap log settled that engine's surface in one pass.
 
+### Storage is the handler's *first* argument — measured, not recalled
+
+The one number the glue cannot guess is where storage sits in the handler's
+frame. Four handlers, read across both components, all agree: **the storage
+handle is at the highest argument offset**, so it is pushed first and is the
+first declared Pascal argument. With `N` unpacked arguments the frame is
+
+```
+$8(a6)          last-declared argument
+  ...
+$8+4(N-1)(a6)   first-declared argument
+$8+4N(a6)       the storage Handle          <-- always the deepest
+$8+4(N+1)(a6)   the result slot
+```
+
+| handler | args | storage at | result at |
+|---|---|---|---|
+| front end `+$596` | 1 | `$c(a6)` | `$10(a6)` |
+| front end `+$5CE` | 1 | `$c(a6)` | `$10(a6)` |
+| front end `+$3F2` | 3 | `$14(a6)` | `$18(a6)` |
+| back end `+$320` | 1 | `$c(a6)` | `$10(a6)` |
+
+Each one proves it the same way — `movea.l $X(a6),a0` immediately followed by
+`movea.l (a0),a3`, dereferencing a handle, and then long offsets into the block
+(`$4`, `$30`, `$34`, `$1db` in the front end; `$84`, `$1bc`, `$ac4` in the back
+end). Nothing else in the frame is dereferenced twice.
+
+So `CallComponentFunctionWithStorage(storage, params, handler)` must push
+`storage` first, then `params->params[]` **verbatim** — copying the bytes in the
+order they already sit in avoids having to decide anything about argument order.
+
+### `$A82A` with `D0 = 0` is the call-another-component path
+
+`D0 = -1` is the component calling its own handler. `D0 = 0` is the front end
+calling the back end, and it builds `ComponentParameters` as an immediate
+longword directly on the stack rather than passing a pointer:
+
+```
++005A6  subq.l  #$4, a7              ; result slot
++005A8  move.l  $4(a4), -(a7)        ; the target ComponentInstance
++005AC  move.l  $8(a6), -(a7)        ; params[0]
++005B0  move.l  #$00040004, -(a7)    ; flags 0, paramSize 4, what 4
++005B6  moveq   #$0, d0
++005B8  A82A
+```
+
+giving the host this stack at the trap:
+
+```
+SP+0                 flags, paramSize, what   (the ComponentParameters header)
+SP+4                 params[], paramSize bytes
+SP+4+paramSize       the target ComponentInstance
+SP+8+paramSize       the result slot
+```
+
+**`$4(<storage>)` is where the front end keeps the back-end instance it
+opened** — so once our `OpenComponent` hands back a token and the front end
+stores it there, every later back-end call names it from that slot.
+
+One of these is already legible without touching the private `t2be` interface:
+`+$5CE` forwards `'stat'` — `soStatus` — to back-end selector 5, and fills a
+caller-supplied struct at `+0` byte, `+1` byte, `+2` long, `+6` word. That is
+`SpeechStatusInfo` field for field, so `+$5CE` is the front end's
+`GetSpeechInfo`. Apple's Speech Manager selectors are the vocabulary here, and
+the `so····` four-character codes are the authority for them.
+
+**`moveq #$FF,d0` sign-extends**, so the host must compare `D0` against
+`0xFFFFFFFF`, not `0xFF`. And any `$A82A` selector the host does not recognise
+must halt loudly with the stack dumped, never be stubbed — an unbalanced stack
+here returns the caller into rubbish, which is exactly how the `.sp` port's
+first `_GetResource` stub showed up.
+
 ## Two roles for the host
 
 * **Speech Manager** — the caller. It opens the `ttsc` front end and issues
@@ -116,10 +188,19 @@ Two that matter now:
 
 ## Scope
 
-* **MacinTalk 3 is excluded.** WinTalker builds that engine natively from
-  Apple's source; emulating it would be strictly worse.
-* **MacinTalk Pro is deferred.** Different engine, 800–935 KB concatenative
-  voices.
+* **MacinTalk 3 is excluded.** An existing NVDA add-on builds that engine
+  natively from Apple's own source; emulating it would be strictly worse. This
+  is a technical judgement, not a gap: native beats emulated, so those
+  seventeen voices are better served where they already are.
+* **MacinTalk Pro is the follow-on, and it is the same shape as this.**
+  Measured 2026-08-15, not recalled: `thng 128 'Gala Tea'` declares type
+  `ttsc`, manufacturer `gala`, code in `gtse 1` — 35,202 bytes of 68000 that
+  opens with the *identical* standard component entry, `movea.l $c(a6),a3`
+  then `tst.w $2(a3)` on the selector. So Pro is one `ttsc` component rather
+  than a pair, its tables are the other `gtse`/`gtst` resources (~190 KB) and
+  its lexicon is the 572,928-byte data fork. **Every line of Component Manager
+  glue written for MacinTalk 2 serves Pro unchanged**, which is the reason to
+  build that glue properly rather than narrowly.
 * **Distribution is unchanged.** MacinTalk 2 and its voices are Apple's, they
   are user-supplied through `rom/`, and `tools/extract_rom.py` pulls them from
   the user's own disk image. Nothing here or in any release contains them.

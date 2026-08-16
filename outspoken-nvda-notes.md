@@ -67,8 +67,8 @@ MacinTalk.** Four copyright strings inside it:
 
 Katz and Barton wrote the MacinTalk that introduced the Mac in January 1984 and
 later founded **SoftVoice**. This is that line — **not** MacinTalk 2/3, which
-is Tim Schaaff at Apple, 1992–94, and whose source is in `the WinTalker project`.
-Those are sibling branches, not ancestor and descendant.
+is Tim Schaaff at Apple, 1992–94, and whose source survives in a native Windows
+port. Those are sibling branches, not ancestor and descendant.
 
 ### Driver entry points
 
@@ -149,8 +149,8 @@ before concluding.
 **Use Musashi** (Karl Stenerud's 68000 core, the one MAME ships — plain C, MIT,
 built for embedding behind memory callbacks). Wrap it as a DLL and drive it from
 Python with `ctypes`, exactly as EchoTalk does with `fake6502`.
-`the WinTalker project` already proves CMake + MSVC building x86 and x64 DLLs on this
-machine.
+A sibling project on this machine already proves CMake + MSVC building x86 and
+x64 DLLs here.
 
 ### Two things Unicorn taught us that carry over to any core
 
@@ -170,7 +170,7 @@ harmonic stack (246, 372, 495, 615, 735…), 90% of energy below 5.5 kHz.
 
 **But the disk has outSPOKEN 8.0, ALVA BV, © 1997–98**, which requires a 68020
 and speaks through the **Speech Manager** — `ttsc`, `[[pbas +7]]`, `[[rate]]`.
-That is PlainTalk, i.e. **MacinTalk 3, the `wintalker` branch**. So this
+That is PlainTalk, i.e. **MacinTalk 3, the Apple branch**. So this
 recording is the sibling engine, not `.sp`.
 
 Lesson: check *which version is installed* before capturing a reference.
@@ -222,7 +222,7 @@ The phoneme alphabet also appears in the driver at `+0x015AE`:
 | `the Basilisk II capture` | the (wrong-engine) capture |
 | ``tools/trap_probe.py`` | loads `.sp`, calls Open, logs traps |
 | ``docs/cpu-core-decision.md`` | why Unicorn is out |
-| `the WinTalker project\` | MacinTalk 2/3 source, sibling branch, builds x86+x64 |
+| `the native MacinTalk 3 port\` | Apple's MacinTalk source, sibling branch, builds x86+x64 |
 | `the Basilisk II prefs` | repaired (paths were `C:`, files are on `D:`); backup `.bak-2026-08-15` |
 
 Basilisk fix, for reference: `rom` path corrected, missing `Mac OS 8.1.hfv`
@@ -236,8 +236,8 @@ dead `typemapfile` cleared.
 1. ~~Find where audio is written.~~ **Done** — `docs/sound-model.md`.
 2. ~~Disassemble `Control`.~~ **Done** — `docs/driver-api.md`. The `RULZ`
    resource worry is closed too: that probe is unreachable dead code.
-3. **Vendor Musashi**, build the DLL for x86 and x64 alongside the wintalker
-   toolchain (`the WinTalker project` already proves CMake + MSVC here). A plain
+3. **Vendor Musashi**, build the DLL for x86 and x64 with the toolchain a
+   sibling project already proves works here (CMake + MSVC). A plain
    **68000** core is enough — set `CPUFlag` (`$012F`) to 0 and the driver's only
    68020 instructions (`movec`) are never reached.
 4. **Port `trap_probe.py` to Musashi** and run `Open`. It should want

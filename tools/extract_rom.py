@@ -20,9 +20,10 @@ What it looks for:
     rules, dictionary and phoneme tables
   * **MacinTalk 2 voices** (`Extensions/Voices/*`) -> one folder each
 
-MacinTalk 3 is deliberately skipped: it is built natively from Apple source by
-the WinTalker project, and emulating it would be strictly worse. MacinTalk Pro
-is a different engine again and is not supported yet.
+MacinTalk 3 is deliberately skipped: an existing NVDA add-on builds that engine
+natively from Apple's own source, and emulating it would be strictly worse.
+MacinTalk Pro is not extracted yet, but it is the same kind of component as
+MacinTalk 2 and is the intended follow-on.
 
     py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv"
     py -3 tools/extract_rom.py "C:/path/to/outSPOKEN" --out rom
@@ -164,10 +165,10 @@ def main():
                 jobs.append((path, fork, WANTED["voice"],
                              "voices/" + _safe(nm)))
             elif "ttvd" in kinds:
-                which = ("MacinTalk Pro -- a different engine, not supported"
+                which = ("MacinTalk Pro -- not supported yet"
                          if len(fork) > 200000 else
-                         "MacinTalk 3 -- use the WinTalker add-on, which builds "
-                         "that engine from source")
+                         "MacinTalk 3 -- a native NVDA add-on already builds "
+                         "that engine from Apple's source; use that instead")
                 skipped.append((nm, which))
 
     if not jobs:

@@ -26,9 +26,9 @@ ROOT="$(cd "$(dirname "$0")" && pwd -W 2>/dev/null || cygpath -m "$(pwd)")"
 MUS="$ROOT/third_party/musashi"
 OUT="$ROOT/build"
 
-# Discover the toolchain rather than pinning it.  wintalker's toolchain file
-# hardcoded an MSVC version that no longer exists on this machine, which is the
-# failure this avoids -- take the newest of whatever is installed.
+# Discover the toolchain rather than pinning it.  A sibling project's toolchain
+# file hardcoded an MSVC version that no longer exists on this machine, which is
+# the failure this avoids -- take the newest of whatever is installed.
 # Glob patterns must stay unquoted to expand; only the literal parts are
 # quoted, so directory names containing spaces still survive intact.
 newest() { for p in "$@"; do [ -e "$p" ] && echo "$p"; done | sort -V | tail -1; }

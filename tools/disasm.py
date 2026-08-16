@@ -15,6 +15,11 @@ Two things a bare disassembler gets wrong on Mac code, both handled here:
 
     py -3 tools/disasm.py 0x50C2 0x519A
     py -3 tools/disasm.py MACSTARTSOUND
+    py -3 tools/disasm.py --file rom/macintalk2/Cecy_3.bin 0x5CE 0x680
+
+`--file` disassembles any extracted blob rather than `.sp`.  MacinTalk 2 and Pro
+are Component Manager components, not DRVRs, so offsets are from the start of
+the code resource and the symbol-name lookup below does not apply to them.
 """
 import os
 import re
@@ -128,12 +133,22 @@ def disassemble(d, start, end, base=0):
 
 
 def main():
-    d = open(DRVR, "rb").read()
-    syms = find_symbols(d)
-
     args = sys.argv[1:]
     if not args:
         print(__doc__)
+        return 1
+
+    src = DRVR
+    if args[0] == "--file":
+        if len(args) < 2:
+            print("--file needs a path")
+            return 1
+        src = args[1]
+        args = args[2:]
+    d = open(src, "rb").read()
+    syms = find_symbols(d) if src == DRVR else []
+    if not args:
+        print("give a start offset, e.g. 0x5CE [0x680]")
         return 1
 
     if args[0].startswith("0x") or args[0].isdigit():
