@@ -1,27 +1,47 @@
 # outspoken-nvda
 
-An NVDA synthesizer driver for **MacinTalk**, the speech engine that introduced
-the Macintosh in January 1984 — written by Joseph Katz and Mark Barton, who went
-on to found SoftVoice.
+An NVDA synthesizer driver for two Macintosh speech engines, both run as real
+68000 code under an emulator:
 
-The engine is real 68000 code. This project runs it under an emulator and models
-only the handful of Macintosh services it actually touches.
+* **MacinTalk (1984)** — the engine that introduced the Macintosh, written by
+  Joseph Katz and Mark Barton, who went on to found SoftVoice. Two voices.
+* **MacinTalk 2 (Apple, 1992)** — ten more: Ben, Boris, Brenda, Mariel, Marvin,
+  Mr. Hughes, Otis, RoboVox, Votron and Xero. **As far as we can establish,
+  these have not run outside a Macintosh before.**
 
-> **Status: the add-on works.** MacinTalk speaks inside NVDA — English text,
-> both voices, rate and pitch, working interruption. The engine takes phonemes
-> only, so English is converted by an interpreter written for this project
-> reading the user's own `RULZ` rules and `DICT` exception list
-> (see [`docs/softvoice-lineage.md`](docs/softvoice-lineage.md) for why the
-> front end is a separate component at all). 38 tests:
+This project models only the handful of Macintosh services the engines actually
+touch. Whichever of them you have extracted are the ones offered, so either
+alone is enough.
+
+> **Status: v0.5.1, and both engines speak inside NVDA.** English text, twelve
+> voices, rate, interruption, symbols and numbers. 84 tests:
 > `py -3 -m pytest tests -q`. Working log in
 > [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md).
+>
+> MacinTalk 1 takes phonemes only, so English is converted by an interpreter
+> written for this project, reading the user's own `RULZ` rules and `DICT`
+> exception list (see
+> [`docs/softvoice-lineage.md`](docs/softvoice-lineage.md) for why the front
+> end is a separate component at all). MacinTalk 2 ships its own front end and
+> is driven through the Component Manager, which the host implements —
+> see [`docs/macintalk2-components.md`](docs/macintalk2-components.md).
+>
+> **Numbers are read as words**, which neither engine can do: their rules hold
+> the ten digit names and nothing else, so `30` would otherwise be "three
+> zero". It is a checkbox, because digit-by-digit is genuinely better for
+> phone numbers and identifiers.
+>
+> Not yet done: a user pronunciation dictionary, and MacinTalk 2's pitch
+> slider, which is deliberately inert until it can be made to behave.
 
 ## You must supply the engine
 
 **This repository contains no part of MacinTalk or outSPOKEN, and releases built
-from it never will.** Those are © 1984 Katz and Barton and © 1989 Berkeley
-Systems (later ALVA BV), and we have no permission to redistribute them.
-Emulating code is not a licence to ship it.
+from it never will.** Those are © 1984 Katz and Barton, © 1989 Berkeley Systems
+(later ALVA BV) and, for MacinTalk 2, © Apple, and we have no permission to
+redistribute any of them. Emulating code is not a licence to ship it.
+`tools/package.py` refuses to build a release if anything resembling engine
+data is in the tree.
 
 The add-on reads the engine out of **`outspoken-roms`** in your NVDA
 configuration folder, which arrives empty — not the add-on's own directory,
