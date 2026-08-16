@@ -365,7 +365,21 @@ class Engine(object):
             from logHandler import log
             log.warning("MacinTalk 2: utterance hit the %d buffer ceiling"
                         % self.MAX_BUFFERS)
-        return _trim(h.pcm)
+
+        # Take the audio *now*, then let the engine settle and throw away
+        # whatever that produces.
+        #
+        # `busy()` going false does not mean the Sound Manager is idle: there
+        # can still be a callback pending that belongs to the utterance just
+        # finished. Left alone it does not run until the *next* speak() pumps,
+        # and then it queues the old buffer, so the previous utterance's tail
+        # arrives at the front of the new one -- "type here to search" followed
+        # by the "ch" of the item before it. Draining here keeps each utterance
+        # to its own audio.
+        pcm = h.pcm
+        h.run_callbacks(max_rounds=64)
+        h.pcm_reset()
+        return _trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator. Read this before "fixing".
