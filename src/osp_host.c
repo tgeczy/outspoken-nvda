@@ -674,6 +674,15 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
     /* Read before any case writes: several of them build a frame that overlaps
      * the exception frame this comes from.  See enter_callee. */
     unsigned sr = m68k_read_memory_16(exc_sp);
+    /* Snapshot the caller's stack *now*.  Every branch below rewrites it to
+     * build the callee's frame, so reading it at the end of this function --
+     * which is what the log used to do -- described our own output rather
+     * than the engine's input, and reported a 'stat' call as `what=0
+     * paramSize=6`. */
+    unsigned w0 = m68k_read_memory_32(csp + 0);
+    unsigned w1 = m68k_read_memory_32(csp + 4);
+    unsigned w2 = m68k_read_memory_32(csp + 8);
+    unsigned w3 = m68k_read_memory_32(csp + 12);
     unsigned i;
     int served = 0;
 
@@ -682,9 +691,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
     case 0xFFFFFFFFu: {         /* CallComponentFunctionWithStorage           */
         /* `moveq #$FF,d0` sign-extends, so the selector arrives as -1, not
          * $FF.  Comparing against $FF here would silently miss every call. */
-        unsigned handler = m68k_read_memory_32(csp + 0);
-        unsigned params  = m68k_read_memory_32(csp + 4);
-        unsigned storage = m68k_read_memory_32(csp + 8);
+        unsigned handler = w0, params = w1, storage = w2;
         unsigned psize   = m68k_read_memory_8(params + 1);
         unsigned newsp;
 
@@ -712,7 +719,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
     }
 
     case 0x00000000u: {         /* call another component instance            */
-        unsigned hdr   = m68k_read_memory_32(csp);
+        unsigned hdr   = w0;
         unsigned psize = (hdr >> 16) & 0xFFu;
         unsigned token = m68k_read_memory_32(csp + 4u + psize);
         unsigned cp, newsp;
@@ -898,10 +905,7 @@ static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
     if (g_cmlog_n < MAX_CMLOG) {
         CmRec *r = &g_cmlog[g_cmlog_n++];
         r->d0 = d0; r->pc = resume_pc - 2u; r->csp = csp; r->served = served;
-        r->w0 = m68k_read_memory_32(csp + 0);
-        r->w1 = m68k_read_memory_32(csp + 4);
-        r->w2 = m68k_read_memory_32(csp + 8);
-        r->w3 = m68k_read_memory_32(csp + 12);
+        r->w0 = w0; r->w1 = w1; r->w2 = w2; r->w3 = w3;
     }
 
     /* An unknown selector must never be stubbed.  A Toolbox stub leaves the
