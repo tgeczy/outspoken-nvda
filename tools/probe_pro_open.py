@@ -91,22 +91,24 @@ def split(name):
 
 
 def read_names(folder):
-    """-> {(type, id): mac name} from the extractor's `names.tsv`.
+    """-> {(type, id): (map entry, mac name)} from `resources.tsv`.
 
     A Mac resource name is not a file name -- Pro's modules are `*TTS`,
-    `*Wave`, `*Lex` -- so they are recorded beside the `.bin`s rather than in
-    them. Absent means an extraction from before names were kept.
+    `*Wave`, `*Lex` -- so the index lives beside the `.bin`s rather than in
+    them, and carries the map offset RsrcMapEntry answers with. Absent means
+    an extraction from before either was kept.
     """
     out = {}
-    p = os.path.join(folder, "names.tsv")
+    p = os.path.join(folder, "resources.tsv")
     if not os.path.isfile(p):
         return out
     with open(p, encoding="utf-8") as fh:
         for line in fh:
-            if line.startswith("#") or "\t" not in line:
+            row = line.rstrip(chr(13) + chr(10))
+            if row.startswith("#") or "	" not in row:
                 continue
-            rtype, rid, nm = line.rstrip("\n").split("\t", 2)
-            out[(rtype, int(rid))] = nm
+            rtype, rid, entry, nm = row.split("	", 3)
+            out[(rtype, int(rid))] = (int(entry), nm)
     return out
 
 
@@ -165,7 +167,8 @@ def build(want=None, quiet=False):
     for label, folder in (("engine", d), ("voice", voice.folder)):
         names = read_names(folder)
         for name in sorted(os.listdir(folder)):
-            if name in ("datafork.bin", "names.tsv"):
+            if name in ("datafork.bin", "rsrcfork.bin", "resources.tsv",
+                        "names.tsv"):
                 continue               # not resources; see the notes below
             got = split(name)
             if not got:
@@ -182,7 +185,12 @@ def build(want=None, quiet=False):
                 continue
             # Pro finds its modules by name -- `*TTS`, `EnglMBruceData` -- so
             # this is not decoration, it is the whole lookup.
-            mac = names.get((rtype, rid))
+            entry, mac = names.get((rtype, rid), (0, ""))
+            # Pro asks RsrcMapEntry where a resource sits in the map, then
+            # reads it out of the file itself, so the offset matters as much
+            # as the name.
+            if entry:
+                h.map_entry(rtype, rid, entry)
             if mac and h.name_resource(rtype, rid, mac):
                 named += 1
             if rtype == "ttvd":
@@ -196,19 +204,41 @@ def build(want=None, quiet=False):
         say("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
               "    modules by name and cannot open without them")
 
-    # The data fork, which is not a resource and is where the lexicon lives.
-    # Pro finds its own file during Open -- PBGetFCBInfo then FSMakeFSSpec --
-    # so it has to be registered before the component is opened, not before it
-    # first speaks.
-    fork = os.path.join(d, "datafork.bin")
-    if os.path.isfile(fork):
-        raw = open(fork, "rb").read()
-        h.add_file("MacinTalk Pro", raw)
-        say("data fork      %d bytes, host-side" % len(raw))
-    else:
-        say("data fork      MISSING -- re-run tools/extract_rom.py")
+    # The forks. Neither is a resource, and both are needed for different
+    # reasons: the engine's lexicon is in ITS data fork, and the voice's 800 KB
+    # of units is in the VOICE file's resource fork, which Pro reads by walking
+    # the map and seeking rather than by asking for a Handle.
+    #
+    # Registered before the component is opened, because Pro locates its own
+    # file during Open.
+    files, voice_file = 0, -1
+    for label, folder, macname in (("engine", d, "MacinTalk Pro"),
+                                   ("voice", voice.folder, voice.name)):
+        dat = rf = b""
+        pd = os.path.join(folder, "datafork.bin")
+        pr = os.path.join(folder, "rsrcfork.bin")
+        if os.path.isfile(pd):
+            dat = open(pd, "rb").read()
+        if os.path.isfile(pr):
+            rf = open(pr, "rb").read()
+        if not dat and not rf:
+            say("  ! %s has neither fork -- re-run tools/extract_rom.py"
+                % label)
+            continue
+        h.add_file(macname, dat, rf)
+        if label == "voice":
+            voice_file = files
+        files += 1
+        say("file           %-14s data %7d, resource %7d"
+            % (macname, len(dat), len(rf)))
+
+    # Which file the voice lives in, and it matters. Pro asks the Speech
+    # Manager for the voice's FSSpec -- GetVoiceInfo('fref') -- and then OPENS
+    # it. Handing it a nominal spec with an empty name, which is all MacinTalk
+    # 2 ever needed, sent it to the engine's own fork looking for the voice's
+    # units and it reported resFNotFound.
     if ttvd_id is not None:
-        h.add_voice(voice.creator, voice.id, ttvd_id)
+        h.add_voice(voice.creator, voice.id, ttvd_id, voice_file)
 
     # thng 128: type 'ttsc', subtype 0, manufacturer 'gala'.
     comp = h.add_component("ttsc", b"\0\0\0\0", "gala", CODE)

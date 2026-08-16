@@ -95,25 +95,27 @@ class Voice(object):
         return ENGINES.get(self.creator, "unknown (%r)" % self.creator)
 
 
-#: Written by the extractor beside the `.bin`s. A Mac resource name is not a
-#: file name -- MacinTalk Pro's modules are `*TTS`, `*Wave`, `*Lex` -- so the
-#: names live in their own file rather than in the ones they name.
-NAMES_FILE = "names.tsv"
+#: Written by the extractor beside the `.bin`s: type, id, map entry, name.
+#: A Mac resource name is not a file name -- MacinTalk Pro's modules are
+#: `*TTS`, `*Wave`, `*Lex` -- so they live in their own file rather than in
+#: the ones they name, and the map entry rides along because Pro asks
+#: `RsrcMapEntry` where a resource sits before reading it out of the file.
+NAMES_FILE = "resources.tsv"
 
 
 def _read_names(path):
-    """-> {(type, id): mac name}, empty when the folder predates names."""
+    """-> {(type, id): (map entry, mac name)}, empty when there is no index."""
     out = {}
     if not path or not os.path.isfile(path):
         return out
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
-                row = line.strip()
+                row = line.rstrip(chr(13) + chr(10))
                 if row.startswith("#") or "	" not in row:
                     continue
-                rtype, rid, nm = row.split("	", 2)
-                out[(rtype, int(rid))] = nm
+                rtype, rid, entry, nm = row.split("	", 3)
+                out[(rtype, int(rid))] = (int(entry), nm)
     except (OSError, ValueError):
         return {}
     return out

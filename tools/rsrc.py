@@ -19,11 +19,22 @@ import sys
 
 
 class Resource(object):
-    __slots__ = ("type", "id", "name", "attrs", "data")
+    """One resource, plus where its reference entry sits in the map.
 
-    def __init__(self, rtype, rid, name, attrs, data):
+    `map_entry` is the offset from the start of the resource MAP to this
+    resource's twelve-byte reference-list entry -- which is exactly what the
+    Resource Manager's `RsrcMapEntry` returns, and **MacinTalk Pro needs it**.
+    Pro does not load its 800 KB unit database into a Handle; it asks for the
+    map entry, extracts the 24-bit data offset from it, adds the data-area base
+    from the map's own header copy, and reads that many bytes out of the FILE.
+    That is how it ran on a Mac with 8 MB of RAM.
+    """
+    __slots__ = ("type", "id", "name", "attrs", "data", "map_entry")
+
+    def __init__(self, rtype, rid, name, attrs, data, map_entry=0):
         self.type, self.id, self.name = rtype, rid, name
         self.attrs, self.data = attrs, data
+        self.map_entry = map_entry
 
     def __repr__(self):
         return "<%s %d %r %d bytes>" % (self.type, self.id, self.name,
@@ -76,9 +87,23 @@ def parse(raw):
             if nOff != 0xFFFF:
                 p = mOff + nlOff + nOff
                 name = fork[p + 1:p + 1 + fork[p]].decode("mac-roman", "replace")
+            # Offset from the start of the map to this reference entry: the
+            # type list sits at tlOff within the map, the reference list at
+            # rOff within the type list, and entries are twelve bytes.
             out.append(Resource(rtype.decode("mac-roman", "replace"),
-                                rid, name, attrs, data))
+                                rid, name, attrs, data,
+                                tlOff + rOff + j * 12))
     return out
+
+
+def fork_bytes(raw):
+    """Just the resource fork, out of whatever container it arrived in.
+
+    MacinTalk Pro reads its own resource fork as a FILE -- it walks the map and
+    seeks to byte offsets -- so the emulator has to be handed the fork itself,
+    not only the resources parsed out of it.
+    """
+    return _unwrap(raw)
 
 
 def load(path):

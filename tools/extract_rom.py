@@ -117,12 +117,25 @@ def open_image(path):
     return out
 
 
-#: Where a folder's resource names are recorded.  Written beside the `.bin`s
-#: rather than encoded into their file names, because a Mac resource name is
-#: not a file name: MacinTalk Pro's modules are called `*TTS`, `*Wave`, `*Lex`
-#: and so on, and `*` is illegal in a Windows path.  Sanitising would silently
-#: lose the thing the engine looks resources up BY.
-NAMES_FILE = "names.tsv"
+#: Where a folder's resource names and map offsets are recorded.  Written
+#: beside the `.bin`s rather than encoded into their file names, because a Mac
+#: resource name is not a file name: MacinTalk Pro's modules are called `*TTS`,
+#: `*Wave`, `*Lex` and so on, and `*` is illegal in a Windows path.
+#: Sanitising would silently lose the thing the engine looks resources up BY.
+#:
+#: Four columns: type, id, map entry, name.  The map entry is what
+#: `RsrcMapEntry` answers -- see rsrc.Resource -- and the name comes last
+#: because it is the only field that could contain anything surprising.
+INDEX_FILE = "resources.tsv"
+
+#: What that file used to be called, when it held names alone.  Removed on
+#: sight so a half-updated `rom/` cannot leave a reader matching on the older
+#: three-column shape.
+OLD_INDEX_FILE = "names.tsv"
+
+#: The whole resource fork, kept for the engines that read their own file
+#: rather than asking the Resource Manager for handles.  See rsrc.fork_bytes.
+FORK_FILE = "rsrcfork.bin"
 
 
 def take(fork, spec, outdir, label):
@@ -145,19 +158,25 @@ def take(fork, spec, outdir, label):
         for r in got:
             name = "%s_%d.bin" % (_safe(r.type).strip() or "res", r.id)
             open(os.path.join(outdir, name), "wb").write(r.data)
-            if r.name:
-                names.append((r.type, r.id, r.name))
+            names.append((r.type, r.id, r.map_entry, r.name))
             n += 1
     # **MacinTalk Pro looks its pieces up by name, not by id**, so throwing
     # these away made the engine unusable however complete the extraction was.
     # Its own code is `gtse 1` named `*TTS`, and a voice's 789 KB unit database
     # is `EnglMBruceData`; `Get1NamedResource` is how it finds either.
+    #
+    # The map entry goes with it because Pro also asks `RsrcMapEntry` where a
+    # resource sits in the map, and then reads the data out of the file itself.
+    stale = os.path.join(outdir, OLD_INDEX_FILE)
+    if os.path.exists(stale):
+        os.remove(stale)
     if names:
-        with open(os.path.join(outdir, NAMES_FILE), "w",
+        with open(os.path.join(outdir, INDEX_FILE), "w",
                   encoding="utf-8", newline="\n") as fh:
-            fh.write("# type\tid\tname -- what Get1NamedResource asks for\n")
-            for rtype, rid, nm in sorted(names, key=lambda x: (x[0], x[1])):
-                fh.write("%s\t%d\t%s\n" % (rtype, rid, nm))
+            fh.write("# type\tid\tmapentry\tname\n")
+            for rtype, rid, entry, nm in sorted(names,
+                                                key=lambda x: (x[0], x[1])):
+                fh.write("%s\t%d\t%d\t%s\n" % (rtype, rid, entry, nm))
     return n, missing
 
 
@@ -246,6 +265,18 @@ def main():
             print("  %-52s %s" % (path[:52], " ".join(kinds)))
             continue
         n, missing = take(fork, spec, outdir, path)
+        # MacinTalk Pro walks its own resource map and seeks to byte offsets in
+        # the file, so parsing the resources out is not enough -- it needs the
+        # fork itself. Only Pro does this; the older engines ask the Resource
+        # Manager for handles and never see a file.
+        if spec is WANTED["macintalkpro"] or spec is WANTED["provoice"]:
+            try:
+                os.makedirs(outdir, exist_ok=True)
+                with open(os.path.join(outdir, FORK_FILE), "wb") as fh:
+                    fh.write(rsrc.fork_bytes(fork))
+                n += 1
+            except Exception as e:
+                print("  ! %s: cannot save the resource fork (%s)" % (path, e))
         if datafork:
             os.makedirs(outdir, exist_ok=True)
             with open(os.path.join(outdir, "datafork.bin"), "wb") as fh:

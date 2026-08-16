@@ -78,12 +78,17 @@ class Host(object):
         L.osp_set_cpu.argtypes = [ctypes.c_int]
         L.osp_set_cpu.restype = ctypes.c_int
         L.osp_add_file.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                   ctypes.c_char_p, ctypes.c_int,
                                    ctypes.c_char_p, ctypes.c_int]
         L.osp_add_file.restype = ctypes.c_int
+        L.osp_map_entry.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                    ctypes.c_int]
+        L.osp_map_entry.restype = ctypes.c_int
         L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                         ctypes.c_char_p, ctypes.c_int]
         L.osp_name_resource.restype = ctypes.c_int
         L.osp_instance_error.restype = ctypes.c_int
+        L.osp_last_file_request.restype = ctypes.c_char_p
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int]
@@ -104,7 +109,7 @@ class Host(object):
         try:
             L.osp_add_component.argtypes = [ctypes.c_uint] * 4
             L.osp_add_voice.argtypes = [ctypes.c_uint, ctypes.c_uint,
-                                        ctypes.c_int]
+                                        ctypes.c_int, ctypes.c_int]
             L.osp_open_instance.argtypes = [ctypes.c_int]
             L.osp_open_instance.restype = ctypes.c_uint
             L.osp_instance_storage.argtypes = [ctypes.c_uint]
@@ -204,19 +209,35 @@ class Host(object):
         return self.lib.osp_name_resource(self._ostype(restype), res_id,
                                           name, len(name)) == 0
 
-    def add_file(self, name, data):
-        """Register the one file the engine may open: its name and data fork.
+    def add_file(self, name, data=b"", rsrc=b""):
+        """Register a file the engine may open: its name and its two forks.
 
-        MacinTalk Pro locates the file it is running from during Open, and its
-        572,928-byte lexicon lives in that file's data fork, which no resource
-        type covers. There is no file *system* here -- one file, never written.
+        **Which fork is not a detail.** MacinTalk Pro's lexicon is in its own
+        DATA fork, while a voice's 800 KB of units is in that voice file's
+        RESOURCE fork -- which Pro reads by walking the map and seeking, not
+        by asking for a Handle. Serving one where the other was asked for is
+        silent corruption rather than an error.
+
+        There is still no file *system* here: a handful of files, matched by
+        name, never written.
         """
         if isinstance(name, str):
             name = name.encode("mac-roman", "replace")
         if len(name) > 63:
             raise ValueError("a Mac file name is at most 63 characters")
-        if self.lib.osp_add_file(name, len(name), data, len(data)) != 0:
+        if self.lib.osp_add_file(name, len(name), data, len(data),
+                                 rsrc, len(rsrc)) < 0:
             raise RuntimeError("could not register the file")
+
+    def map_entry(self, restype, res_id, offset):
+        """Where this resource's entry sits in its file's resource map.
+
+        What `RsrcMapEntry` answers. Computed where the fork is already parsed
+        -- see rsrc.Resource.map_entry -- rather than parsing the map twice.
+        """
+        return self.lib.osp_map_entry(self._ostype(restype), res_id,
+                                      offset) == 0
+
 
     def set_cpu(self, proc):
         """Pick the CPU. Call before loading code; 68000 is the default.
@@ -278,16 +299,21 @@ class Host(object):
             raise RuntimeError("cannot open component %d" % component)
         return tok
 
-    def add_voice(self, creator, voice_id, ttvd_res_id):
+    def add_voice(self, creator, voice_id, ttvd_res_id, file_index=-1):
         """Register a voice with the Speech Manager side of the host.
 
-        MacinTalk 2 asks for a voice's *file*, not its resources, so the host
-        has to answer GetVoiceInfo('fref') with the ttvd id."""
+        MacinTalk 2 asks for a voice's *file* and only needs the resource id
+        back, so its FSSpec has always been nominal. **MacinTalk Pro opens
+        that file**: it takes the FSSpec, calls OpenRFPerm on it and walks the
+        fork's resource map, so `file_index` must name a file registered with
+        `add_file` or Pro reads the wrong one and reports resFNotFound.
+        """
         i = self.lib.osp_add_voice(self._ostype(creator), voice_id,
-                                   ttvd_res_id)
+                                   ttvd_res_id, file_index)
         if i < 0:
             raise RuntimeError("no room for another voice")
         return i
+
 
     def instance_storage(self, token):
         return self.lib.osp_instance_storage(token)

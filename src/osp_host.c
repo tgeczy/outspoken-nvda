@@ -274,24 +274,106 @@ static int      g_mem_traps;
  */
 #define FAKE_VREFNUM  0xFFFFu     /* -1: the default volume, on every Mac    */
 #define FAKE_DIRID    2u          /* the root directory id on any HFS volume */
-#define FAKE_DF_REF   2           /* the data fork's refNum. OpenComponent-  */
-                                  /* ResFile already hands out 1 for the     */
-                                  /* resource fork, so this must not be 1.   */
+/* refNum 1 is taken: OpenComponentResFile hands it out for "the flat resource
+ * table", which is what the older engines and Pro's own Get1NamedResource use.
+ * Real opens are numbered from here so the two can never be confused. */
+#define FIRST_REFNUM  2
 
-static unsigned char *g_file_bytes;      /* the data fork, host-side */
-static int            g_file_len;
-static int            g_file_pos;        /* the mark, as the File Manager has */
-static int            g_file_open;
-static unsigned char  g_file_name[64];   /* Str63, laid out as the Mac holds it */
+#define MAX_FILES     4
+#define MAX_OPEN      8
+#define FORK_DATA     0
+#define FORK_RSRC     1
 
-/* Write our Str63 wherever a caller asked for the name. */
-static void file_put_name(unsigned ptr)
+/* A file is its name and its two forks.  **Both matter, and they are not
+ * interchangeable**: MacinTalk Pro's lexicon is in its own DATA fork, while a
+ * voice's 800 KB of units is in that voice file's RESOURCE fork, which Pro
+ * reads by walking the map and seeking -- so serving one where the other was
+ * asked for is silent corruption. */
+typedef struct {
+    unsigned char name[64];              /* Str63, as the Mac holds it */
+    unsigned char *fork[2];              /* [FORK_DATA], [FORK_RSRC]   */
+    int            len[2];
+} FileEntry;
+static FileEntry g_files[MAX_FILES];
+static int       g_file_count;
+
+typedef struct { int used, file, fork, pos; } OpenFile;
+static OpenFile  g_open[MAX_OPEN];       /* refNum = index + FIRST_REFNUM */
+
+/* -> index of the file with this Str63 name, or -1.
+ *
+ * Case-insensitive, like the file system it stands in for.  A nil or empty
+ * name means "the first file", which is the engine's own -- the caller that
+ * has not said which file it wants is the one asking about itself. */
+/* The last name any open was asked for, so a miss can be reported rather than
+ * guessed at.  Diagnosis only. */
+static char g_last_file_req[80];
+
+static int file_by_name(unsigned ptr)
+{
+    int i, j, n;
+    if (!ptr) { strcpy(g_last_file_req, "(nil)"); return g_file_count ? 0 : -1; }
+    n = (int)m68k_read_memory_8(ptr);
+    if (n <= 0) { strcpy(g_last_file_req, "(empty)"); return g_file_count ? 0 : -1; }
+    if (n > 63) n = 63;
+    for (i = 0; i < n; i++)
+        g_last_file_req[i] = (char)m68k_read_memory_8(ptr + 1u + (unsigned)i);
+    g_last_file_req[n] = 0;
+    for (i = 0; i < g_file_count; i++) {
+        if (g_files[i].name[0] != (unsigned char)n) continue;
+        for (j = 1; j <= n; j++) {
+            int x = g_files[i].name[j];
+            int y = (int)m68k_read_memory_8(ptr + (unsigned)j);
+            if (x >= 'a' && x <= 'z') x -= 32;
+            if (y >= 'a' && y <= 'z') y -= 32;
+            if (x != y) break;
+        }
+        if (j > n) return i;
+    }
+    return -1;
+}
+
+/* Write a file's Str63 name wherever a caller asked for it. */
+static void file_put_name(int idx, unsigned ptr)
 {
     int i, n;
-    if (!ptr) return;
-    n = g_file_name[0];
+    if (!ptr || idx < 0 || idx >= g_file_count) return;
+    n = g_files[idx].name[0];
     for (i = 0; i <= n; i++)
-        m68k_write_memory_8(ptr + (unsigned)i, g_file_name[i]);
+        m68k_write_memory_8(ptr + (unsigned)i, g_files[idx].name[i]);
+}
+
+/* -> refNum, or 0 if there is no room or no such file. */
+static int file_open(int idx, int fork)
+{
+    int i;
+    if (idx < 0 || idx >= g_file_count) return 0;
+    for (i = 0; i < MAX_OPEN; i++)
+        if (!g_open[i].used) {
+            g_open[i].used = 1;
+            g_open[i].file = idx;
+            g_open[i].fork = fork;
+            g_open[i].pos = 0;
+            return i + FIRST_REFNUM;
+        }
+    return 0;
+}
+
+/* True when no file has been registered at all.
+ *
+ * `.sp` and MacinTalk 2 open and close a resource file during voice
+ * loading and never read a byte of it -- for them the call is a formality
+ * and any positive refNum has always done. Only MacinTalk Pro supplies
+ * files, so failing an open for want of one broke both older engines the
+ * moment the File Manager became real: every voice went silent, which the
+ * tests caught before it reached anybody. */
+static int no_files(void) { return g_file_count == 0; }
+
+static OpenFile *file_by_ref(int refnum)
+{
+    int i = refnum - FIRST_REFNUM;
+    if (i < 0 || i >= MAX_OPEN || !g_open[i].used) return NULL;
+    return &g_open[i];
 }
 
 /* _GetTrapAddress answers, one distinct address per trap word.
@@ -448,44 +530,71 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
      * IOParam offsets used below: ioResult 16, ioNamePtr 18, ioVRefNum 22,
      * ioRefNum 24, ioMisc 28, ioBuffer 32, ioReqCount 36, ioActCount 40,
      * ioPosMode 44, ioPosOffset 46. */
-    case 0xA000:                       /* _Open   -- the data fork          */
-    case 0xA00A:                       /* _OpenRF -- and the resource fork  */
-        m68k_write_memory_16(a0 + 24, (unsigned)FAKE_DF_REF);
+    case 0xA000:                       /* _Open   -- the DATA fork          */
+    case 0xA00A: {                     /* _OpenRF -- the RESOURCE fork      */
+        /* Which fork is the whole point. Pro's lexicon is in its own data
+         * fork; a voice's 800 KB of units is in that voice file's resource
+         * fork, which it reads by walking the map and seeking. Serving one
+         * where the other was asked for is silent corruption, not an error. */
+        int idx, ref;
+        if (no_files()) {                                  /* nominal open */
+            m68k_write_memory_16(a0 + 24, (unsigned)FIRST_REFNUM);
+            m68k_write_memory_16(a0 + 16, 0);
+            *d0_out = 0; *a0_out = a0;
+            return 1;
+        }
+        idx = file_by_name(m68k_read_memory_32(a0 + 18));
+        ref = file_open(idx, base == 0xA00Au ? FORK_RSRC : FORK_DATA);
+        if (!ref) {
+            m68k_write_memory_16(a0 + 16, 0xFFD8u);        /* fnfErr, -43 */
+            *d0_out = (unsigned)(-43); *a0_out = a0;
+            return 1;
+        }
+        m68k_write_memory_16(a0 + 24, (unsigned)ref);      /* ioRefNum    */
         m68k_write_memory_16(a0 + 16, 0);
-        g_file_open = 1;
-        g_file_pos = 0;
         *d0_out = 0; *a0_out = a0;
         return 1;
-    case 0xA001:                       /* _Close                            */
-        g_file_open = 0;
+    }
+    case 0xA001: {                     /* _Close                            */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(a0 + 24));
+        if (f) f->used = 0;
         m68k_write_memory_16(a0 + 16, 0);
         *d0_out = 0; *a0_out = a0;
         return 1;
+    }
     case 0xA002: {                     /* _Read                             */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(a0 + 24));
         unsigned buf = m68k_read_memory_32(a0 + 32);
         int req  = (int)m68k_read_memory_32(a0 + 36);
         int mode = (int)(short)m68k_read_memory_16(a0 + 44);
         int off  = (int)m68k_read_memory_32(a0 + 46);
-        int pos, got, i, err = 0;
-        if (!g_file_bytes) {
-            m68k_write_memory_16(a0 + 16, 0xFFDCu);        /* ioErr, -36 */
+        const unsigned char *bytes;
+        int len, pos, got, i, err = 0;
+        if (!f) {
+            m68k_write_memory_16(a0 + 16, 0xFFD8u);        /* fnfErr, -43 */
+            *d0_out = (unsigned)(-43); *a0_out = a0;
+            return 1;
+        }
+        bytes = g_files[f->file].fork[f->fork];
+        len = g_files[f->file].len[f->fork];
+        if (!bytes) {
+            m68k_write_memory_16(a0 + 16, 0xFFDCu);        /* ioErr, -36  */
             *d0_out = (unsigned)(-36); *a0_out = a0;
             return 1;
         }
         switch (mode & 3) {
             case 1:  pos = off; break;                     /* fsFromStart */
-            case 2:  pos = g_file_len + off; break;        /* fsFromLEOF  */
-            case 3:  pos = g_file_pos + off; break;        /* fsFromMark  */
-            default: pos = g_file_pos; break;              /* fsAtMark    */
+            case 2:  pos = len + off; break;               /* fsFromLEOF  */
+            case 3:  pos = f->pos + off; break;            /* fsFromMark  */
+            default: pos = f->pos; break;                  /* fsAtMark    */
         }
         if (pos < 0) pos = 0;
-        if (pos > g_file_len) pos = g_file_len;
+        if (pos > len) pos = len;
         got = req < 0 ? 0 : req;
-        if (got > g_file_len - pos) { got = g_file_len - pos; err = -39; }
+        if (got > len - pos) { got = len - pos; err = -39; }
         for (i = 0; i < got; i++)
-            m68k_write_memory_8(buf + (unsigned)i,
-                                g_file_bytes[pos + i]);
-        g_file_pos = pos + got;
+            m68k_write_memory_8(buf + (unsigned)i, bytes[pos + i]);
+        f->pos = pos + got;
         m68k_write_memory_32(a0 + 40, (unsigned)got);      /* ioActCount  */
         m68k_write_memory_16(a0 + 16, (unsigned)(unsigned short)err);
         *d0_out = (unsigned)err;                           /* eofErr, -39 */
@@ -493,41 +602,58 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         return 1;
     }
     case 0xA044: {                     /* _SetFPos                          */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(a0 + 24));
         int mode = (int)(short)m68k_read_memory_16(a0 + 44);
         int off  = (int)m68k_read_memory_32(a0 + 46);
-        int pos;
+        int len, pos;
+        if (!f) {
+            m68k_write_memory_16(a0 + 16, 0xFFD8u);
+            *d0_out = (unsigned)(-43); *a0_out = a0;
+            return 1;
+        }
+        len = g_files[f->file].len[f->fork];
         switch (mode & 3) {
             case 1:  pos = off; break;
-            case 2:  pos = g_file_len + off; break;
-            case 3:  pos = g_file_pos + off; break;
-            default: pos = g_file_pos; break;
+            case 2:  pos = len + off; break;
+            case 3:  pos = f->pos + off; break;
+            default: pos = f->pos; break;
         }
         if (pos < 0) pos = 0;
-        if (pos > g_file_len) pos = g_file_len;
-        g_file_pos = pos;
+        /* Seeking past the end is posErr, and saying so matters: the caller
+         * that gets noErr for a bad seek reads the wrong bytes instead. */
+        if (pos > len) {
+            f->pos = len;
+            m68k_write_memory_16(a0 + 16, 0xFFC0u);        /* posErr, -64 */
+            *d0_out = (unsigned)(-64); *a0_out = a0;
+            return 1;
+        }
+        f->pos = pos;
         m68k_write_memory_32(a0 + 46, (unsigned)pos);
         m68k_write_memory_16(a0 + 16, 0);
         *d0_out = 0; *a0_out = a0;
         return 1;
     }
-    case 0xA018:                       /* _GetFPos                          */
+    case 0xA018: {                     /* _GetFPos                          */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(a0 + 24));
         m68k_write_memory_32(a0 + 36, 0);
-        m68k_write_memory_32(a0 + 46, (unsigned)g_file_pos);
+        m68k_write_memory_32(a0 + 46, (unsigned)(f ? f->pos : 0));
         m68k_write_memory_16(a0 + 16, 0);
         *d0_out = 0; *a0_out = a0;
         return 1;
-    case 0xA011:                       /* _GetEOF -- length in ioMisc       */
-        m68k_write_memory_32(a0 + 28, (unsigned)g_file_len);
+    }
+    case 0xA011: {                     /* _GetEOF -- length in ioMisc       */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(a0 + 24));
+        int len = f ? g_files[f->file].len[f->fork] : 0;
+        m68k_write_memory_32(a0 + 28, (unsigned)len);
         m68k_write_memory_16(a0 + 16, 0);
         *d0_out = 0; *a0_out = a0;
         return 1;
+    }
     case 0xA014:                       /* _GetVol / _HGetVol                */
-        file_put_name(m68k_read_memory_32(a0 + 18));
+        file_put_name(0, m68k_read_memory_32(a0 + 18));
         m68k_write_memory_16(a0 + 22, FAKE_VREFNUM);
         m68k_write_memory_32(a0 + 48, FAKE_DIRID);         /* ioWDDirID     */
         m68k_write_memory_16(a0 + 16, 0);
-        *d0_out = 0; *a0_out = a0;
-        return 1;
     case 0xA015:                       /* _SetVol / _HSetVol -- only one    */
         m68k_write_memory_16(a0 + 16, 0);
         *d0_out = 0; *a0_out = a0;
@@ -546,7 +672,7 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
              * this between setting the volume and opening a file, and stubbed
              * it concluded the file was not there -- resFNotFound, -193. */
             m68k_write_memory_16(a0 + 16, 0);            /* ioResult        */
-            file_put_name(m68k_read_memory_32(a0 + 18)); /* ioNamePtr       */
+            file_put_name(0, m68k_read_memory_32(a0 + 18)); /* ioNamePtr    */
             m68k_write_memory_16(a0 + 32, FAKE_VREFNUM); /* ioWDVRefNum     */
             m68k_write_memory_32(a0 + 48, FAKE_DIRID);   /* ioWDDirID       */
             *d0_out = 0; *a0_out = a0;
@@ -554,9 +680,18 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         }
         if (d0 == 8u) {
             m68k_write_memory_16(a0 + 16, 0);            /* ioResult        */
-            file_put_name(m68k_read_memory_32(a0 + 18)); /* ioNamePtr       */
-            m68k_write_memory_32(a0 + 40, (unsigned)g_file_len);  /* ioFCBEOF */
-            m68k_write_memory_32(a0 + 44, (unsigned)g_file_len);  /* ioFCBPLen */
+            /* Whichever file that refNum has open, or the engine's own
+             * when the refNum is the flat table's. */
+            {
+                OpenFile *f = file_by_ref(
+                    (int)(short)m68k_read_memory_16(a0 + 24));
+                int idx = f ? f->file : 0;
+                int len = f ? g_files[idx].len[f->fork]
+                            : (g_file_count ? g_files[0].len[FORK_DATA] : 0);
+                file_put_name(idx, m68k_read_memory_32(a0 + 18));
+                m68k_write_memory_32(a0 + 40, (unsigned)len); /* ioFCBEOF  */
+                m68k_write_memory_32(a0 + 44, (unsigned)len); /* ioFCBPLen */
+            }
             m68k_write_memory_16(a0 + 52, FAKE_VREFNUM); /* ioFCBVRefNum    */
             m68k_write_memory_32(a0 + 58, FAKE_DIRID);   /* ioFCBParID      */
             *d0_out = 0; *a0_out = a0;
@@ -742,9 +877,13 @@ static void tb_return(unsigned exc_sp, unsigned param_bytes,
  * its own code is `gtse 1` called `*TTS`, and Bruce's 789 KB unit database is
  * `gtss 3` called `EnglMBruceData`.  Empty for the engines that only ever ask
  * by id. */
+/* `map_entry` is the offset from the start of the resource MAP to this
+ * resource's reference entry, which is what RsrcMapEntry answers.  Zero
+ * for the engines that never ask -- only MacinTalk Pro does, because it
+ * reads its 800 KB unit database out of the file rather than loading it. */
 typedef struct { unsigned type; short id; unsigned handle;
                  unsigned char *bytes; int len; int detached;
-                 char name[64]; } ResEntry;
+                 char name[64]; int map_entry; } ResEntry;
 static ResEntry g_res[MAX_RES];
 static int      g_res_count;
 static int      g_res_load = 1;
@@ -770,7 +909,11 @@ static int    g_reslog_n;
  * the answer.  We are the Speech Manager, so this table is that answer.  Python
  * fills it from each voice's own `ttvd` -- see tools/voices.py. */
 #define MAX_VOICES 32
-typedef struct { unsigned creator, id; short res_id; } VoiceReg;
+/* `file` is which registered file this voice lives in, or -1 for none.
+ * MacinTalk 2 never needed it -- it is handed its voice's resources
+ * directly -- but **MacinTalk Pro opens the voice file itself**, so the
+ * FSSpec it is given has to name something real. */
+typedef struct { unsigned creator, id; short res_id; int file; } VoiceReg;
 static VoiceReg g_voices[MAX_VOICES];
 static int      g_voice_count;
 
@@ -1479,17 +1622,34 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
             unsigned vspec   = m68k_read_memory_32(csp + 8);
             unsigned creator = m68k_read_memory_32(vspec + 0);
             unsigned vid     = m68k_read_memory_32(vspec + 4);
-            int k, found = 0;
+            int k, found = 0, vfile = -1;
             short res_id = 0;
             for (k = 0; k < g_voice_count; k++) {
                 if (g_voices[k].creator == creator && g_voices[k].id == vid) {
-                    res_id = g_voices[k].res_id; found = 1; break;
+                    res_id = g_voices[k].res_id;
+                    vfile = g_voices[k].file;
+                    found = 1; break;
                 }
             }
             if (found) {
-                m68k_write_memory_16(info + 0, 0);      /* FSSpec.vRefNum   */
-                m68k_write_memory_32(info + 2, 0);      /* FSSpec.parID     */
-                m68k_write_memory_8 (info + 6, 0);      /* FSSpec.name, ""  */
+                /* **The name is not decoration for MacinTalk Pro.** It takes
+                 * this FSSpec and calls _OpenRFPerm on it, then walks that
+                 * fork's resource map. An empty name sent it to the engine's
+                 * own file instead of the voice's, where the units it wanted
+                 * were not -- reported as resFNotFound, -193, from Pro's own
+                 * lookup rather than from any trap.
+                 *
+                 * A voice registered without a file keeps the nominal FSSpec
+                 * MacinTalk 2 has always been given. */
+                if (vfile >= 0 && vfile < g_file_count) {
+                    m68k_write_memory_16(info + 0, FAKE_VREFNUM);
+                    m68k_write_memory_32(info + 2, FAKE_DIRID);
+                    file_put_name(vfile, info + 6);
+                } else {
+                    m68k_write_memory_16(info + 0, 0);  /* FSSpec.vRefNum   */
+                    m68k_write_memory_32(info + 2, 0);  /* FSSpec.parID     */
+                    m68k_write_memory_8 (info + 6, 0);  /* FSSpec.name, ""  */
+                }
                 m68k_write_memory_16(info + 70,
                                      (unsigned)(unsigned short)res_id);
             }
@@ -1649,6 +1809,25 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 8, h, 4);
         return 1;
     }
+    case 0xA9C5: {                       /* _RsrcMapEntry(h) -> long         */
+        /* Where this resource's twelve-byte reference entry sits, measured
+         * from the start of the resource MAP.  Named from its call site at
+         * gtse 1 +$5B16: one Handle in, a long out, zero treated as failure
+         * with _ResError straight after.
+         *
+         * What Pro does with it is the reason the whole File Manager exists
+         * here.  It adds the offset to its in-memory copy of the map, pulls
+         * the 24-bit data offset out of the entry with a 68020 bitfield
+         * instruction, adds the data-area base from the map's own header copy,
+         * seeks to that plus four, and reads SizeResource bytes.  It never
+         * loads the 800 KB database into a Handle at all -- which is how this
+         * ran on a Mac with 8 MB of RAM. */
+        ResEntry *r = res_by_handle(m68k_read_memory_32(csp));
+        g_res_err = (r && r->map_entry) ? 0 : RES_NOT_FOUND;
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 4, (r && r->map_entry) ? (unsigned)r->map_entry : 0, 4);
+        return 1;
+    }
     case 0xA9A5: {                       /* _SizeResource(h) -> long          */
         /* How big is this resource.  Answerable exactly, because the pristine
          * copy kept for _DetachResource carries the length -- and a wrong
@@ -1705,7 +1884,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
             /* The caller may pass the name it just got back, or nil to mean
              * "the file itself"; either way there is one file here. */
             (void)name;
-            file_put_name(spec + 6);
+            file_put_name(0, spec + 6);
             tb_return(exc_sp, 14, 0, 2);
             return 1;
         }
@@ -1723,35 +1902,39 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 4, 1, 2);
         return 1;
     }
-    case 0xA81A:                         /* _HOpenResFile -> short refNum    */
+    case 0xA81A: {                       /* _HOpenResFile -> short refNum    */
         /* HOpenResFile(short vRefNum, long dirID, ConstStr255Param fileName,
          *              SignedByte permission)
          *
-         * Twelve bytes of arguments: the byte permission still costs two,
-         * because `move.b <ea>,-(a7)` on the 68000 keeps A7 even.
-         *
-         * The engine only wants a file to read the voice out of, and every
-         * resource we have is already in one flat table, so any positive
-         * refNum will do -- what matters is that it is not -1, which is the
-         * value Cecy 1 +$830 tests for. */
-        tb_return(exc_sp, 12, 1, 2);
+         * Twelve bytes of arguments, so the name is the long at csp+2.  Opens
+         * the resource fork for real, same as _OpenRFPerm -- what mattered
+         * before was only that the refNum was not -1, which is the value
+         * Cecy 1 +$830 tests for, and that is still true. */
+        int idx = no_files() ? -1 : file_by_name(m68k_read_memory_32(csp + 2));
+        int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
+        g_res_err = ref ? 0 : (short)(-43);
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 12, (unsigned)(ref ? ref : 1), 2);
         return 1;
-    case 0xA9C4:                         /* _OpenRFPerm -> short refNum      */
+    }
+    case 0xA9C4: {                       /* _OpenRFPerm -> short refNum      */
         /* OpenRFPerm(ConstStr255Param fileName, short vRefNum,
          *            SignedByte permission)
          *
          * Eight bytes of arguments -- the byte permission still costs two,
-         * because `move.b <ea>,-(a7)` keeps A7 even -- and a word result the
-         * caller keeps as a refNum, checking _ResError straight after.
+         * because `move.b <ea>,-(a7)` keeps A7 even -- so the name is the long
+         * at csp+4, and the word result is kept as a refNum.
          *
-         * Same answer as _HOpenResFile: every resource we have is already in
-         * one flat table, so what matters is a positive refNum and a clean
-         * ResErr. Stubbed, MacinTalk Pro decided the voice file was not there
-         * and failed 'cvox' with resFNotFound, -193. */
-        g_res_err = 0;
-        m68k_write_memory_16(RES_ERR_ADDR, 0);
-        tb_return(exc_sp, 8, 1, 2);
+         * A REAL open: MacinTalk Pro does not stop at the Resource Manager, it
+         * walks the map and seeks to byte offsets in the fork, so the refNum
+         * it gets back has to name a stream it can actually read. */
+        int idx = no_files() ? -1 : file_by_name(m68k_read_memory_32(csp + 4));
+        int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
+        g_res_err = ref ? 0 : (short)(-43);              /* fnfErr */
+        m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
+        tb_return(exc_sp, 8, (unsigned)(ref ? ref : -1), 2);
         return 1;
+    }
     case 0xA99A:                         /* _CloseResFile(short)             */
         tb_return(exc_sp, 2, 0, 0);
         return 1;
@@ -2058,8 +2241,13 @@ OSP_API int osp_init(unsigned ram_size)
         if (g_res[v].bytes) free(g_res[v].bytes);
         g_res[v].bytes = NULL; g_res[v].len = 0; g_res[v].detached = 0;
     }
-    if (g_file_bytes) free(g_file_bytes);
-    g_file_bytes = NULL; g_file_len = 0; g_file_pos = 0; g_file_open = 0;
+    { int fi; for (fi = 0; fi < g_file_count; fi++) {
+        if (g_files[fi].fork[0]) free(g_files[fi].fork[0]);
+        if (g_files[fi].fork[1]) free(g_files[fi].fork[1]);
+    } }
+    memset(g_files, 0, sizeof(g_files));
+    memset(g_open, 0, sizeof(g_open));
+    g_file_count = 0;
     g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
@@ -2085,8 +2273,13 @@ OSP_API void osp_shutdown(void)
         g_res[i].bytes = NULL; g_res[i].len = 0; g_res[i].detached = 0;
     }
     g_res_count = 0;
-    if (g_file_bytes) free(g_file_bytes);
-    g_file_bytes = NULL; g_file_len = 0; g_file_pos = 0; g_file_open = 0;
+    { int fi; for (fi = 0; fi < g_file_count; fi++) {
+        if (g_files[fi].fork[0]) free(g_files[fi].fork[0]);
+        if (g_files[fi].fork[1]) free(g_files[fi].fork[1]);
+    } }
+    memset(g_files, 0, sizeof(g_files));
+    memset(g_open, 0, sizeof(g_open));
+    g_file_count = 0;
     if (g_ram) free(g_ram);
     g_ram = NULL; g_ram_size = 0;
 }
@@ -2122,6 +2315,7 @@ OSP_API unsigned osp_r32(unsigned a) { return m68k_read_memory_32(a); }
  * answer we give about it in one place and impossible to disagree.  Call it
  * straight after osp_init, before loading any code. */
 OSP_API int osp_instance_error(void) { return g_instance_error; }
+OSP_API const char *osp_last_file_request(void) { return g_last_file_req; }
 
 OSP_API int osp_set_cpu(int proc)
 {
@@ -2190,6 +2384,7 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     g_res[g_res_count].bytes = (unsigned char *)malloc((size_t)len);
     g_res[g_res_count].len = len;
     g_res[g_res_count].detached = 0;
+    g_res[g_res_count].map_entry = 0;
     memset(g_res[g_res_count].name, 0, sizeof(g_res[g_res_count].name));
     if (g_res[g_res_count].bytes)
         memcpy(g_res[g_res_count].bytes, data, (size_t)len);
@@ -2216,6 +2411,22 @@ OSP_API int osp_name_resource(unsigned type, int id,
     return -1;
 }
 
+/* Tell the host where a resource's entry sits in its file's resource map.
+ *
+ * Computed on the Python side, where the fork is already parsed -- see
+ * rsrc.Resource.map_entry -- rather than parsing the map again in C.
+ * -> 0, or -1 if that resource was never registered. */
+OSP_API int osp_map_entry(unsigned type, int id, int entry)
+{
+    int i;
+    for (i = 0; i < g_res_count; i++)
+        if (g_res[i].type == type && g_res[i].id == (short)id) {
+            g_res[i].map_entry = entry;
+            return 0;
+        }
+    return -1;
+}
+
 /* Register the one file: its name, and its data fork.
  *
  * Kept host-side rather than copied into emulated RAM. MacinTalk Pro's lexicon
@@ -2223,20 +2434,30 @@ OSP_API int osp_name_resource(unsigned type, int id,
  * so there is no reason for all of it to sit in the 68000's address space --
  * unlike a resource, which the engine gets a Handle to and dereferences. */
 OSP_API int osp_add_file(const unsigned char *name, int namelen,
-                         const unsigned char *data, int len)
+                         const unsigned char *data, int dlen,
+                         const unsigned char *rsrc, int rlen)
 {
-    if (namelen < 0 || namelen > 63 || len < 0) return -1;
-    if (g_file_bytes) free(g_file_bytes);
-    g_file_bytes = (unsigned char *)malloc((size_t)len ? (size_t)len : 1u);
-    if (!g_file_bytes) return -1;
-    memcpy(g_file_bytes, data, (size_t)len);
-    g_file_len = len;
-    g_file_pos = 0;
-    g_file_open = 0;
-    memset(g_file_name, 0, sizeof(g_file_name));
-    g_file_name[0] = (unsigned char)namelen;
-    memcpy(g_file_name + 1, name, (size_t)namelen);
-    return 0;
+    FileEntry *f;
+    if (g_file_count >= MAX_FILES) return -1;
+    if (namelen < 0 || namelen > 63 || dlen < 0 || rlen < 0) return -1;
+    f = &g_files[g_file_count];
+    memset(f, 0, sizeof(*f));
+    memset(f->name, 0, sizeof(f->name));
+    f->name[0] = (unsigned char)namelen;
+    memcpy(f->name + 1, name, (size_t)namelen);
+    if (data && dlen) {
+        f->fork[FORK_DATA] = (unsigned char *)malloc((size_t)dlen);
+        if (!f->fork[FORK_DATA]) return -1;
+        memcpy(f->fork[FORK_DATA], data, (size_t)dlen);
+        f->len[FORK_DATA] = dlen;
+    }
+    if (rsrc && rlen) {
+        f->fork[FORK_RSRC] = (unsigned char *)malloc((size_t)rlen);
+        if (!f->fork[FORK_RSRC]) return -1;
+        memcpy(f->fork[FORK_RSRC], rsrc, (size_t)rlen);
+        f->len[FORK_RSRC] = rlen;
+    }
+    return g_file_count++;
 }
 
 /* --- the Component Manager, from Python ------------------------------- */
@@ -2323,12 +2544,14 @@ OSP_API int osp_cm_log_get(int i, unsigned *d0, unsigned *pc, unsigned *csp,
 OSP_API int osp_cp_wraps(void) { return g_cp_wraps; }
 /* Tell the Speech Manager -- us -- that a voice exists, and which `ttvd` id it
  * lives under.  Both halves come from the voice's own ttvd. */
-OSP_API int osp_add_voice(unsigned creator, unsigned id, int res_id)
+OSP_API int osp_add_voice(unsigned creator, unsigned id, int res_id,
+                          int file_index)
 {
     if (g_voice_count >= MAX_VOICES) return -1;
     g_voices[g_voice_count].creator = creator;
     g_voices[g_voice_count].id = id;
     g_voices[g_voice_count].res_id = (short)res_id;
+    g_voices[g_voice_count].file = file_index;
     return g_voice_count++;
 }
 
