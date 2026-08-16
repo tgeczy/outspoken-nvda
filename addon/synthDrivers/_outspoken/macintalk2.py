@@ -466,15 +466,29 @@ def _drop_restated(pcm, lengths):
     for n in lengths:
         bounds.append((off, off + n))
         off += n
-    live = [i for i, (a, b) in enumerate(bounds)
-            if any(c != _SILENT for c in pcm[a:b])]
-    if len(live) < 2:
-        return pcm
-    last, prev = live[-1], live[-2]
-    if pcm[bounds[last][0]:bounds[last][1]] == \
-            pcm[bounds[prev][0]:bounds[prev][1]]:
-        return pcm[:bounds[prev][1]]
-    return pcm
+
+    def chunk(i):
+        a, b = bounds[i]
+        return pcm[a:b]
+
+    # Drop repeatedly: the engine can restate more than once at the tail.
+    end = len(bounds)
+    while True:
+        live = [i for i in range(end)
+                if any(c != _SILENT for c in chunk(i))]
+        if len(live) < 2:
+            break
+        last = live[-1]
+        # Compare against *every* earlier buffer, not just the previous live
+        # one. The restated buffer is the other half of the double buffer, so
+        # it matches the chunk two slots back -- and there is not always a
+        # silent buffer in between. Comparing only with the previous live
+        # buffer caught "s" and missed "six", "button", "close" and "eight",
+        # which is what "still repeats on some words" turned out to be.
+        if not any(chunk(last) == chunk(j) for j in range(last)):
+            break
+        end = last
+    return pcm[:bounds[end - 1][1]] if end < len(bounds) else pcm
 
 
 def _trim(pcm, keep=1200, lead=220):
