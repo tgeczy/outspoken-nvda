@@ -213,6 +213,20 @@ static int      g_mem_traps;
  * and the note in tools/disasm.py. */
 #define RES_ERR_ADDR  0x0A60u     /* ResErr, tested after every resource call */
 #define CPUFLAG_ADDR  0x012Fu     /* 0 = 68000, keeps Prime away from `movec` */
+/* MemErr.  MacinTalk 2's Open reads it directly (`move.w $220.w,d0` at Cecy 3
+ * +$16A) as the error it returns when its own _NewHandle came back nil, so an
+ * uninitialised word here turns an allocation failure into a random error
+ * code -- or worse, an allocation *success* reported as a failure. */
+#define MEM_ERR_ADDR  0x0220u
+
+/* _GetTrapAddress answers, one distinct address per trap word.
+ *
+ * These are never executed, only compared: `TrapAvailable()` asks for a trap
+ * and for _Unimplemented ($A89F) and calls the feature present when the two
+ * differ.  Handing back a constant would report every trap missing, and
+ * feature detection would take the wrong branch in silence -- so the address
+ * has to be a function of the trap number. */
+#define TRAPADDR_BASE 0x00F28000u
 
 static unsigned g_ticks;          /* _TickCount, one per call */
 
@@ -310,15 +324,20 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
     switch (base) {
     case 0xA11E: {                     /* _NewPtr  -- size in D0, ptr in A0 */
         unsigned p = heap_alloc(d0);
-        *a0_out = p; *d0_out = p ? 0 : 0x0FFFFFF98u /* memFullErr */;
-        if (!p) *d0_out = (unsigned)(-108);
+        *a0_out = p; *d0_out = p ? 0 : (unsigned)(-108) /* memFullErr */;
+        m68k_write_memory_16(MEM_ERR_ADDR, p ? 0u : 0xFF94u);
         return 1;
     }
     case 0xA122: {                     /* _NewHandle -- size in D0, hdl A0 */
         unsigned h = heap_new_handle(d0);
         *a0_out = h; *d0_out = h ? 0 : (unsigned)(-108);
+        m68k_write_memory_16(MEM_ERR_ADDR, h ? 0u : 0xFF94u);
         return 1;
     }
+    case 0xA146:                       /* _GetTrapAddress -- number in D0  */
+        *a0_out = TRAPADDR_BASE + ((d0 & 0x0FFFu) * 4u);
+        *d0_out = 0;
+        return 1;
     case 0xA029:                       /* _HLock   -- nothing moves here   */
     case 0xA02A:                       /* _HUnlock                         */
     case 0xA023:                       /* _DisposeHandle                   */
@@ -326,7 +345,14 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
     case 0xA049:                       /* _HPurge                          */
     case 0xA04A:                       /* _HNoPurge                        */
     case 0xA036:                       /* _MoreMasters                     */
+    /* Both of these only matter to a real, compacting heap.  Serving them
+     * explicitly rather than letting them stub keeps g_stub_count meaning
+     * "something we have not implemented", which is the alarm it exists to
+     * be. */
+    case 0xA040:                       /* _ResrvMem                        */
+    case 0xA064:                       /* _MoveHHi                         */
         *d0_out = 0; *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
         return 1;
     case 0xA055:                       /* _StripAddress -- 24-bit clean    */
         *d0_out = d0 & 0x00FFFFFFu; *a0_out = a0;
@@ -395,6 +421,253 @@ static unsigned res_find(unsigned type, short id)
         if (g_res[i].type == type && g_res[i].id == id)
             return g_res[i].handle;
     return 0;
+}
+
+/* --------------------------------------------------- the Component Manager -
+ *
+ * MacinTalk 2 and MacinTalk Pro are Component Manager components, not DRVRs,
+ * so the host plays a second role it did not need for `.sp`: the switchboard
+ * that `$A82A` calls into.  See docs/macintalk2-components.md for how the
+ * frame layouts below were measured; none of it is recalled.
+ *
+ * The one idea that makes this cheap: **a component call is a tail call.**  A
+ * naive implementation would re-enter the CPU (the way run_pending_callback
+ * does) and copy the result back, but that cannot recurse, and the front end
+ * calling the back end which calls its own handler is three deep immediately.
+ * Instead we rewrite the stack so the callee's Pascal frame lands exactly
+ * where the caller's `$A82A` result is expected, give the callee the address
+ * just past the trap word as its return address, and let it return straight to
+ * the caller.  The host never sees the call end, and never needs to.
+ *
+ * That works because every one of these leaves SP at the caller's result slot:
+ *
+ *     D0 = -1  handler frame at csp+4-paramSize; the handler pops its return
+ *              address, paramSize bytes of arguments and the storage Handle,
+ *              landing on csp+12 -- the slot the glue's caller pushed.
+ *     D0 =  0  component main's frame at csp+paramSize-4; main pops 8 bytes
+ *              (measured at Cecy 3 +$110: unlk / movea.l (a7)+,a0 / addq #8),
+ *              landing on csp+8+paramSize.
+ *
+ * Both overwrite stack the caller still owns, so every field is read out
+ * before anything is written.
+ */
+
+#define MAX_COMPONENTS 8
+#define MAX_INSTANCES  16
+
+/* A ComponentInstance is an opaque token to the engine, so it can be anything
+ * non-zero that we recognise on the way back in.  Keeping them in their own
+ * magic page means a stale or invented one is obvious rather than plausible. */
+#define INSTANCE_BASE  0x00F2C000u
+#define INSTANCE_TOK(i) (INSTANCE_BASE + (unsigned)(i) * 4u)
+
+/* Where a `D0 = 0` call's ComponentParameters is copied so the frame we build
+ * on top of it cannot clobber the arguments it describes.
+ *
+ * A ring, not a stack, because tail-calling means the host is never told that
+ * a call finished -- slots come back by wrap-around alone.  64 is far past the
+ * nesting these two components can reach; g_cp_wraps gives a corruption a
+ * signature instead of leaving it to look like an engine bug. */
+#define CP_SCRATCH   0x00F22000u
+#define CP_SLOTS     64
+#define CP_SLOT_SZ   264u          /* 4 + a paramSize that cannot exceed 255 */
+
+/* The host's own top-level call lives for a whole utterance, so it must never
+ * come from the ring. */
+#define CP_TOPLEVEL  0x00F26400u
+
+typedef struct {
+    unsigned type, subtype, manuf;
+    unsigned entry;                 /* code resource, already loaded into RAM */
+} Component;
+
+typedef struct {
+    int      component;             /* index into g_comp; -1 when free */
+    unsigned storage;               /* the Handle set through selector $11 */
+} Instance;
+
+static Component g_comp[MAX_COMPONENTS];
+static int       g_comp_count;
+static Instance  g_inst[MAX_INSTANCES];
+static int       g_inst_count;
+static int       g_cp_slot, g_cp_wraps;
+
+/* Every `$A82A` selector seen, whether or not we knew it.  The first run's log
+ * is what settles this engine's surface, exactly as the trap log settled
+ * `.sp`'s -- so record the unknown ones with enough stack to decode them. */
+#define MAX_CMLOG 512
+typedef struct { unsigned d0, pc, csp, w0, w1, w2, w3; int served; } CmRec;
+static CmRec g_cmlog[MAX_CMLOG];
+static int   g_cmlog_n;
+
+static int inst_of(unsigned token)
+{
+    unsigned i;
+    if (token < INSTANCE_BASE) return -1;
+    i = (token - INSTANCE_BASE) / 4u;
+    if (i >= (unsigned)g_inst_count || g_inst[i].component < 0) return -1;
+    return (int)i;
+}
+
+/* Put the exception frame where `rte` will land on `entry` with SP == newsp.
+ * The same trick tb_return uses, aimed into a callee instead of past a trap. */
+static void enter_callee(unsigned exc_sp, unsigned newsp, unsigned entry)
+{
+    unsigned frame = newsp - EXC_FRAME;
+    unsigned sr = m68k_read_memory_16(exc_sp);
+    m68k_write_memory_16(frame, sr);
+    m68k_write_memory_32(frame + 2, entry);
+    m68k_set_reg(M68K_REG_SP, frame);
+}
+
+/* Returns 1 if we served it.  `resume_pc` is the address just past the trap
+ * word, which doubles as the callee's return address. */
+static int serve_component_trap(unsigned d0, unsigned exc_sp, unsigned csp,
+                                unsigned resume_pc)
+{
+    unsigned char tmp[CP_SLOT_SZ];
+    unsigned i;
+    int served = 0;
+
+    switch (d0) {
+
+    case 0xFFFFFFFFu: {         /* CallComponentFunctionWithStorage           */
+        /* `moveq #$FF,d0` sign-extends, so the selector arrives as -1, not
+         * $FF.  Comparing against $FF here would silently miss every call. */
+        unsigned handler = m68k_read_memory_32(csp + 0);
+        unsigned params  = m68k_read_memory_32(csp + 4);
+        unsigned storage = m68k_read_memory_32(csp + 8);
+        unsigned psize   = m68k_read_memory_8(params + 1);
+        unsigned newsp;
+
+        if (psize > 255u) psize = 255u;
+        /* Bounce through C: params may itself live on the stack we are about
+         * to rewrite, and a straight copy would then read its own output. */
+        for (i = 0; i < psize; i++)
+            tmp[i] = (unsigned char)m68k_read_memory_8(params + 4 + i);
+
+        newsp = csp + 4u - psize;
+        for (i = 0; i < psize; i++)
+            m68k_write_memory_8(newsp + 4u + i, tmp[i]);
+        /* Storage is the handler's *first* declared argument, so it sits above
+         * every unpacked one -- four handlers across both components agree. */
+        m68k_write_memory_32(newsp + 4u + psize, storage);
+        m68k_write_memory_32(newsp, resume_pc);
+        enter_callee(exc_sp, newsp, handler);
+        served = 1;
+        break;
+    }
+
+    case 0x00000000u: {         /* call another component instance            */
+        unsigned hdr   = m68k_read_memory_32(csp);
+        unsigned psize = (hdr >> 16) & 0xFFu;
+        unsigned token = m68k_read_memory_32(csp + 4u + psize);
+        unsigned cp, newsp;
+        int ii = inst_of(token);
+
+        if (ii < 0) break;      /* unknown instance -- fall through and halt */
+
+        for (i = 0; i < 4u + psize; i++)
+            tmp[i] = (unsigned char)m68k_read_memory_8(csp + i);
+        cp = CP_SCRATCH + (unsigned)(g_cp_slot % CP_SLOTS) * CP_SLOT_SZ;
+        if (++g_cp_slot % CP_SLOTS == 0) g_cp_wraps++;
+        for (i = 0; i < 4u + psize; i++)
+            m68k_write_memory_8(cp + i, tmp[i]);
+
+        newsp = csp + psize - 4u;
+        m68k_write_memory_32(newsp + 8u, cp);                  /* params     */
+        m68k_write_memory_32(newsp + 4u, g_inst[ii].storage);  /* storage    */
+        m68k_write_memory_32(newsp, resume_pc);
+        enter_callee(exc_sp, newsp,
+                     g_comp[g_inst[ii].component].entry);
+        served = 1;
+        break;
+    }
+
+    case 0x0000000Eu: {         /* one argument, one result; see below        */
+        /* Measured at Cecy 3 +$134: the front end asks this before allocating
+         * storage and uses the answer only to choose between _ResrvMem then
+         * _NewHandle, and a plain _NewHandle -- then records the inverse at
+         * storage+$21A.  Both branches allocate the same $21C bytes and both
+         * are fine against a bump allocator, so 0 is safe.  storage+$21A is
+         * the first knob to try if MacinTalk 2 later misbehaves in a way that
+         * smells like a heap assumption. */
+        tb_return(exc_sp, 4, 0, 4);
+        served = 1;
+        break;
+    }
+
+    case 0x00000015u: {         /* one argument, a *word* result              */
+        /* Cecy 3 +$14FC reserves two bytes, passes self, and treats a result
+         * <= 0 as failure; on success it immediately fills three pointer
+         * slots from three subroutines.  That is a component opening its own
+         * resource file and then reading its tables out of it -- Apple most
+         * likely calls this OpenComponentResFile.
+         *
+         * Named here by what it does rather than by what it is probably
+         * called, because the evidence supports the behaviour and only
+         * suggests the name.  Our _GetResource searches one flat table and
+         * ignores files entirely, so any positive refNum will do; the proof
+         * that this reading is right is whether the resource calls that
+         * follow ask for ttsr/ttsd/ttss. */
+        tb_return(exc_sp, 4, 1, 2);
+        served = 1;
+        break;
+    }
+
+    case 0x00000018u: {         /* the close that matches $15                 */
+        /* Cecy 3 +$1578 hands back the same *word* refNum $15 returned, once
+         * the three tables are loaded and detached, and ignores the result.
+         * CloseComponentResFile in all but the name.  Note the argument is a
+         * word, not a long -- two bytes of arguments, not four. */
+        tb_return(exc_sp, 2, 0, 2);
+        served = 1;
+        break;
+    }
+
+    case 0x00000010u: {         /* GetComponentInstanceStorage(self)          */
+        int ii = inst_of(m68k_read_memory_32(csp));
+        tb_return(exc_sp, 4, ii < 0 ? 0 : g_inst[ii].storage, 4);
+        served = 1;
+        break;
+    }
+
+    case 0x00000011u: {         /* SetComponentInstanceStorage(self, storage) */
+        /* Two arguments and no result slot -- the call site at Cecy 3 +$17E
+         * never reserves one, so writing four bytes there would land in the
+         * caller's locals. */
+        unsigned storage = m68k_read_memory_32(csp + 0);
+        int ii = inst_of(m68k_read_memory_32(csp + 4));
+        if (ii >= 0) g_inst[ii].storage = storage;
+        tb_return(exc_sp, 8, 0, 0);
+        served = 1;
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    if (g_cmlog_n < MAX_CMLOG) {
+        CmRec *r = &g_cmlog[g_cmlog_n++];
+        r->d0 = d0; r->pc = resume_pc - 2u; r->csp = csp; r->served = served;
+        r->w0 = m68k_read_memory_32(csp + 0);
+        r->w1 = m68k_read_memory_32(csp + 4);
+        r->w2 = m68k_read_memory_32(csp + 8);
+        r->w3 = m68k_read_memory_32(csp + 12);
+    }
+
+    /* An unknown selector must never be stubbed.  A Toolbox stub leaves the
+     * stack unbalanced and the caller returns into rubbish several
+     * instructions later, which is a much harder bug than stopping here with
+     * the stack still intact and readable. */
+    if (!served) {
+        g_stop_reason = STOP_EXCEPTION;
+        g_stop_vector = 10;
+        g_stop_pc = resume_pc - 2u;
+        m68k_end_timeslice();
+    }
+    return 1;
 }
 
 /* ------------------------------------------------------- the Sound Manager -
@@ -528,7 +801,8 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
 }
 
 /* Returns 1 if we served the trap.  `exc_sp` is the exception frame address. */
-static int serve_toolbox_trap(unsigned short word, unsigned exc_sp)
+static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
+                              unsigned d0, unsigned resume_pc)
 {
     unsigned csp = exc_sp + EXC_FRAME;
     /* A Toolbox trap number is ten bits; only bit 10 is a flag (auto-pop).
@@ -536,9 +810,21 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp)
      * every resource call falls through to "stubbed". */
     unsigned base = word & 0xFBFFu;
 
+    /* _ComponentDispatch carries its selector in D0 rather than on the stack,
+     * which is why this one trap needs a register the others do not. */
+    if (base == 0xA82Au)
+        return serve_component_trap(d0, exc_sp, csp, resume_pc);
+
     if (serve_sound_trap(base, exc_sp, csp)) return 1;
 
     switch (base) {
+    /* _Get1Resource searches only the current file where _GetResource walks
+     * the whole chain.  We keep one flat table and no files at all, so the
+     * distinction cannot arise -- but the trap still has to be *served*, since
+     * a Toolbox stub leaves six bytes on the stack and the caller carries on
+     * with a corrupted frame.  That is precisely what happened on the first
+     * run: the _DetachResource after it reported D0 = 0x00017474. */
+    case 0xA81F:                         /* _Get1Resource(type, id)          */
     case 0xA9A0: {                       /* _GetResource(type, id) -> Handle */
         short id = (short)m68k_read_memory_16(csp);
         unsigned type = m68k_read_memory_32(csp + 2);
@@ -572,6 +858,11 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp)
         tb_return(exc_sp, 4, 1, 2);
         return 1;
     }
+    case 0xA9AF:                         /* _ResError -> short               */
+        /* Only ever reached on a failure path -- MacinTalk 2 calls it to turn
+         * "the Handle came back nil" into an error code to return. */
+        tb_return(exc_sp, 0, (unsigned)(unsigned short)g_res_err, 2);
+        return 1;
     case 0xA975: {                       /* _TickCount -> long               */
         /* Only ever feeds `TickCount + 60` timeouts.  It must advance, or a
          * wait loop that checks it becomes infinite; it must not advance fast,
@@ -621,7 +912,7 @@ static void service_atrap(void)
          * returns into rubbish, which is how this first showed up (vector 4,
          * illegal instruction, four instructions after a stubbed
          * _GetResource). */
-        served = serve_toolbox_trap(word, sp);
+        served = serve_toolbox_trap(word, sp, d0, trap_pc + 2);
         if (!served) g_stub_count++;
     } else if (g_mem_traps && serve_memory_trap(word, &d0, &a0)) {
         served = 1;
@@ -789,6 +1080,8 @@ OSP_API int osp_init(unsigned ram_size)
     g_trap_count = g_trap_overflow = g_stub_count = g_fault_count = 0;
     g_stackpc_is_instruction = -1;
     g_res_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
+    g_comp_count = 0; g_inst_count = 0;
+    g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
@@ -855,6 +1148,88 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     g_res_count++;
     return mp;
 }
+
+/* --- the Component Manager, from Python ------------------------------- */
+
+/* Defined further down; declared here so the call below keeps its linkage. */
+OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr);
+
+OSP_API int osp_add_component(unsigned type, unsigned subtype, unsigned manuf,
+                              unsigned entry)
+{
+    Component *c;
+    if (g_comp_count >= MAX_COMPONENTS) return -1;
+    c = &g_comp[g_comp_count];
+    c->type = type; c->subtype = subtype; c->manuf = manuf; c->entry = entry;
+    return g_comp_count++;
+}
+
+OSP_API unsigned osp_open_instance(int component)
+{
+    int i;
+    if (component < 0 || component >= g_comp_count) return 0;
+    if (g_inst_count >= MAX_INSTANCES) return 0;
+    i = g_inst_count++;
+    g_inst[i].component = component;
+    g_inst[i].storage = 0;
+    return INSTANCE_TOK(i);
+}
+
+OSP_API unsigned osp_instance_storage(unsigned token)
+{
+    int i = inst_of(token);
+    return i < 0 ? 0u : g_inst[i].storage;
+}
+
+/* Play Speech Manager: build a ComponentParameters and call the component's
+ * own entry point, the way the real Component Manager would.
+ *
+ * `args` is in **declared** order -- (self) for Open, and so on.  They are
+ * written reversed, because params[0] is the last declared argument: that is
+ * how the block sits on the stack at a measured `D0 = 0` call site, and the
+ * glue copies it into a handler frame verbatim rather than re-ordering it.
+ */
+OSP_API int osp_component_call(unsigned token, int what,
+                               const unsigned *args, int nargs,
+                               long long max_instr, unsigned *result)
+{
+    unsigned cp = CP_TOPLEVEL, sp, res_slot;
+    int ii = inst_of(token), i, r;
+
+    if (ii < 0) return -2;
+    if (nargs < 0 || nargs * 4 > 255) return -3;
+
+    m68k_write_memory_8(cp + 0, 0);                      /* flags     */
+    m68k_write_memory_8(cp + 1, (unsigned)(nargs * 4));  /* paramSize */
+    m68k_write_memory_16(cp + 2, (unsigned)what & 0xFFFFu);
+    for (i = 0; i < nargs; i++)
+        m68k_write_memory_32(cp + 4u + (unsigned)i * 4u, args[nargs - 1 - i]);
+
+    /* pascal ComponentResult main(ComponentParameters *p, Handle storage) --
+     * left to right, so params goes deeper than storage. */
+    sp = m68k_get_reg(NULL, M68K_REG_SP);
+    sp -= 4; res_slot = sp; m68k_write_memory_32(res_slot, 0);
+    sp -= 4; m68k_write_memory_32(sp, cp);
+    sp -= 4; m68k_write_memory_32(sp, g_inst[ii].storage);
+    m68k_set_reg(M68K_REG_SP, sp);
+
+    r = osp_call(g_comp[g_inst[ii].component].entry, MAGIC_SENTINEL, max_instr);
+    if (result) *result = m68k_read_memory_32(res_slot);
+    return r;
+}
+
+OSP_API int osp_cm_log_n(void) { return g_cmlog_n; }
+OSP_API int osp_cm_log_get(int i, unsigned *d0, unsigned *pc, unsigned *csp,
+                           unsigned *words, int *served)
+{
+    CmRec *r;
+    if (i < 0 || i >= g_cmlog_n) return 0;
+    r = &g_cmlog[i];
+    *d0 = r->d0; *pc = r->pc; *csp = r->csp; *served = r->served;
+    words[0] = r->w0; words[1] = r->w1; words[2] = r->w2; words[3] = r->w3;
+    return 1;
+}
+OSP_API int osp_cp_wraps(void) { return g_cp_wraps; }
 
 OSP_API unsigned osp_tick_count(void) { return g_ticks; }
 

@@ -159,6 +159,46 @@ must halt loudly with the stack dumped, never be stubbed — an unbalanced stack
 here returns the caller into rubbish, which is exactly how the `.sp` port's
 first `_GetResource` stub showed up.
 
+### The selector map, as far as running it has settled it
+
+Each row was decoded from its call site and then confirmed by what the engine
+did next — the loop is: halt on an unknown selector, disassemble the four
+instructions around it, serve it, run again.
+
+| `D0` | arguments | result | what it does |
+|---|---|---|---|
+| `-1` | handler, params, storage | long | call own handler — the glue above |
+| `0` | *params inline*, instance | long | call another component instance |
+| `$0E` | self | long | picks an allocation strategy; 0 is safe |
+| `$10` | self | long | `GetComponentInstanceStorage` |
+| `$11` | self, storage | *none* | `SetComponentInstanceStorage` |
+| `$15` | self | **word** | open own resource file → refNum |
+| `$18` | refNum (**word**) | word | close it again |
+| `$4` | a `ComponentDescription *` | ? | not yet decoded — finds the back end |
+
+Two of these carry **word** arguments or results where every neighbour uses
+longs. Getting that wrong does not fail loudly; it shifts the caller's stack by
+two bytes and the damage appears several instructions later.
+
+`$15` is the one worth describing, because it is how the front end loads
+everything it needs: it opens its own resource file, reads `ttsr` 1 with
+`_Get1Resource` and `ttsd` 1 and 2 with `_GetResource`, `_DetachResource`s each
+into `$6/$a/$e` of its storage, then closes the file with `$18`. It also
+**version-checks the dictionary** — `ttsd`+`$4` must equal 1, or it releases
+the resource and returns −204.
+
+### Where milestone 1 actually got to
+
+`tools/probe_mt2_open.py` calls selector −1 on the front end and it runs
+clean: 254 instructions, 19 traps, **0 stubbed, 0 faults**. Storage is
+allocated and registered, all three tables are loaded, the resource file is
+closed, and it stops on `$A82A D0=$4` reaching for the back end — which is
+milestone 2 beginning, not a failure.
+
+Beyond `$A82A`, Open needs `_Get1Resource`, `_ResError`, `_ResrvMem`,
+`_MoveHHi`, and **`MemErr` at `$0220`** — it reads that low-memory word
+directly as the error it returns when its own `_NewHandle` comes back nil.
+
 ## Two roles for the host
 
 * **Speech Manager** — the caller. It opens the `ttsc` front end and issues

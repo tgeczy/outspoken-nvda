@@ -67,6 +67,15 @@ class Host(object):
                                          ctypes.POINTER(ctypes.c_uint),
                                          ctypes.c_int, ctypes.c_longlong]
         L.osp_pcm_get.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_add_component.argtypes = [ctypes.c_uint] * 4
+        L.osp_open_instance.argtypes = [ctypes.c_int]
+        L.osp_open_instance.restype = ctypes.c_uint
+        L.osp_instance_storage.argtypes = [ctypes.c_uint]
+        L.osp_instance_storage.restype = ctypes.c_uint
+        L.osp_component_call.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                         ctypes.POINTER(ctypes.c_uint),
+                                         ctypes.c_int, ctypes.c_longlong,
+                                         ctypes.POINTER(ctypes.c_uint)]
         for n in ("osp_pcm_len", "osp_sample_rate", "osp_cb_scratch"):
             getattr(L, n).restype = ctypes.c_uint
         if L.osp_init(ram) != 0:
@@ -121,6 +130,61 @@ class Host(object):
     def call_with_args(self, entry, args, max_instr=200_000_000):
         arr = (ctypes.c_uint * len(args))(*args)
         return self.lib.osp_call_with_args(entry, arr, len(args), max_instr)
+
+    # --- the Component Manager --------------------------------------------
+    # MacinTalk 2 and Pro are components rather than drivers, so the host also
+    # answers $A82A.  See docs/macintalk2-components.md.
+
+    @staticmethod
+    def _ostype(v):
+        if isinstance(v, str):
+            v = v.encode("mac-roman")
+        return struct.unpack(">I", v[:4].ljust(4, b" "))[0]
+
+    def add_component(self, ctype, subtype, manuf, entry):
+        """Register a component's code, as its `thng` resource would."""
+        i = self.lib.osp_add_component(self._ostype(ctype),
+                                       self._ostype(subtype),
+                                       self._ostype(manuf), entry)
+        if i < 0:
+            raise RuntimeError("no room for another component")
+        return i
+
+    def open_instance(self, component):
+        tok = self.lib.osp_open_instance(component)
+        if not tok:
+            raise RuntimeError("cannot open component %d" % component)
+        return tok
+
+    def instance_storage(self, token):
+        return self.lib.osp_instance_storage(token)
+
+    def component_call(self, token, what, args=(), max_instr=200_000_000):
+        """-> (stop reason, result).  `args` is in declared order."""
+        arr = (ctypes.c_uint * max(len(args), 1))(*args)
+        res = ctypes.c_uint()
+        r = self.lib.osp_component_call(token, what, arr, len(args),
+                                        max_instr, ctypes.byref(res))
+        if r < 0:
+            raise RuntimeError("osp_component_call rejected the call (%d)" % r)
+        return r, res.value
+
+    @property
+    def cm_log(self):
+        """Every $A82A seen: (d0, pc, csp, [4 stack longs], served)."""
+        out = []
+        d0 = ctypes.c_uint(); pc = ctypes.c_uint(); csp = ctypes.c_uint()
+        sv = ctypes.c_int(); words = (ctypes.c_uint * 4)()
+        for i in range(self.lib.osp_cm_log_n()):
+            self.lib.osp_cm_log_get(i, ctypes.byref(d0), ctypes.byref(pc),
+                                    ctypes.byref(csp), words, ctypes.byref(sv))
+            out.append((d0.value, pc.value, csp.value, list(words),
+                        bool(sv.value)))
+        return out
+
+    @property
+    def cp_wraps(self):
+        return self.lib.osp_cp_wraps()
 
     # --- audio ------------------------------------------------------------
     def pcm_reset(self):
