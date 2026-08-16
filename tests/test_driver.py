@@ -252,3 +252,188 @@ def test_cancel_always_stops_the_player(driver, rom_files):
     driver.cancel()
     assert driver._player.stops == before + 1, \
         "cancel did nothing once the worker had gone idle"
+
+
+# -- issue #1: only the worker may touch the emulator -----------------------
+#
+# MacinTalk 2 buzzed and popped after a voice switch, and stayed that way for
+# every later utterance until the synthesizer was reloaded. The cause was a
+# component call -- SetSpeechInfo('cvox') -- issued from `_set_voice` on NVDA's
+# main thread while the worker was inside `speak()`. Two threads stepping one
+# emulated 68000 corrupts it, so what breaks is the CPU rather than the
+# utterance, which is why it never recovered.
+#
+# These use a stub engine rather than the real one: what is being asserted is
+# *which thread* makes each call, and that is a property of the driver alone.
+
+
+class _StubVoice(object):
+    def __init__(self, name, vid):
+        self.name, self.id, self.creator = name, vid, "mtk2"
+
+
+class _StubEngine(object):
+    """Records the thread every call arrives on, and nothing else."""
+
+    number_mode = "words"
+
+    def __init__(self, files=None, allvoices=None, voice=None):
+        import threading
+        self._threading = threading
+        self.voice = voice
+        self.calls = []                  # [(name, thread ident)]
+        self.closed = False
+
+    def _note(self, what):
+        self.calls.append((what, self._threading.get_ident()))
+
+    def select(self, voice):
+        self._note("select")
+        self.voice = voice
+        return True
+
+    def set_rate(self, rate):
+        self._note("set_rate")
+
+    def set_voice(self, hz):
+        self._note("set_voice")
+
+    def translate(self, text):
+        return text
+
+    def speak(self, text):
+        self._note("speak")
+        time.sleep(0.05)                 # long enough to be raced
+        return b"\x80\x90" * 400
+
+    def stop(self):
+        self._note("stop")               # allowed from the main thread
+
+    def close(self):
+        self._note("close")
+        self.closed = True
+
+
+@pytest.fixture
+def stubbed(monkeypatch):
+    """A driver whose MacinTalk 2 engine is a stub, with two voices."""
+    import sys
+    import types
+    import outspoken
+
+    a, b = _StubVoice("Alpha", 1), _StubVoice("Beta", 2)
+    built = []
+
+    def _engine(files, allvoices, voice=None):
+        eng = _StubEngine(files, allvoices, voice)
+        built.append(eng)
+        return eng
+
+    fake = types.ModuleType("macintalk2")
+    fake.Engine = _engine
+    fake.find = lambda roots: ({}, [a, b])
+    fake.usable = lambda roots: True
+    monkeypatch.setitem(sys.modules, "macintalk2", fake)
+
+    d = outspoken.SynthDriver()
+    # Set the catalogue directly. `_catalogue()` caches into this, so the
+    # driver never scans the ROM folder and the test does not need one.
+    d._voiceCatalogue = [("mtk2:Alpha", "Alpha (MacinTalk 2)", "mtk2", a),
+                         ("mtk2:Beta", "Beta (MacinTalk 2)", "mtk2", b)]
+    d._voiceId = "mtk2:Alpha"
+    try:
+        yield d, built, a, b
+    finally:
+        d.terminate()
+
+
+def _spoken(driver, text, timeout=5.0):
+    """Speak one thing and wait for it to reach the player."""
+    before = driver._player.bytes
+    driver.speak([text])
+    t0 = time.perf_counter()
+    while (driver._player.bytes <= before
+           and time.perf_counter() - t0 < timeout):
+        time.sleep(0.005)
+    return driver._player.bytes > before
+
+
+def test_settings_never_drive_the_engine_from_the_main_thread(stubbed):
+    """Issue #1. Every engine call must land on the worker.
+
+    `stop()` is the one exception and is deliberately safe: `.sp` writes a
+    single byte into emulated memory and MacinTalk 2 does nothing at all.
+    """
+    import threading
+    driver, built, _a, _b = stubbed
+    main = threading.get_ident()
+
+    assert _spoken(driver, "first"), "the stub engine never spoke"
+    # Switch voice and change the rate while a render is in flight, which is
+    # the window the bug needed.
+    driver.speak(["something long enough to still be rendering"])
+    driver._set_voice("mtk2:Beta")
+    driver._set_rate(80)
+    driver._set_pitch(70)
+    driver.cancel()
+    assert _spoken(driver, "second")
+
+    assert built, "no engine was ever built"
+    offenders = [(what, eng) for eng in built for what, tid in eng.calls
+                 if tid == main and what != "stop"]
+    assert not offenders, \
+        "these ran on NVDA's main thread: %s" % [w for w, _ in offenders]
+
+
+def test_the_engine_is_closed_by_the_worker(stubbed):
+    """`close()` is a component call *and* a DLL unload.
+
+    Doing it from `terminate()` on the main thread could unmap the host
+    library while the worker was still executing inside it -- the same race as
+    the voice switch, with a much worse failure than buzzing.
+    """
+    import threading
+    driver, built, _a, _b = stubbed
+    main = threading.get_ident()
+    assert _spoken(driver, "hello")
+    driver.terminate()
+    assert built[0].closed, "the engine was never closed"
+    closes = [tid for what, tid in built[0].calls if what == "close"]
+    assert closes and main not in closes, \
+        "close() ran on NVDA's main thread"
+
+
+def test_a_voice_change_survives_the_cancel_that_follows_it(stubbed):
+    """The reason the change is reconciled and not queued.
+
+    NVDA's own flow for a settings change is: apply it, cancel, then speak the
+    confirmation. A voice change queued as an item on the speech queue is
+    thrown away by that cancel -- `cancel()` drains the queue -- so the
+    confirmation is spoken in the OLD voice and nothing ever converges, since
+    only `_set_voice` would have applied it.
+    """
+    driver, built, _a, b = stubbed
+    assert _spoken(driver, "in the first voice")
+    driver._set_voice("mtk2:Beta")
+    driver.cancel()                      # exactly what NVDA does next
+    assert _spoken(driver, "confirmation")
+    assert built[0].voice is b, \
+        "the confirmation was spoken in the old voice"
+
+
+def test_a_voice_change_needs_no_utterance_of_its_own(stubbed):
+    """Switching voice must not speak, and must not cost a rebuild.
+
+    All ten MacinTalk 2 voices are registered at once, so a switch is one
+    SetSpeechInfo('cvox'). Rebuilding would reset the emulator's globals and
+    take the best part of a second.
+    """
+    driver, built, _a, _b = stubbed
+    assert _spoken(driver, "one")
+    fed = driver._player.fed
+    driver._set_voice("mtk2:Beta")
+    time.sleep(0.2)
+    assert driver._player.fed == fed, "changing voice produced audio"
+    assert _spoken(driver, "two")
+    assert len(built) == 1, "the engine was rebuilt to change voice"
+    assert [w for w, _ in built[0].calls].count("select") == 1

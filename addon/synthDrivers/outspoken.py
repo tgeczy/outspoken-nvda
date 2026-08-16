@@ -23,10 +23,24 @@ own copy -- see `_outspoken/rom.py` and `tools/extract_rom.py`.
    compared at render time froze the driver silent -- 615 utterances spoken,
    then 194 consecutive items discarded unheard, with no recovery. Permanently
    silent is a far worse failure than occasionally speaking something stale.
+4. *Only the worker touches the emulator.* There is one 68000 and it has no
+   lock. Anything that drives it -- a component call, opening an engine,
+   closing one -- happens on the worker thread and nowhere else. NVDA calls
+   `_set_voice`, `_set_rate` and `terminate` on its main thread while the
+   worker may be inside `speak()`, and two threads stepping one CPU corrupts
+   it: buzzing that survives every later utterance (issue #1), and for
+   `close()` a DLL unloaded out from under running code.
 
-The shape that satisfies all three is the shape the Amiga Narrator add-on
-already had: a queue, a worker, one feed call per utterance, and a cancel that
-empties the queues and stops the player.
+   Settings therefore *record what the user asked for* and the worker
+   *reconciles* before each utterance. Not events on the speech queue --
+   `cancel()` drains that queue, and NVDA cancels between changing a setting
+   and speaking the confirmation of it, so a queued voice change would be
+   eaten and the confirmation spoken in the old voice. Comparing state
+   converges even when an individual change is missed.
+
+The shape that satisfies the first three is the shape the Amiga Narrator
+add-on already had: a queue, a worker, one feed call per utterance, and a
+cancel that empties the queues and stops the player.
 """
 import os
 import queue
@@ -162,7 +176,9 @@ class SynthDriver(SynthDriver):
         if cat:
             self._voiceId = cat[0][0]
         self._engine = None
+        self._engineKind = None
         self._engineError = None
+        self._voiceRefused = None
         self._stopped = False
         self._audioOut = False           # is there audio worth interrupting?
         self._nSpoken = self._nEmpty = 0
@@ -255,13 +271,17 @@ class SynthDriver(SynthDriver):
                     q.get_nowait()
                 except queue.Empty:
                     break
-        if self._engine:
-            # Each engine decides what it can safely do from this thread.
-            # `.sp` writes one byte into emulated memory; MacinTalk 2 has no
-            # equivalent and does nothing, because a component call here would
-            # drive the 68000 while the worker is also driving it. See
-            # macintalk2.Engine.stop.
-            self._engine.stop()
+        # Read it once. The worker may close and clear it at any moment, and
+        # `if self._engine: self._engine.stop()` can be None by the second half.
+        eng = self._engine
+        if eng is not None:
+            # `stop()` is the ONE engine call this thread may make, and each
+            # engine decides what it can safely do here. `.sp` writes a single
+            # byte into emulated memory; MacinTalk 2 has no equivalent and
+            # deliberately does nothing, because a component call would drive
+            # the 68000 while the worker is also driving it. See
+            # macintalk2.Engine.stop. Both are no-ops on a closed engine.
+            eng.stop()
         # ALWAYS stop the player. This was once gated on a flag meant to avoid
         # restarting the output stream needlessly -- but that flag tracked the
         # worker being busy, not the player having audio, and the worker goes
@@ -291,12 +311,25 @@ class SynthDriver(SynthDriver):
             pass
 
     def terminate(self):
+        """Stop the threads, then let the worker close the engine on its way out.
+
+        Closing it from here is the same race as issue #1 and a worse one:
+        `close()` is a component call *and* unloads the host DLL, so a worker
+        still inside `speak()` would be executing code that had just been
+        unmapped. The worker owns the engine for the whole of its life,
+        including the end of it -- see `_run`.
+        """
         self._stopped = True
         self.cancel()
-        if self._engine:
-            self._engine.close()         # stop it touching the emulator
         self._queue.put(None)
         self._audioQueue.put(None)
+        # Long enough for a render to finish (15-150 ms) with room to spare.
+        # If it does not come back it is wedged, and leaking one engine is far
+        # better than unloading a DLL underneath a running thread.
+        self._worker.join(timeout=2.0)
+        if self._worker.is_alive():
+            log.warning("outSPOKEN: the worker did not stop; "
+                        "leaving the engine open")
         try:
             self._player.close()
         except Exception:
@@ -356,29 +389,25 @@ class SynthDriver(SynthDriver):
         return self._voiceId
 
     def _set_voice(self, value):
+        """Record the choice. Applying it is the worker's job -- see `_sync`.
+
+        This runs on NVDA's MAIN thread. It used to call `select()` here, which
+        for MacinTalk 2 is a component call, and crossing between engines it
+        called `close()`, which is a component call plus a DLL unload -- both
+        while the worker might be inside `speak()`. That is issue #1: buzzing
+        and popping that persists for every later utterance, because what is
+        corrupted is the emulated CPU rather than one utterance.
+
+        So nothing here touches the engine. Assigning `_voiceId` is a single
+        reference store, which is atomic, and the worker reconciles against it
+        before it renders anything.
+        """
         want = self._entry(value)
         if want is None or want[0] == self._voiceId:
             return
-        was = self._entry()
         self._voiceId = want[0]
-        if self._engine is None:
-            return
-        if was is not None and was[2] == want[2] == "mtk2":
-            # Same engine: MacinTalk 2 can change voice in place, because all
-            # of them are already registered. See macintalk2.Engine.select.
-            if self._engine.select(want[3]):
-                self._applySettings(self._engine)
-                return
-        if was is not None and was[2] == want[2] == "sp":
-            self._applySettings(self._engine)
-            return
-        # Crossing between engines. osp_init() resets the emulator's globals,
-        # so two cannot be live at once -- the old one has to go first.
-        try:
-            self._engine.close()
-        except Exception:
-            pass
-        self._engine = None
+        # A different voice deserves a fresh attempt: the last one may have
+        # failed for reasons that were about that voice and not this one.
         self._engineError = None
 
     def _baseHz(self):
@@ -394,6 +423,63 @@ class SynthDriver(SynthDriver):
         eng.set_voice(self._baseHz() * (0.5 + self._pitch / 100.0))
 
     # -- the threads -------------------------------------------------------
+    #
+    # Everything from here down runs on the worker, and everything that drives
+    # the 68000 lives here for that reason. See rule 4 at the top of the file.
+
+    def _sync(self):
+        """Make the live engine match the voice the user has chosen. -> engine.
+
+        Called before every utterance. It compares state rather than replaying
+        events, so it is idempotent, it converges no matter when the user's
+        change lands, and -- unlike an item queued behind the speech -- it
+        cannot be swallowed by the `cancel()` that NVDA issues before it speaks
+        the confirmation of a settings change.
+        """
+        entry = self._entry()
+        if entry is None:
+            return self._ensureEngine()          # reports the missing ROM
+        if self._engine is not None and self._engineKind != entry[2]:
+            # Crossing between engines. osp_init() resets the emulator's
+            # globals, so two cannot be live at once: the old one has to go,
+            # and it has to go from this thread.
+            self._closeEngine()
+        eng = self._ensureEngine()
+        if eng is None or entry[2] != "mtk2":
+            return eng                           # `.sp` has one voice per id
+        want, cur = entry[3], getattr(eng, "voice", None)
+        if cur is not None and (cur.creator, cur.id) == (want.creator, want.id):
+            return eng
+        # MacinTalk 2 changes voice in place: every voice it has is already
+        # registered, so this is one SetSpeechInfo('cvox') rather than a
+        # rebuild. See macintalk2.Engine.select.
+        if eng.select(want):
+            self._voiceRefused = None
+        elif self._voiceRefused != entry[0]:
+            # A refusal leaves the previous voice in place, which is the right
+            # failure -- speaking in the wrong voice beats silence. Said once
+            # and not once per utterance, because we will try again for each.
+            self._voiceRefused = entry[0]
+            log.warning("outSPOKEN: the engine refused voice %r" % entry[0])
+        return eng
+
+    def _closeEngine(self):
+        """Retire the live engine. Worker thread only, or after it has stopped.
+
+        `close()` unloads the host DLL as well as closing the component, which
+        is why this may not happen while a render might be in flight.
+        """
+        eng, self._engine = self._engine, None
+        self._engineKind = None
+        self._engineError = None
+        self._voiceRefused = None
+        if eng is None:
+            return
+        try:
+            eng.close()
+        except Exception:
+            log.error("outSPOKEN: closing the engine failed", exc_info=True)
+
     def _ensureEngine(self):
         if self._engine is not None or self._engineError is not None:
             return self._engine
@@ -414,6 +500,7 @@ class SynthDriver(SynthDriver):
                 self._engine = engine_mod.Engine(found)
             self._engine.number_mode = (
                 "words" if self._numberWords else "digits")
+            self._engineKind = kind
         except Exception:
             self._engineError = "engine failed to start"
             log.error("outSPOKEN: %s engine failed to start" % kind,
@@ -445,6 +532,19 @@ class SynthDriver(SynthDriver):
                 log.error("outSPOKEN: feeding audio failed", exc_info=True)
 
     def _run(self):
+        """Render queued speech, and close the engine on the way out.
+
+        The close belongs here rather than in `terminate()` because it is the
+        one place that can be sure no render is in flight -- there is no other
+        thread to be inside `speak()`. `finally`, so it also happens if the
+        loop dies of something unforeseen.
+        """
+        try:
+            self._render()
+        finally:
+            self._closeEngine()
+
+    def _render(self):
         """Render queued speech and hand the audio to the feeder."""
         pending = False
         while not self._stopped:
@@ -462,7 +562,7 @@ class SynthDriver(SynthDriver):
             if item is None:
                 return
             items, queuedAt = item
-            eng = self._ensureEngine()
+            eng = self._sync()
             if eng is None:
                 synthDoneSpeaking.notify(synth=self)
                 continue

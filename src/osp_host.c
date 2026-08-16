@@ -497,7 +497,12 @@ static void tb_return(unsigned exc_sp, unsigned param_bytes,
 /* ------------------------------------------------------ resource manager - */
 
 #define MAX_RES 64
-typedef struct { unsigned type; short id; unsigned handle; } ResEntry;
+/* `bytes`/`len` are the resource exactly as it came off the disk image, kept
+ * host-side so a detached resource can be handed back unmodified.  See
+ * res_find and _DetachResource below -- this is not belt and braces, it is
+ * the fix for MacinTalk 2's voice switching. */
+typedef struct { unsigned type; short id; unsigned handle;
+                 unsigned char *bytes; int len; int detached; } ResEntry;
 static ResEntry g_res[MAX_RES];
 static int      g_res_count;
 static int      g_res_load = 1;
@@ -536,13 +541,54 @@ static void log_res(unsigned type, short id, int found)
     }
 }
 
+/* Hand back a resource, restoring it first if the engine took it away.
+ *
+ * A real Resource Manager reads a resource from the file every time it is not
+ * already in memory, so a client always gets it as the author wrote it.  We
+ * kept one block per resource and returned the same handle forever, which is
+ * fine until a client MODIFIES what it is given -- and MacinTalk 2 does.
+ *
+ * Measured, not deduced: loading a voice rewrites 1,548 of its `ttvi`'s 8,644
+ * bytes in place, 17.9% of the resource, while `ttvd` and `ttvw` are left
+ * alone.  So `ttvi` is patched as it is loaded.  Select that voice a second
+ * time and the engine patched its own output again; the voice then rendered
+ * endless buffers of noise, which is what NVDA users heard as buzzing after
+ * switching voices and what made an eventual further switch clear it.  Eight
+ * *different* voices in a row were always fine -- it took a revisit.
+ *
+ * The engine says which resources it means to keep: it calls _DetachResource
+ * on them, which in a real Resource Manager removes the resource from the map
+ * and makes the block the caller's own.  So detaching is the signal to
+ * restore, and nothing else changes behaviour.
+ *
+ * The block is reused rather than reallocated.  Our _DisposeHandle is a no-op
+ * and the heap only ever grows, so a fresh block per switch would exhaust it
+ * after a few dozen; the same block with the original bytes back in it is
+ * what the engine would have got from the file anyway. */
 static unsigned res_find(unsigned type, short id)
 {
     int i;
     for (i = 0; i < g_res_count; i++)
-        if (g_res[i].type == type && g_res[i].id == id)
-            return g_res[i].handle;
+        if (g_res[i].type == type && g_res[i].id == id) {
+            ResEntry *r = &g_res[i];
+            if (r->detached && r->bytes) {
+                unsigned blk = m68k_read_memory_32(r->handle);
+                if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
+                r->detached = 0;
+            }
+            return r->handle;
+        }
     return 0;
+}
+
+/* -> the entry a handle belongs to, or NULL.  Only _DetachResource needs it. */
+static ResEntry *res_by_handle(unsigned handle)
+{
+    int i;
+    if (!handle) return NULL;
+    for (i = 0; i < g_res_count; i++)
+        if (g_res[i].handle == handle) return &g_res[i];
+    return NULL;
 }
 
 /* --------------------------------------------------- the Component Manager -
@@ -1213,9 +1259,20 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 6, h, 4);
         return 1;
     }
+    case 0xA992: {                       /* _DetachResource(h)               */
+        /* The resource leaves the map and the block becomes the caller's, so
+         * whatever it does to those bytes from here on is its own business --
+         * and MacinTalk 2 patches its `ttvi` as it loads a voice.  Mark it, so
+         * that asking for it again gets the original back.  See res_find. */
+        ResEntry *r = res_by_handle(m68k_read_memory_32(csp));
+        if (r) r->detached = 1;
+        g_res_err = 0;
+        m68k_write_memory_16(RES_ERR_ADDR, 0);
+        tb_return(exc_sp, 4, 0, 0);
+        return 1;
+    }
     case 0xA9A2:                         /* _LoadResource(h) -- already in   */
     case 0xA9A3:                         /* _ReleaseResource(h)              */
-    case 0xA992:                         /* _DetachResource(h)               */
         g_res_err = 0;
         m68k_write_memory_16(RES_ERR_ADDR, 0);
         tb_return(exc_sp, 4, 0, 0);
@@ -1544,6 +1601,13 @@ OSP_API int osp_init(unsigned ram_size)
     memset(g_policy, 0, sizeof g_policy);
     g_trap_count = g_trap_overflow = g_stub_count = g_fault_count = 0;
     g_stackpc_is_instruction = -1;
+    /* osp_init doubles as "start over", and the driver rebuilds the emulator
+     * whenever the user crosses between engines, so the pristine copies from
+     * the previous life have to go or every switch leaks a voice's worth. */
+    for (v = 0; v < g_res_count; v++) {
+        if (g_res[v].bytes) free(g_res[v].bytes);
+        g_res[v].bytes = NULL; g_res[v].len = 0; g_res[v].detached = 0;
+    }
     g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
@@ -1561,6 +1625,14 @@ OSP_API int osp_init(unsigned ram_size)
 
 OSP_API void osp_shutdown(void)
 {
+    int i;
+    /* The DLL is unloaded after this, so these would leak into NVDA's heap
+     * for the rest of its life -- a voice's worth per engine switch. */
+    for (i = 0; i < g_res_count; i++) {
+        if (g_res[i].bytes) free(g_res[i].bytes);
+        g_res[i].bytes = NULL; g_res[i].len = 0; g_res[i].detached = 0;
+    }
+    g_res_count = 0;
     if (g_ram) free(g_ram);
     g_ram = NULL; g_ram_size = 0;
 }
@@ -1614,6 +1686,16 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     g_res[g_res_count].type = type;
     g_res[g_res_count].id = (short)id;
     g_res[g_res_count].handle = mp;
+    /* Keep the resource as it arrived. A client that modifies what it is given
+     * -- MacinTalk 2 patches a voice's `ttvi` -- must still get the original
+     * the next time it asks. See res_find. Registration failing for want of a
+     * few kilobytes is not worth failing the load over, so a null copy simply
+     * means "cannot restore this one".*/
+    g_res[g_res_count].bytes = (unsigned char *)malloc((size_t)len);
+    g_res[g_res_count].len = len;
+    g_res[g_res_count].detached = 0;
+    if (g_res[g_res_count].bytes)
+        memcpy(g_res[g_res_count].bytes, data, (size_t)len);
     g_res_count++;
     return mp;
 }
