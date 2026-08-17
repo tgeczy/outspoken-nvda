@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include "m68k.h"
@@ -542,6 +543,271 @@ static int fold(int c, int ignore_case)
     return c;
 }
 
+
+/* ------------------------------------------- Fixed point and extended 80 -
+ *
+ * MacinTalk Pro does its synthesis arithmetic in Apple's numeric types, and
+ * calls the Toolbox to do it: FixMul and FixDiv by the hundred, and
+ * conversions to and from the 80-bit extended format SANE works in.
+ *
+ * `Fixed` is signed 16.16, `Fract` is signed 2.30.  An extended is ten bytes:
+ * a sign bit, fifteen exponent bits biased by 16383, and a 64-bit mantissa
+ * **with an explicit integer bit** -- unlike IEEE double, nothing is implied.
+ * We already write this layout into AIFF sample rates; this reads it too.
+ */
+static double ext80_read(unsigned addr)
+{
+    unsigned hi = m68k_read_memory_16(addr);
+    unsigned m0 = m68k_read_memory_32(addr + 2);
+    unsigned m1 = m68k_read_memory_32(addr + 6);
+    double mant = (double)m0 * 4294967296.0 + (double)m1;
+    int exp = (int)(hi & 0x7FFFu);
+    double v;
+    if (exp == 0 && mant == 0.0) return 0.0;
+    v = ldexp(mant, exp - 16383 - 63);
+    return (hi & 0x8000u) ? -v : v;
+}
+
+static void ext80_write(unsigned addr, double v)
+{
+    int sign = 0, e2;
+    double m;
+    unsigned hi, m0, m1;
+    unsigned long long mant;
+    if (v < 0.0) { sign = 1; v = -v; }
+    if (!(v > 0.0)) {                        /* zero, and NaN lands here too */
+        m68k_write_memory_16(addr, (unsigned)(sign << 15));
+        m68k_write_memory_32(addr + 2, 0);
+        m68k_write_memory_32(addr + 6, 0);
+        return;
+    }
+    m = frexp(v, &e2);                       /* v = m * 2^e2, 0.5 <= m < 1   */
+    mant = (unsigned long long)ldexp(m, 64); /* integer bit lands in bit 63  */
+    hi = (unsigned)((sign << 15) | ((unsigned)(e2 - 1 + 16383) & 0x7FFFu));
+    m0 = (unsigned)(mant >> 32);
+    m1 = (unsigned)(mant & 0xFFFFFFFFu);
+    m68k_write_memory_16(addr, hi);
+    m68k_write_memory_32(addr + 2, m0);
+    m68k_write_memory_32(addr + 6, m1);
+}
+
+static int fx_signed(unsigned v)
+{
+    return (v & 0x80000000u) ? (int)(v - 0x100000000ull) : (int)v;
+}
+
+/* Round-to-nearest, which is what the Toolbox does. */
+static unsigned fx_mul(unsigned a, unsigned b)
+{
+    long long r = ((long long)fx_signed(a) * (long long)fx_signed(b));
+    return (unsigned)((r + 0x8000) >> 16);
+}
+
+static unsigned fx_div(unsigned a, unsigned b)
+{
+    long long num = ((long long)fx_signed(a)) << 16;
+    int den = fx_signed(b);
+    if (den == 0) return (fx_signed(a) < 0) ? 0x80000000u : 0x7FFFFFFFu;
+    return (unsigned)(num / den);
+}
+
+static void tb_return(unsigned exc_sp, unsigned param_bytes,
+                      unsigned result, int result_size);
+
+static unsigned short g_sane_env;
+
+static double sane_read_float(unsigned addr, unsigned fmt)
+{
+    if (fmt == 0x0000u) {
+        return ext80_read(addr);
+    } else if (fmt == 0x0800u) {
+        unsigned long long bits = ((unsigned long long)m68k_read_memory_32(addr) << 32)
+                                | (unsigned long long)m68k_read_memory_32(addr + 4);
+        double v;
+        memcpy(&v, &bits, sizeof(v));
+        return v;
+    } else if (fmt == 0x1000u) {
+        unsigned bits = m68k_read_memory_32(addr);
+        float v;
+        memcpy(&v, &bits, sizeof(v));
+        return (double)v;
+    } else if (fmt == 0x2000u) {
+        return (double)(short)m68k_read_memory_16(addr);
+    } else if (fmt == 0x2800u) {
+        return (double)fx_signed(m68k_read_memory_32(addr));
+    } else if (fmt == 0x3000u) {
+        unsigned long long bits = ((unsigned long long)m68k_read_memory_32(addr) << 32)
+                                | (unsigned long long)m68k_read_memory_32(addr + 4);
+        long long signed_bits = (long long)bits;
+        return (double)signed_bits;
+    }
+    return 0.0;
+}
+
+static void sane_write_float(unsigned addr, unsigned fmt, double v)
+{
+    if (fmt == 0x0000u) {
+        /* MSVC long double is just IEEE double, so this SANE subset trades the
+         * last 11 mantissa bits of extended precision for a working synthesis
+         * engine.  The audio path does not need bit-perfect 80-bit arithmetic. */
+        ext80_write(addr, v);
+    } else if (fmt == 0x0800u) {
+        unsigned long long bits;
+        memcpy(&bits, &v, sizeof(bits));
+        m68k_write_memory_32(addr, (unsigned)(bits >> 32));
+        m68k_write_memory_32(addr + 4, (unsigned)bits);
+    } else if (fmt == 0x1000u) {
+        float f = (float)v;
+        unsigned bits;
+        memcpy(&bits, &f, sizeof(bits));
+        m68k_write_memory_32(addr, bits);
+    } else if (fmt == 0x2000u) {
+        long r = (long)(v < 0.0 ? v - 0.5 : v + 0.5);
+        if (r > 32767L) r = 32767L;
+        else if (r < -32768L) r = -32768L;
+        m68k_write_memory_16(addr, (unsigned)(unsigned short)r);
+    } else if (fmt == 0x2800u) {
+        double r = v < 0.0 ? v - 0.5 : v + 0.5;
+        if (r > 2147483647.0) r = 2147483647.0;
+        else if (r < -2147483648.0) r = -2147483648.0;
+        m68k_write_memory_32(addr, (unsigned)(long)r);
+    } else if (fmt == 0x3000u) {
+        double r = v < 0.0 ? v - 0.5 : v + 0.5;
+        unsigned long long bits = (unsigned long long)(long long)r;
+        m68k_write_memory_32(addr, (unsigned)(bits >> 32));
+        m68k_write_memory_32(addr + 4, (unsigned)bits);
+    }
+}
+
+static void sane_set_relation(unsigned exc_sp, double dst, double src)
+{
+    unsigned sr = m68k_read_memory_16(exc_sp);
+    sr &= ~0x001Fu;                         /* X N Z V C */
+    if (dst < src) sr |= 0x08u | 0x01u;     /* N and C */
+    else if (dst == src) sr |= 0x04u;       /* Z */
+    m68k_write_memory_16(exc_sp, sr);
+}
+
+static int sane_fail(unsigned short trap, unsigned short opword, unsigned pc)
+{
+    fprintf(stderr, "unimplemented SANE trap $%04X opword $%04X at 0x%X\n",
+            trap, opword, pc);
+    g_stop_reason = STOP_EXCEPTION;
+    g_stop_vector = 10;
+    g_stop_pc = pc;
+    m68k_end_timeslice();
+    return 1;
+}
+
+static int sane_return(unsigned exc_sp, unsigned param_bytes)
+{
+    tb_return(exc_sp, param_bytes, 0, 0);
+    return 1;
+}
+
+static int serve_sane_trap(unsigned short trap, unsigned exc_sp,
+                           unsigned csp, unsigned resume_pc)
+{
+    unsigned short opword = (unsigned short)m68k_read_memory_16(csp);
+    unsigned fmt = (unsigned)(opword & 0x7800u);
+    unsigned op = (unsigned)(opword & 0x07FFu);
+    unsigned dst = m68k_read_memory_32(csp + 2);
+    unsigned src = m68k_read_memory_32(csp + 6);
+    double d, s, r;
+
+    if (trap == 0xA9ECu) {                  /* Pack5 / Elems68K */
+        if (opword == 0x8010u || opword == 0x8012u) {
+            d = ext80_read(dst);
+            s = ext80_read(src);
+            ext80_write(dst, pow(d, s));
+            return sane_return(exc_sp, 10);
+        }
+        if (fmt != 0x0000u) return sane_fail(trap, opword, resume_pc - 2u);
+        d = ext80_read(dst);
+        switch (op) {
+        case 0x0000u: r = log(d); break;           /* FLNX    */
+        case 0x0002u: r = log(d) / log(2.0); break;/* FLOG2X  */
+        case 0x0004u: r = log1p(d); break;         /* FLN1X   */
+        case 0x0006u: r = log1p(d) / log(2.0); break;
+        case 0x0008u: r = exp(d); break;           /* FEXPX   */
+        case 0x000Au: r = pow(2.0, d); break;      /* FEXP2X  */
+        case 0x000Cu: r = exp(d) - 1.0; break;     /* FEXP1X  */
+        case 0x000Eu: r = pow(2.0, d) - 1.0; break;
+        case 0x0018u: r = sin(d); break;
+        case 0x001Au: r = cos(d); break;
+        case 0x001Cu: r = tan(d); break;
+        case 0x001Eu: r = atan(d); break;
+        default: return sane_fail(trap, opword, resume_pc - 2u);
+        }
+        ext80_write(dst, r);
+        return sane_return(exc_sp, 6);
+    }
+
+    if (trap != 0xA9EBu) return 0;
+
+    switch (op) {
+    case 0x0000u: case 0x0002u: case 0x0004u: case 0x0006u:
+    case 0x000Cu: case 0x0018u: {
+        d = ext80_read(dst);
+        s = sane_read_float(src, fmt);
+        if (op == 0x0000u) r = d + s;
+        else if (op == 0x0002u) r = d - s;
+        else if (op == 0x0004u) r = d * s;
+        else if (op == 0x0006u) r = d / s;
+        else if (op == 0x000Cu) r = fmod(d, s);
+        else r = ldexp(d, (int)s);
+        ext80_write(dst, r);
+        return sane_return(exc_sp, 10);
+    }
+    case 0x0008u: case 0x000Au:
+        sane_set_relation(exc_sp, ext80_read(dst), sane_read_float(src, fmt));
+        return sane_return(exc_sp, 10);
+    case 0x000Eu:
+        ext80_write(dst, sane_read_float(src, fmt));
+        return sane_return(exc_sp, 10);
+    case 0x0010u:
+        sane_write_float(dst, fmt, ext80_read(src));
+        return sane_return(exc_sp, 10);
+    case 0x0012u:
+        ext80_write(dst, sqrt(ext80_read(dst)));
+        return sane_return(exc_sp, 6);
+    case 0x0014u:
+        ext80_write(dst, floor(ext80_read(dst) + 0.5));
+        return sane_return(exc_sp, 6);
+    case 0x0016u:
+        d = ext80_read(dst);
+        ext80_write(dst, d < 0.0 ? ceil(d) : floor(d));
+        return sane_return(exc_sp, 6);
+    case 0x001Au:
+        ext80_write(dst, floor(log(fabs(ext80_read(dst))) / log(2.0)));
+        return sane_return(exc_sp, 6);
+    case 0x001Cu:
+        m68k_write_memory_16(dst, ext80_read(src) == 0.0 ? 4u : 5u);
+        return sane_return(exc_sp, 10);
+    case 0x000Du:
+        ext80_write(dst, -ext80_read(dst));
+        return sane_return(exc_sp, 6);
+    case 0x000Fu:
+        ext80_write(dst, fabs(ext80_read(dst)));
+        return sane_return(exc_sp, 6);
+    case 0x0001u:                         /* FSETENV */
+        g_sane_env = m68k_read_memory_16(dst);
+        return sane_return(exc_sp, 6);
+    case 0x0003u:                         /* FGETENV */
+        m68k_write_memory_16(dst, g_sane_env);
+        return sane_return(exc_sp, 6);
+    case 0x0017u:                         /* FPROCENTRY */
+        m68k_write_memory_16(dst, g_sane_env);
+        g_sane_env = 0;
+        return sane_return(exc_sp, 6);
+    case 0x0019u:                         /* FPROCEXIT */
+        g_sane_env = m68k_read_memory_16(dst);
+        return sane_return(exc_sp, 6);
+    default:
+        return sane_fail(trap, opword, resume_pc - 2u);
+    }
+}
+
 /* Returns 1 if we served the trap. */
 static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0_out)
 {
@@ -781,6 +1047,25 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
             return 1;
         }
         return 0;                      /* anything else is news; let it stub */
+    case 0xA198:                       /* thin wrapper, result in D0        */
+        /* gtse 1 +$82CE is `movea.l (a7)+,a1 / moveq #1,d0 / A198 / jmp (a1)`
+         * -- no stack arguments, the result is D0, and it sits among the file
+         * wrappers at +$82xx, called from the module loader at +$5E42 and
+         * +$6286.  Stubbed it left D0 as the 1 that was moved in, and no Mac
+         * OSErr is ever 1, so the loader read that as a failure.
+         *
+         * Answered as noErr, which is provisional: the trap is not identified
+         * from a call site the way the rest here are, only its shape and its
+         * neighbours.  If MacinTalk Pro ever behaves oddly around loading a
+         * module, doubt this first. */
+        *d0_out = 0; *a0_out = a0;
+        return 1;
+    case 0xA01C:                       /* _FreeMem -> free bytes in D0      */
+        /* One contiguous free block, so free and largest-free are the same
+         * number here. gtse 1 +$2E92 asks before deciding how much to keep. */
+        *d0_out = (g_heap_end > g_heap_next) ? (g_heap_end - g_heap_next) : 0;
+        *a0_out = a0;
+        return 1;
     case 0xA025:                       /* _GetHandleSize(h) -> long in D0   */
         /* Answerable exactly now that every Handle records its size. Pro asks
          * fifteen times per utterance and sizes buffers from the answer. */
@@ -1779,7 +2064,19 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
         return 1;
     case 0xA800: {                      /* _SoundDispatch, selector in D0 */
         unsigned d0 = m68k_get_reg(NULL, M68K_REG_D0);
-        unsigned selector = d0 & 0xFFFFu;
+        /* **D0 is (selector << 16) | argument byte count**, which the
+         * GetVoiceInfo case below already depends on: $0614000C is selector
+         * $0614 with twelve bytes, and GetVoiceInfo does take twelve.
+         *
+         * Reading the low word as the selector -- as this did -- makes the
+         * two indistinguishable, and MacinTalk Pro calls selector $000C with
+         * eight bytes, whose low word is 8. That ran the SndChannelStatus
+         * branch against a completely different argument layout, took a
+         * caller-supplied long as a pointer, and wrote through 0x1C380028,
+         * which is not even inside the emulator's 16 MB. It was the wild
+         * write that sent Pro branching into a wave table. */
+        unsigned bytes = d0 & 0xFFFFu;
+        unsigned selector = d0 >> 16;
 
         /* The Speech Manager rides on the Sound Manager's trap, so this is not
          * a sound call at all:
@@ -1837,7 +2134,7 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
             tb_return(exc_sp, 12, found ? 0u : 0xFF0Cu, 2);
             return 1;
         }
-        if (selector == 8) {            /* SndChannelStatus(chan, len, stat) */
+        if (selector == 8 && bytes == 10) {  /* SndChannelStatus(chan,len,stat) */
             unsigned stat = m68k_read_memory_32(csp + 0);
             unsigned len = m68k_read_memory_16(csp + 4);
             unsigned i;
@@ -1849,7 +2146,25 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
             tb_return(exc_sp, 10, 0, 2);
             return 1;
         }
-        tb_return(exc_sp, 10, 0, 2);
+        if (d0 == 0x000C0008u) {
+            /* SndSoundManagerVersion: **no arguments at all**, and a
+             * four-byte NumVersion result. Read off the call site in the
+             * loaded module -- `subq.l #$4,a7` reserves the long, nothing is
+             * pushed, then `move.l (a7)+` pops it and `cmpi.b #$3` tests the
+             * major version.
+             *
+             * So D0's low word is NOT an argument byte count here, and
+             * deriving one from it removes eight bytes that were never
+             * pushed. Answer 2.0.0: below 3, which selects the classic
+             * channel-and-bufferCmd path this host actually models. */
+            tb_return(exc_sp, 0, 0x02008000u, 4);
+            return 1;
+        }
+        /* Anything else: answer noErr but **remove exactly what was pushed**.
+         * The byte count is in D0 and guessing it is how a stack gets one
+         * argument out of step, which does not fail here -- it fails later,
+         * somewhere unrelated, as a wild pointer. */
+        tb_return(exc_sp, bytes <= 64 ? bytes : 10, 0, 2);
         return 1;
     }
     default:
@@ -2002,6 +2317,82 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 4, (r && r->map_entry) ? (unsigned)r->map_entry : 0, 4);
         return 1;
     }
+    /* ---- Fixed point, named from their call sites --------------------- *
+     *
+     * `$A84D` is handed #$FF0000 and #$10000 -- 255.0 and 1.0 -- and returns
+     * one long, and `$A844` is handed a pointer to ten bytes the caller just
+     * filled with a word and two longs, which is an extended, and returns a
+     * long.  They sit in the documented contiguous block with Long2Fix,
+     * Fix2X, X2Frac, FracMul, FixMul and FixRound, and every unserved trap in
+     * this engine falls inside it.
+     *
+     * Toolbox convention: the caller reserves the result, then pushes
+     * arguments left to right, so the LAST argument is on top. */
+    case 0xA83F:                         /* _Long2Fix(long) -> Fixed          */
+        tb_return(exc_sp, 4,
+                  (unsigned)(m68k_read_memory_32(csp) << 16), 4);
+        return 1;
+    case 0xA840:                         /* _Fix2Long(Fixed) -> long          */
+        tb_return(exc_sp, 4,
+                  (unsigned)((fx_signed(m68k_read_memory_32(csp)) + 0x8000)
+                             >> 16), 4);
+        return 1;
+    case 0xA868:                         /* _FixMul(Fixed, Fixed) -> Fixed    */
+        tb_return(exc_sp, 8, fx_mul(m68k_read_memory_32(csp + 4),
+                                    m68k_read_memory_32(csp)), 4);
+        return 1;
+    case 0xA84D:                         /* _FixDiv(Fixed, Fixed) -> Fixed    */
+        tb_return(exc_sp, 8, fx_div(m68k_read_memory_32(csp + 4),
+                                    m68k_read_memory_32(csp)), 4);
+        return 1;
+    case 0xA86C:                         /* _FixRound(Fixed) -> short         */
+        tb_return(exc_sp, 4,
+                  (unsigned)((fx_signed(m68k_read_memory_32(csp)) + 0x8000)
+                             >> 16), 2);
+        return 1;
+    case 0xA84A: {                       /* _FracMul(Fract, Fract) -> Fract   */
+        /* Fract is 2.30, so the product shifts by 30 rather than 16. */
+        long long r = (long long)fx_signed(m68k_read_memory_32(csp + 4))
+                    * (long long)fx_signed(m68k_read_memory_32(csp));
+        tb_return(exc_sp, 8, (unsigned)((r + (1 << 29)) >> 30), 4);
+        return 1;
+    }
+    case 0xA843: {                       /* _Fix2X(extended *, Fixed)         */
+        /* The pointer is a ten-byte local -- `-$a(a6)` at gtse 1 +$7C88 --
+         * which is an extended exactly.  The reserved long is discarded by
+         * the caller, so answering with the value costs nothing and satisfies
+         * either reading of the result. */
+        unsigned val = m68k_read_memory_32(csp);
+        unsigned dst = m68k_read_memory_32(csp + 4);
+        if (dst) ext80_write(dst, fx_signed(val) / 65536.0);
+        tb_return(exc_sp, 8, val, 4);
+        return 1;
+    }
+    case 0xA844: {                       /* _X2Fix(extended *) -> Fixed       */
+        unsigned src = m68k_read_memory_32(csp);
+        double v = src ? ext80_read(src) : 0.0;
+        double f = v * 65536.0;
+        long long r;
+        if (f > 2147483647.0) r = 2147483647;
+        else if (f < -2147483648.0) r = -2147483648LL;
+        else r = (long long)(f < 0 ? f - 0.5 : f + 0.5);
+        tb_return(exc_sp, 4, (unsigned)r, 4);
+        return 1;
+    }
+    case 0xA846: {                       /* _X2Frac(extended *) -> Fract      */
+        unsigned src = m68k_read_memory_32(csp);
+        double v = src ? ext80_read(src) : 0.0;
+        double f = v * 1073741824.0;               /* 2^30 */
+        long long r;
+        if (f > 2147483647.0) r = 2147483647;
+        else if (f < -2147483648.0) r = -2147483648LL;
+        else r = (long long)(f < 0 ? f - 0.5 : f + 0.5);
+        tb_return(exc_sp, 4, (unsigned)r, 4);
+        return 1;
+    }
+    case 0xA9EB:                         /* _Pack4 / FP68K                   */
+    case 0xA9EC:                         /* _Pack5 / Elems68K                */
+        return serve_sane_trap((unsigned short)base, exc_sp, csp, resume_pc);
     case 0xA9A5: {                       /* _SizeResource(h) -> long          */
         /* How big is this resource.  Answerable exactly, because the pristine
          * copy kept for _DetachResource carries the length -- and a wrong
@@ -2424,6 +2815,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_gestalt_proc = 1;
     g_exc_frame = 6u;
     g_instance_error = 0;
+    g_sane_env = 0;
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_init();
     m68k_set_instr_hook_callback(instr_hook);
