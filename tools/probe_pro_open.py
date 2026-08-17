@@ -112,7 +112,7 @@ def read_names(folder):
     return out
 
 
-def build(want=None, quiet=False):
+def build(want=None, quiet=False, snap=None, halt=0):
     """Register everything and Open the component.
 
     -> (host, instance token, voice, Open result). Shared with
@@ -244,6 +244,13 @@ def build(want=None, quiet=False):
 
     h.set_reg(osp.A7, STACK)
     h.set_reg(osp.SR, 0x2700)
+    # `snap` is an offset into gtse 1 to watch during Open itself. Reading
+    # emulated memory settles in one run what the disassembly kept getting
+    # wrong -- gtse 1 is 68020 code and the listing desynchronises after every
+    # long multiply and bitfield instruction.
+    if snap is not None:
+        h.snap_at(CODE + snap, halt_on=halt)
+
     reason, result = h.component_call(tok, OPEN, [tok], max_instr=200_000_000)
     return h, tok, voice, (reason, result)
 
