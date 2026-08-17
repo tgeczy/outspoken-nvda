@@ -1944,6 +1944,7 @@ static int      g_cb_pending;
 static int      g_in_callback;
 static unsigned g_cb_chan;
 static int      g_cb_runs;        /* callbacks actually executed */
+static long long g_cb_queued_instr;
 
 
 /* Whether a sound callback may run while the engine is still mid-call.
@@ -1957,6 +1958,7 @@ static int      g_cb_runs;        /* callbacks actually executed */
  *
  * So this is per-engine policy, set from Python, not a global truth. */
 static int      g_defer_cb;
+#define IN_CALL_CB_WAIT 1000000LL
 
 /* Every Sound Manager command, in order.  MacinTalk 2 drives audio
  * asynchronously, so "why did it stop after one buffer" is a question about
@@ -1965,13 +1967,23 @@ static int      g_defer_cb;
 static unsigned short g_sndlog[MAX_SNDLOG];
 static int            g_sndlog_n;
 
+static void queue_synthetic_callback(unsigned chan, unsigned hdr)
+{
+    m68k_write_memory_16(CB_SCRATCH + 0, callBackCmd);
+    m68k_write_memory_16(CB_SCRATCH + 2, 4);
+    m68k_write_memory_32(CB_SCRATCH + 4, hdr);
+    g_cb_chan = chan;
+    g_cb_pending = 1;
+    g_cb_queued_instr = g_instr_count;
+}
+
 /* Take one buffer's worth of samples.
  *
  * `length` is read from the header every time and never assumed.  The driver
  * rewrites it (SetBufLength, +$4C36) so the last buffer of an utterance is
  * short; taking a fixed 3870 would append stale bytes to every phrase and show
  * up as a ~6 Hz chop under the voice. */
-static void take_buffer(unsigned hdr)
+static void take_std_buffer(unsigned hdr)
 {
     unsigned len = m68k_read_memory_32(hdr + 4);
     unsigned ptr = m68k_read_memory_32(hdr + 0);
@@ -1994,6 +2006,69 @@ static void take_buffer(unsigned hdr)
         g_buflog_n++;
     }
     g_buffers_taken++;
+}
+
+static int take_buffer(unsigned hdr)
+{
+    unsigned encode = m68k_read_memory_8(hdr + 20);
+    unsigned len, ptr, area, channels, frames, bits, bytes_per_sample, i;
+
+    if (encode == 0x00u) {
+        take_std_buffer(hdr);
+        return 1;
+    }
+    if (encode == 0xFEu) {
+        fprintf(stderr, "compressed SoundHeader at 0x%X is not supported\n", hdr);
+        g_stop_reason = STOP_EXCEPTION;
+        g_stop_vector = 10;
+        g_stop_pc = m68k_get_reg(NULL, M68K_REG_PPC);
+        m68k_end_timeslice();
+        return 0;
+    }
+    if (encode != 0xFFu) {
+        fprintf(stderr, "unknown SoundHeader encode 0x%02X at 0x%X\n",
+                encode, hdr);
+        g_stop_reason = STOP_EXCEPTION;
+        g_stop_vector = 10;
+        g_stop_pc = m68k_get_reg(NULL, M68K_REG_PPC);
+        m68k_end_timeslice();
+        return 0;
+    }
+
+    ptr = m68k_read_memory_32(hdr + 0);
+    channels = m68k_read_memory_32(hdr + 4);
+    frames = m68k_read_memory_32(hdr + 22);
+    bits = m68k_read_memory_16(hdr + 48);
+    bytes_per_sample = (bits + 7u) / 8u;
+    if (!channels || !bytes_per_sample || frames > 0x10000u
+        || channels > 64u || bytes_per_sample > 16u) {
+        note_fault(hdr, 0, 0);
+        return 0;
+    }
+    len = frames * channels * bytes_per_sample;
+    if (frames && len / frames != channels * bytes_per_sample) {
+        note_fault(hdr + 22, 0, 4);
+        return 0;
+    }
+    area = ptr ? ptr : (hdr + 64u);
+
+    g_sample_rate = m68k_read_memory_32(hdr + 8);
+    if (len != 0x0F1E) g_short_buffers++;
+    if (len > 0x10000u) {
+        note_fault(hdr + 22, 0, 4);
+        return 0;
+    }
+    for (i = 0; i < len; i++) {
+        if (g_pcm_len >= PCM_CAP) { g_pcm_overflow++; return 1; }
+        g_pcm[g_pcm_len++] = (unsigned char)m68k_read_memory_8(area + i);
+    }
+    if (g_buflog_n < BUFLOG_CAP) {
+        g_buflog_addr[g_buflog_n] = hdr;
+        g_buflog_len[g_buflog_n] = len;
+        g_buflog_n++;
+    }
+    g_buffers_taken++;
+    return 1;
 }
 
 static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
@@ -2020,7 +2095,9 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
 
         if (g_sndlog_n < MAX_SNDLOG) g_sndlog[g_sndlog_n++] = (unsigned short)cmd;
         if (cmd == bufferCmd) {
-            take_buffer(param2);
+            if (!take_buffer(param2)) return 1;
+            if (!nowait && m68k_read_memory_32(chan + 8))
+                queue_synthetic_callback(chan, param2);
         } else if (cmd == callBackCmd) {
             /* Copy the command somewhere that outlives the caller's frame,
              * then run the callback once we are safely outside m68k_execute. */
@@ -2029,6 +2106,7 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
                                     m68k_read_memory_8(cmdp + i));
             g_cb_chan = chan;
             g_cb_pending = 1;
+            g_cb_queued_instr = g_instr_count;
         }
         /* quietCmd / flushCmd: there is no queue to drop, we already took it */
         tb_return(exc_sp, pbytes, 0, 2);
@@ -2653,6 +2731,13 @@ static void run_pending_callback(void)
 {
     unsigned proc = m68k_read_memory_32(g_cb_chan + 8);   /* SndChannel.callBack */
     unsigned save_pc, save_sp, sp;
+    static const int R[15] = {
+        M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3,
+        M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+        M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3,
+        M68K_REG_A4, M68K_REG_A5, M68K_REG_A6 };
+    unsigned save_reg[15];
+    int k;
 
     g_cb_pending = 0;
     if (!proc) return;
@@ -2660,6 +2745,8 @@ static void run_pending_callback(void)
 
     save_pc = m68k_get_reg(NULL, M68K_REG_PC);
     save_sp = m68k_get_reg(NULL, M68K_REG_SP);
+    for (k = 0; k < 15; k++)
+        save_reg[k] = m68k_get_reg(NULL, (m68k_register_t)R[k]);
 
     sp = save_sp;
     sp -= 4; m68k_write_memory_32(sp, g_cb_chan);    /* chan, pushed first  */
@@ -2673,6 +2760,8 @@ static void run_pending_callback(void)
         m68k_execute(100000);
     g_in_callback = 0;
 
+    for (k = 0; k < 15; k++)
+        m68k_set_reg((m68k_register_t)R[k], save_reg[k]);
     m68k_set_reg(M68K_REG_PC, save_pc);
     m68k_set_reg(M68K_REG_SP, save_sp);
 }
@@ -2707,6 +2796,13 @@ static void run_pending_deferred(void)
 {
     unsigned proc = g_dt_proc, parm = g_dt_parm;
     unsigned save_pc, save_sp, save_a1, sp;
+    static const int R[15] = {
+        M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3,
+        M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+        M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3,
+        M68K_REG_A4, M68K_REG_A5, M68K_REG_A6 };
+    unsigned save_reg[15];
+    int k;
 
     g_dt_pending = 0;
     if (!proc) return;
@@ -2715,6 +2811,8 @@ static void run_pending_deferred(void)
     save_pc = m68k_get_reg(NULL, M68K_REG_PC);
     save_sp = m68k_get_reg(NULL, M68K_REG_SP);
     save_a1 = m68k_get_reg(NULL, M68K_REG_A1);
+    for (k = 0; k < 15; k++)
+        save_reg[k] = m68k_get_reg(NULL, (m68k_register_t)R[k]);
 
     sp = save_sp - 4;
     m68k_write_memory_32(sp, MAGIC_DT_RET);
@@ -2727,9 +2825,17 @@ static void run_pending_deferred(void)
         m68k_execute(100000);
     g_in_deferred = 0;
 
+    for (k = 0; k < 15; k++)
+        m68k_set_reg((m68k_register_t)R[k], save_reg[k]);
     m68k_set_reg(M68K_REG_PC, save_pc);
     m68k_set_reg(M68K_REG_SP, save_sp);
     m68k_set_reg(M68K_REG_A1, save_a1);
+}
+
+static int callback_due_in_call(void)
+{
+    return g_cb_pending
+        && (!g_defer_cb || g_instr_count - g_cb_queued_instr >= IN_CALL_CB_WAIT);
 }
 
 static void instr_hook(unsigned int pc)
@@ -2859,7 +2965,8 @@ OSP_API int osp_init(unsigned ram_size)
     g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
-    g_cb_pending = 0; g_in_callback = 0; g_sample_rate = 0;
+    g_cb_pending = 0; g_in_callback = 0; g_cb_queued_instr = 0;
+    g_sample_rate = 0;
     g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
     g_dt_pending = 0; g_in_deferred = 0; g_dt_runs = 0;
     g_dt_proc = g_dt_parm = 0;
@@ -3201,7 +3308,7 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 
     while (g_stop_reason == STOP_RUNNING) {
         m68k_execute(100000);
-        if (g_cb_pending && !g_defer_cb && g_stop_reason == STOP_RUNNING)
+        if (callback_due_in_call() && g_stop_reason == STOP_RUNNING)
             run_pending_callback();
         if (g_dt_pending && g_stop_reason == STOP_RUNNING)
             run_pending_deferred();
@@ -3255,7 +3362,7 @@ OSP_API int osp_resume(long long max_instr)
     g_instr_count = 0;
     while (g_stop_reason == STOP_RUNNING) {
         m68k_execute(100000);
-        if (g_cb_pending && g_stop_reason == STOP_RUNNING)
+        if (callback_due_in_call() && g_stop_reason == STOP_RUNNING)
             run_pending_callback();
     }
     return g_stop_reason;
