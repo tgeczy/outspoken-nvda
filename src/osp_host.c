@@ -253,6 +253,18 @@ static int      g_mem_traps;
  * uninitialised word here turns an allocation failure into a random error
  * code -- or worse, an allocation *success* reported as a failure. */
 #define MEM_ERR_ADDR  0x0220u
+/* TopMapHndl: a Handle to the resource MAP of the most recently opened
+ * resource file. **MacinTalk Pro reads it directly** -- `gtse 1 +$59D6` is
+ * `move.l $a50.w,(a0)` -- and then does its own resource lookups against
+ * that map: it adds RsrcMapEntry's offset to it, pulls the 24-bit data
+ * offset out of the reference entry, adds the data-area base from the
+ * map's own header copy, and reads the bytes straight out of the file.
+ *
+ * Left at zero it read address 0, which holds the initial SSP, and every
+ * offset after that was nonsense -- the symptom being a voice config full
+ * of fragments of other resources' names. */
+#define TOP_MAP_HNDL  0x0A50u
+#define CUR_MAP_ADDR  0x0A5Au     /* CurMap, the current file's refNum */
 
 /* ------------------------------------------------ one file, and only one -
  *
@@ -293,6 +305,7 @@ typedef struct {
     unsigned char name[64];              /* Str63, as the Mac holds it */
     unsigned char *fork[2];              /* [FORK_DATA], [FORK_RSRC]   */
     int            len[2];
+    unsigned       map;                  /* Handle to the map, or 0    */
 } FileEntry;
 static FileEntry g_files[MAX_FILES];
 static int       g_file_count;
@@ -341,6 +354,41 @@ static void file_put_name(int idx, unsigned ptr)
     n = g_files[idx].name[0];
     for (i = 0; i <= n; i++)
         m68k_write_memory_8(ptr + (unsigned)i, g_files[idx].name[i]);
+}
+
+/* Put a copy of this file's resource MAP into emulated memory and answer
+ * with a Handle to it, caching per file.
+ *
+ * A resource fork begins with four longs -- data offset, map offset, data
+ * length, map length -- and the map begins with a copy of that same header,
+ * which is why the engine can read the data-area base out of the map alone.
+ * We hand back the real bytes, so every offset the engine computes against
+ * them lands where it should in the fork we are also serving through _Read.
+ *
+ * -> 0 if this file has no resource fork, or the heap is full. */
+static unsigned file_map_handle(int idx)
+{
+    FileEntry *f;
+    const unsigned char *fk;
+    unsigned mOff, mLen, blk, mp;
+    if (idx < 0 || idx >= g_file_count) return 0;
+    f = &g_files[idx];
+    if (f->map) return f->map;
+    fk = f->fork[FORK_RSRC];
+    if (!fk || f->len[FORK_RSRC] < 16) return 0;
+    mOff = ((unsigned)fk[4] << 24) | ((unsigned)fk[5] << 16)
+         | ((unsigned)fk[6] << 8)  |  (unsigned)fk[7];
+    mLen = ((unsigned)fk[12] << 24) | ((unsigned)fk[13] << 16)
+         | ((unsigned)fk[14] << 8)  |  (unsigned)fk[15];
+    if (!mLen || mOff + mLen > (unsigned)f->len[FORK_RSRC]) return 0;
+    blk = heap_alloc(mLen);
+    if (!blk) return 0;
+    memcpy(g_ram + blk, fk + mOff, (size_t)mLen);
+    mp = heap_alloc(4);
+    if (!mp) return 0;
+    m68k_write_memory_32(mp, blk);
+    f->map = mp;
+    return mp;
 }
 
 /* -> refNum, or 0 if there is no room or no such file. */
@@ -1961,6 +2009,11 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * flat table, which means "no particular file". */
         OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(csp));
         g_cur_res_file = f ? f->file : -1;
+        if (f) {
+            m68k_write_memory_32(TOP_MAP_HNDL, file_map_handle(f->file));
+            m68k_write_memory_16(CUR_MAP_ADDR,
+                                 (unsigned)m68k_read_memory_16(csp));
+        }
         g_res_err = 0;
         m68k_write_memory_16(RES_ERR_ADDR, 0);
         tb_return(exc_sp, 2, 0, 0);
@@ -1980,7 +2033,11 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * Cecy 1 +$830 tests for, and that is still true. */
         int idx = no_files() ? -1 : file_by_name(m68k_read_memory_32(csp + 2));
         int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
-        if (ref && idx >= 0) g_cur_res_file = idx;
+        if (ref && idx >= 0) {
+            g_cur_res_file = idx;
+            m68k_write_memory_32(TOP_MAP_HNDL, file_map_handle(idx));
+            m68k_write_memory_16(CUR_MAP_ADDR, (unsigned)ref);
+        }
         g_res_err = ref ? 0 : (short)(-43);
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
         tb_return(exc_sp, 12, (unsigned)(ref ? ref : 1), 2);
@@ -2001,7 +2058,13 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
         /* The Resource Manager makes a newly opened file the current one, and
          * that is what scopes every Get1* that follows. */
-        if (ref && idx >= 0) g_cur_res_file = idx;
+        if (ref && idx >= 0) {
+            g_cur_res_file = idx;
+            /* The Resource Manager points TopMapHndl at the file just opened,
+             * and Pro reads it directly rather than asking. */
+            m68k_write_memory_32(TOP_MAP_HNDL, file_map_handle(idx));
+            m68k_write_memory_16(CUR_MAP_ADDR, (unsigned)ref);
+        }
         g_res_err = ref ? 0 : (short)(-43);              /* fnfErr */
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
         tb_return(exc_sp, 8, (unsigned)(ref ? ref : -1), 2);
