@@ -75,20 +75,38 @@ class Host(object):
         L.osp_read_block.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_int]
         L.osp_set_reg.argtypes = [ctypes.c_int, ctypes.c_uint]
         L.osp_heap_init.argtypes = [ctypes.c_uint, ctypes.c_uint]
-        L.osp_set_cpu.argtypes = [ctypes.c_int]
-        L.osp_set_cpu.restype = ctypes.c_int
-        L.osp_add_file.argtypes = [ctypes.c_char_p, ctypes.c_int,
-                                   ctypes.c_char_p, ctypes.c_int,
-                                   ctypes.c_char_p, ctypes.c_int]
-        L.osp_add_file.restype = ctypes.c_int
-        L.osp_map_entry.argtypes = [ctypes.c_uint, ctypes.c_int]
-        L.osp_map_entry.restype = ctypes.c_int
-        L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_char_p,
-                                        ctypes.c_int]
-        L.osp_name_resource.restype = ctypes.c_int
-        L.osp_instance_error.restype = ctypes.c_int
-        L.osp_last_file_request.restype = ctypes.c_char_p
+        # Everything MacinTalk Pro needs, bound OPTIONALLY.
+        #
+        # **NVDA holds osp_host.dll open for as long as the synthesizer is
+        # loaded, so it cannot be replaced in place.** A user who updates the
+        # add-on and does not restart is running new Python against an old
+        # binary, and binding a symbol that binary does not export raises at
+        # `Host()` -- which would take `.sp` and MacinTalk 2 down with it, for
+        # want of functions neither of them uses. That is the worst failure
+        # this driver has: not a wrong voice, but no voice at all.
+        #
+        # Missing here means Pro is unavailable and nothing else changes.
+        self.has_files = True
+        try:
+            L.osp_set_cpu.argtypes = [ctypes.c_int]
+            L.osp_set_cpu.restype = ctypes.c_int
+            L.osp_add_file.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.c_char_p, ctypes.c_int]
+            L.osp_add_file.restype = ctypes.c_int
+            L.osp_map_entry.argtypes = [ctypes.c_uint, ctypes.c_int]
+            L.osp_map_entry.restype = ctypes.c_int
+            L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_char_p,
+                                            ctypes.c_int]
+            L.osp_name_resource.restype = ctypes.c_int
+            L.osp_instance_error.restype = ctypes.c_int
+            L.osp_last_file_request.restype = ctypes.c_char_p
+        except AttributeError:
+            self.has_files = False
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
+        # The fifth argument (which file a resource came from) is new; an
+        # older binary takes four and ignores what it never reads, and cdecl
+        # lets the caller push more than the callee uses.
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
                                        ctypes.c_char_p, ctypes.c_int,
                                        ctypes.c_int]
