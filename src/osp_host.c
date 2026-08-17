@@ -458,6 +458,9 @@ static long long g_tick_instr;    /* when the last tick was issued     */
  * differently twice, which three engine tests catch immediately. Only
  * MacinTalk Pro waits on Ticks, so only MacinTalk Pro turns this on. */
 static int      g_tick_auto;
+/* Experiment only: seed one synthetic sound callback so Pro's own
+ * callBackCmds become observable. Off by default. */
+static int      g_seed_cb;
 
 /* The Deferred Task Manager.
  *
@@ -2113,6 +2116,10 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
         if (g_sndlog_n < MAX_SNDLOG) g_sndlog[g_sndlog_n++] = (unsigned short)cmd;
         if (cmd == bufferCmd) {
             if (!take_buffer(param2)) return 1;
+            /* EXPERIMENT: seed the cycle so Pro's own callBackCmds can be
+             * observed. See the note below; this is not the final answer. */
+            if (g_seed_cb && m68k_read_memory_32(chan + 8))
+                queue_synthetic_callback(chan, param2);
             /* No synthetic callback. Both engines queue their OWN
              * callBackCmd behind every bufferCmd -- MacinTalk 2 via
              * _SndDoCommand at Cecy 1 +$391A, MacinTalk Pro 199 times from
@@ -2995,7 +3002,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_file_count = 0;
     g_cur_res_file = -1;
     g_handle_count = 0;
-    g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0; g_tick_instr = 0; g_tick_auto = 0;
+    g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0; g_tick_instr = 0; g_tick_auto = 0; g_seed_cb = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
     g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
@@ -3317,6 +3324,7 @@ OSP_API unsigned osp_framelog_get(int i, int k)
 
 OSP_API unsigned osp_tick_count(void) { return g_ticks; }
 OSP_API void osp_auto_ticks(int on) { g_tick_auto = on ? 1 : 0; }
+OSP_API void osp_seed_callback(int on) { g_seed_cb = on ? 1 : 0; }
 
 OSP_API void osp_set_trap_policy(unsigned word, unsigned d0, unsigned a0)
 {
