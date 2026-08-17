@@ -192,7 +192,7 @@ class Host(object):
         self.lib.osp_heap_init(base, size)
 
     #: Gestalt processor values, which is how the host names a CPU.
-    CPU_68000, CPU_68010, CPU_68020, CPU_68030 = 1, 2, 3, 4
+    CPU_68000, CPU_68010, CPU_68020, CPU_68030, CPU_68040 = 1, 2, 3, 4, 5
 
     def name_resource(self, handle, name):
         """Give a registered resource its Mac name.

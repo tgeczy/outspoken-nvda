@@ -263,6 +263,11 @@ static int      g_mem_traps;
  * Left at zero it read address 0, which holds the initial SSP, and every
  * offset after that was nonsense -- the symptom being a voice config full
  * of fragments of other resources' names. */
+/* Defined with the heap further down; the one-file File Manager below
+ * materialises a resource map and so needs both before then. */
+static unsigned heap_alloc(unsigned size);
+static void note_handle(unsigned mp, unsigned size);
+
 #define TOP_MAP_HNDL  0x0A50u
 #define CUR_MAP_ADDR  0x0A5Au     /* CurMap, the current file's refNum */
 
@@ -387,6 +392,7 @@ static unsigned file_map_handle(int idx)
     mp = heap_alloc(4);
     if (!mp) return 0;
     m68k_write_memory_32(mp, blk);
+    note_handle(mp, mLen);
     f->map = mp;
     return mp;
 }
@@ -486,6 +492,35 @@ static unsigned heap_alloc(unsigned size)
 /* A Mac handle is a pointer to a pointer.  We allocate the block, then a
  * two-longword master pointer in front of it, which is enough for code that
  * only ever dereferences and locks. */
+/* How big each Handle is.
+ *
+ * The bump allocator never needed to know -- nothing asked -- until MacinTalk
+ * Pro called _GetHandleSize fifteen times in one utterance. A stubbed answer
+ * is not a small error here: the engine sizes buffers from it, and a stub does
+ * not write the caller's reserved long at all, so it proceeds on whatever was
+ * on the stack. */
+#define MAX_HANDLES 2048
+typedef struct { unsigned mp, size; } HandleRec;
+static HandleRec g_handles[MAX_HANDLES];
+static int       g_handle_count;
+
+static void note_handle(unsigned mp, unsigned size)
+{
+    if (!mp || g_handle_count >= MAX_HANDLES) return;
+    g_handles[g_handle_count].mp = mp;
+    g_handles[g_handle_count].size = size;
+    g_handle_count++;
+}
+
+/* -> the size, or 0 for a Handle we did not make. */
+static unsigned handle_size(unsigned mp)
+{
+    int i;
+    for (i = g_handle_count - 1; i >= 0; i--)   /* newest first */
+        if (g_handles[i].mp == mp) return g_handles[i].size;
+    return 0;
+}
+
 static unsigned heap_new_handle(unsigned size)
 {
     unsigned blk = heap_alloc(size);
@@ -494,6 +529,7 @@ static unsigned heap_new_handle(unsigned size)
     mp = heap_alloc(4);
     if (!mp) return 0;
     m68k_write_memory_32(mp, blk);
+    note_handle(mp, size);
     return mp;
 }
 
@@ -559,7 +595,6 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
     case 0xA11A:                       /* _GetZone         -> THz in A0     */
     case 0xA126:                       /* _HandleZone(h)   -> THz in A0     */
     case 0xA148:                       /* _PtrZone(p)      -> THz in A0     */
-    case 0xA06A:                       /* _SystemZone      -> THz in A0     */
     case 0xA02C:                       /* _ApplicationZone -> THz in A0     */
         *a0_out = MAGIC_ZONE; *d0_out = 0;
         m68k_write_memory_16(MEM_ERR_ADDR, 0);
@@ -746,6 +781,33 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
             return 1;
         }
         return 0;                      /* anything else is news; let it stub */
+    case 0xA025:                       /* _GetHandleSize(h) -> long in D0   */
+        /* Answerable exactly now that every Handle records its size. Pro asks
+         * fifteen times per utterance and sizes buffers from the answer. */
+        *d0_out = handle_size(a0);
+        *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
+    case 0xA069:                       /* _HGetState(h) -> flags in D0      */
+        /* Nothing here is locked, purgeable or a resource in the Memory
+         * Manager's sense -- our blocks never move -- so the honest answer is
+         * no flags set. `$A06A` used to be served as _SystemZone, which was
+         * wrong: it is _HSetState, the other half of this pair, and MacinTalk
+         * Pro calls them around anything it wants to hold still. */
+        *d0_out = 0; *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
+    case 0xA06A:                       /* _HSetState(h, flags)              */
+        *d0_out = 0; *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
+    case 0xA04C:                       /* _CompactMem(size) -> largest free */
+        /* A bump allocator has one free block and it is contiguous, so the
+         * largest it could give out is everything left. */
+        *d0_out = (g_heap_end > g_heap_next) ? (g_heap_end - g_heap_next) : 0;
+        *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
     case 0xA1AD:                       /* _Gestalt -- selector D0, resp A0 */
         /* Reached through the TrapAvailable() pattern at Cecy 1 +$58A4, and
          * the engine carries its own answer table for the case where Gestalt
@@ -771,6 +833,12 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
             *a0_out = 0x0700u;         /* System 7, as _SysEnvirons says too */
         else if (d0 == 0x70726F63u)    /* 'proc' */
             *a0_out = g_gestalt_proc;
+        else if (d0 == 0x66707520u)    /* 'fpu ' */
+            /* 3 is the 68040's built-in FPU. The modules MacinTalk Pro loads
+             * for synthesis contain F-line coprocessor instructions, so this
+             * has to agree with the CPU the same way 'proc' does -- and on a
+             * 68040 the answer is yes. */
+            *a0_out = (g_gestalt_proc >= 5) ? 3u : 0u;
         else
             *a0_out = 0;
         *d0_out = 0;                   /* noErr */
@@ -2392,6 +2460,7 @@ OSP_API int osp_init(unsigned ram_size)
     memset(g_open, 0, sizeof(g_open));
     g_file_count = 0;
     g_cur_res_file = -1;
+    g_handle_count = 0;
     g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
@@ -2455,7 +2524,7 @@ OSP_API unsigned osp_r32(unsigned a) { return m68k_read_memory_32(a); }
  * not just a name.  `.sp` and MacinTalk 2 are 68000 code and are left alone;
  * only one engine is live at a time, so this is per-engine rather than global.
  *
- * `proc` is the Gestalt processor value, 1..4, which keeps the CPU and the
+ * `proc` is the Gestalt processor value, 1..5, which keeps the CPU and the
  * answer we give about it in one place and impossible to disagree.  Call it
  * straight after osp_init, before loading any code. */
 OSP_API int osp_instance_error(void) { return g_instance_error; }
@@ -2469,6 +2538,7 @@ OSP_API int osp_set_cpu(int proc)
         case 2: type = M68K_CPU_TYPE_68010; break;
         case 3: type = M68K_CPU_TYPE_68020; break;
         case 4: type = M68K_CPU_TYPE_68030; break;
+        case 5: type = M68K_CPU_TYPE_68040; break;
         default: return -1;
     }
     g_gestalt_proc = proc;
@@ -2518,6 +2588,7 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     mp = heap_alloc(4);
     if (!mp) return 0;
     m68k_write_memory_32(mp, blk);
+    note_handle(mp, (unsigned)len);
     g_res[g_res_count].type = type;
     g_res[g_res_count].id = (short)id;
     g_res[g_res_count].handle = mp;

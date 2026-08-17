@@ -151,7 +151,10 @@ def build(want=None, quiet=False, snap=None, halt=0):
     # or 68010 outright -- see gtse 1 +$282, which writes #$ff0f, that is
     # synthOpenFailed. So "Pro" is a hardware requirement, and this must be set
     # before any code is loaded.
-    h.set_cpu(osp.Host.CPU_68020)
+    # A 68040, not merely a 68020: the modules Pro loads for synthesis
+    # contain F-line coprocessor instructions, and a 68020 without an FPU
+    # takes a line-1111 exception the moment it reaches them.
+    h.set_cpu(osp.Host.CPU_68040)
     h.load(CODE, code)
     h.heap(HEAP, HEAP_SIZE)
     h.mem_traps(True)
