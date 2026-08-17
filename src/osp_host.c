@@ -2096,8 +2096,16 @@ static int serve_sound_trap(unsigned base, unsigned exc_sp, unsigned csp)
         if (g_sndlog_n < MAX_SNDLOG) g_sndlog[g_sndlog_n++] = (unsigned short)cmd;
         if (cmd == bufferCmd) {
             if (!take_buffer(param2)) return 1;
-            if (!nowait && m68k_read_memory_32(chan + 8))
-                queue_synthetic_callback(chan, param2);
+            /* No synthetic callback. Both engines queue their OWN
+             * callBackCmd behind every bufferCmd -- MacinTalk 2 via
+             * _SndDoCommand at Cecy 1 +$391A, MacinTalk Pro 199 times from
+             * module code at 0x1D18F8 -- and the callback reads `param2` out
+             * of the command as its own bookkeeping pointer.
+             *
+             * Handing it the SOUND HEADER there is not a harmless extra
+             * notification: MacinTalk Pro's callback does `movea.l $4(a0),a4`
+             * and then writes `$24(a4)`, so a synthetic one makes it scribble
+             * over the header it is rendering from. */
         } else if (cmd == callBackCmd) {
             /* Copy the command somewhere that outlives the caller's frame,
              * then run the callback once we are safely outside m68k_execute. */
