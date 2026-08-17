@@ -155,6 +155,8 @@ def build(want=None, quiet=False, snap=None, halt=0):
     # contain F-line coprocessor instructions, and a 68020 without an FPU
     # takes a line-1111 exception the moment it reaches them.
     h.set_cpu(osp.Host.CPU_68040)
+    # Pro waits on low-memory Ticks; without a clock it never returns.
+    h.auto_ticks(True)
     h.load(CODE, code)
     h.heap(HEAP, HEAP_SIZE)
     h.mem_traps(True)

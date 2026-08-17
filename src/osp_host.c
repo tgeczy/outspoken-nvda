@@ -440,7 +440,24 @@ static OpenFile *file_by_ref(int refnum)
  * has to be a function of the trap number. */
 #define TRAPADDR_BASE 0x00F28000u
 
-static unsigned g_ticks;          /* _TickCount, one per call */
+/* Ticks, the 60 Hz counter.  **MacinTalk Pro reads low memory $016A
+ * directly** rather than calling _TickCount -- `move.l $16a.w,d0` at
+ * 0x1B20C0, compared against a deadline it stored -- so a counter that
+ * only advances when the trap is called leaves it waiting forever.
+ *
+ * Advanced from the instruction count: a 68020 Mac managed a few million
+ * instructions a second and a tick is a sixtieth of one, so tens of
+ * thousands of instructions per tick is the right order. What matters is
+ * that it is monotonic and that a spin loop cannot outrun it. */
+#define TICKS_ADDR       0x016Au
+#define INSTR_PER_TICK   40000u
+static unsigned g_ticks;          /* _TickCount, and low memory $016A  */
+static long long g_tick_instr;    /* when the last tick was issued     */
+/* Off by default, and that is not caution: **`.sp` is time-sensitive.**
+ * A clock that advances by itself makes the same sentence render
+ * differently twice, which three engine tests catch immediately. Only
+ * MacinTalk Pro waits on Ticks, so only MacinTalk Pro turns this on. */
+static int      g_tick_auto;
 
 /* The Deferred Task Manager.
  *
@@ -2636,6 +2653,11 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * wait loop that checks it becomes infinite; it must not advance fast,
          * or a legitimate wait times out.  One tick per call is both. */
         g_ticks++;
+        /* Only mirror into low memory when an engine has asked for a running
+         * clock. `.sp` predates any of this and its own data lives across low
+         * memory in our layout: writing $016A behind its back changed what it
+         * rendered, same length, different samples. */
+        if (g_tick_auto) m68k_write_memory_32(TICKS_ADDR, g_ticks);
         tb_return(exc_sp, 0, g_ticks, 4);
         return 1;
     }
@@ -2848,6 +2870,12 @@ static int callback_due_in_call(void)
 
 static void instr_hook(unsigned int pc)
 {
+    if (g_tick_auto
+            && g_instr_count - g_tick_instr >= (long long)INSTR_PER_TICK) {
+        g_tick_instr = g_instr_count;
+        g_ticks++;
+        m68k_write_memory_32(TICKS_ADDR, g_ticks);
+    }
     if (g_trace_on) g_trace[g_trace_pos++ & (TRACE_CAP - 1u)] = pc;
     if (g_snap_pc && pc == g_snap_pc && g_snap_n < SNAP_CAP) {
         static const int R[17] = {
@@ -2967,7 +2995,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_file_count = 0;
     g_cur_res_file = -1;
     g_handle_count = 0;
-    g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
+    g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0; g_tick_instr = 0; g_tick_auto = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
     g_pending_n = 0; g_copen_ret = 0; g_framelog_n = 0;
@@ -3288,6 +3316,7 @@ OSP_API unsigned osp_framelog_get(int i, int k)
 }
 
 OSP_API unsigned osp_tick_count(void) { return g_ticks; }
+OSP_API void osp_auto_ticks(int on) { g_tick_auto = on ? 1 : 0; }
 
 OSP_API void osp_set_trap_policy(unsigned word, unsigned d0, unsigned a0)
 {

@@ -101,6 +101,7 @@ class Host(object):
             L.osp_name_resource.restype = ctypes.c_int
             L.osp_instance_error.restype = ctypes.c_int
             L.osp_last_file_request.restype = ctypes.c_char_p
+            L.osp_auto_ticks.argtypes = [ctypes.c_int]
         except AttributeError:
             self.has_files = False
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
@@ -245,6 +246,17 @@ class Host(object):
         if self.lib.osp_add_file(name, len(name), data, len(data),
                                  rsrc, len(rsrc)) < 0:
             raise RuntimeError("could not register the file")
+
+    def auto_ticks(self, on=True):
+        """Let low-memory Ticks ($016A) advance on its own.
+
+        **MacinTalk Pro waits on the clock**: it reads $016A directly and
+        compares it with a deadline, so without this its SpeakBuffer never
+        returns. Off for the other engines on purpose -- `.sp` is
+        time-sensitive and a self-advancing clock makes the same sentence
+        render differently twice.
+        """
+        self.lib.osp_auto_ticks(1 if on else 0)
 
     def map_entry(self, handle, offset):
         """Where this resource's entry sits in its file's resource map.

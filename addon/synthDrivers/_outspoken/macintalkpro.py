@@ -211,6 +211,12 @@ class Engine(object):
         # Before anything is loaded: Open reads Gestalt('proc') and refuses a
         # 68000 or a 68010, and the synthesis modules use F-line instructions.
         h.set_cpu(osp.Host.CPU_68040)
+        # **Pro waits on the clock.** It reads low-memory Ticks ($016A)
+        # directly and compares it with a deadline, so without one advancing
+        # its SpeakBuffer never returns. Off for the other engines on purpose:
+        # `.sp` is time-sensitive and a self-advancing clock makes the same
+        # sentence render differently twice.
+        h.auto_ticks(True)
         h.load(CODE, code)
         h.heap(HEAP, HEAP_SIZE)
         h.mem_traps(True)
