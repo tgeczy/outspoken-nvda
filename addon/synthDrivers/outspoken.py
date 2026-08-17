@@ -97,15 +97,39 @@ def _catalogue():
             out.append((vid, "%s (MacinTalk 1)" % label, "sp", hz))
     try:
         import macintalk2
-        if not macintalk2.usable(rom.search_roots()):
-            return out
-        files, mt2 = macintalk2.find(rom.search_roots())
-        for v in mt2:
-            out.append(("mtk2:" + v.name, "%s (MacinTalk 2)" % v.name,
-                        "mtk2", v))
+        if macintalk2.usable(rom.search_roots()):
+            files, mt2 = macintalk2.find(rom.search_roots())
+            for v in mt2:
+                out.append(("mtk2:" + v.name, "%s (MacinTalk 2)" % v.name,
+                            "mtk2", v))
     except Exception:
         log.debug("outSPOKEN: MacinTalk 2 unavailable", exc_info=True)
+    try:
+        import macintalkpro
+        # `usable` is False until MacinTalk Pro has actually made a sound --
+        # see macintalkpro.SPEAKS. It opens, takes a voice and runs its
+        # synthesis modules, and that is still not the same as speaking.
+        if macintalkpro.usable(rom.search_roots()):
+            _d, pro = macintalkpro.find(rom.search_roots())
+            for v in pro:
+                out.append(("gala:" + v.name, "%s (MacinTalk Pro)" % v.name,
+                            "gala", v))
+    except Exception:
+        log.debug("outSPOKEN: MacinTalk Pro unavailable", exc_info=True)
     return out
+
+def _sameVoice(a, b):
+    """Match on creator and id, never on object identity.
+
+    The driver's Voice comes from its own scan of the ROM folder, so it is
+    never the same instance the engine is holding -- an identity test is
+    always false, and on MacinTalk 2 that silently gave every user whichever
+    voice happened to sort first. It spoke, so nothing looked broken.
+    """
+    if a is None or b is None:
+        return False
+    return (a.creator, a.id) == (b.creator, b.id)
+
 
 #: The engine is useful from about 60 to 900 -- a letter takes 0.30 s at 150,
 #: 0.18 s at 250, 0.07 s at 400. Geometric, so the midpoint is a comfortable
@@ -444,6 +468,14 @@ class SynthDriver(SynthDriver):
             # globals, so two cannot be live at once: the old one has to go,
             # and it has to go from this thread.
             self._closeEngine()
+        elif (self._engine is not None and entry[2] == "gala"
+                and not _sameVoice(getattr(self._engine, "voice", None),
+                                   entry[3])):
+            # MacinTalk Pro holds ONE voice, not all of them: the host has 64
+            # resource slots, Pro itself takes 50 and a voice another ten, so
+            # a second will not fit. Changing voice means rebuilding, which is
+            # the same thing crossing between engines already does.
+            self._closeEngine()
         eng = self._ensureEngine()
         if eng is None or entry[2] != "mtk2":
             return eng                           # `.sp` has one voice per id
@@ -494,6 +526,10 @@ class SynthDriver(SynthDriver):
                 import macintalk2
                 files, allv = macintalk2.find(rom.search_roots())
                 self._engine = macintalk2.Engine(files, allv, payload)
+            elif kind == "gala":
+                import macintalkpro
+                folder, allv = macintalkpro.find(rom.search_roots())
+                self._engine = macintalkpro.Engine(folder, allv, payload)
             else:
                 found, _missing = rom.find()
                 import engine as engine_mod
