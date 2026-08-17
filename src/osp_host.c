@@ -883,10 +883,14 @@ static void tb_return(unsigned exc_sp, unsigned param_bytes,
  * reads its 800 KB unit database out of the file rather than loading it. */
 typedef struct { unsigned type; short id; unsigned handle;
                  unsigned char *bytes; int len; int detached;
-                 char name[64]; int map_entry; } ResEntry;
+                 char name[64]; int map_entry; int file; } ResEntry;
 static ResEntry g_res[MAX_RES];
 static int      g_res_count;
 static int      g_res_load = 1;
+/* Which registered file the Resource Manager is currently searching, or
+ * -1 for "the one flat table", which is all `.sp` and MacinTalk 2 have
+ * ever had.  Set by _UseResFile and by opening a resource file. */
+static int      g_cur_res_file = -1;
 static short    g_res_err;
 
 #define RES_NOT_FOUND (-192)      /* resNotFound */
@@ -951,6 +955,66 @@ static void log_res(unsigned type, short id, int found)
  * and the heap only ever grows, so a fresh block per switch would exhaust it
  * after a few dozen; the same block with the original bytes back in it is
  * what the engine would have got from the file anyway. */
+/* -> index of a matching entry, or -1.
+ *
+ * **The same type and id can name different resources in different files**,
+ * and MacinTalk Pro relies on it: `gtsg 0` is 1,032 bytes in the engine and
+ * 110 in a voice. A flat table hands out whichever was registered first, so
+ * Pro opened a voice, asked for ITS `gtsg 0`, got the engine's, and reported
+ * resFNotFound from its own lookup two calls later.
+ *
+ * `one_file` is the Get1* family, which the Resource Manager restricts to the
+ * current file; the plain family walks the whole chain but still prefers the
+ * current file, which is what "most recently opened first" amounts to here.
+ * An entry belonging to no file (-1) matches either way, because that is every
+ * resource the older engines register. */
+static int res_index(unsigned type, short id, int one_file)
+{
+    int i;
+    if (g_cur_res_file >= 0)
+        for (i = 0; i < g_res_count; i++)
+            if (g_res[i].type == type && g_res[i].id == id
+                    && g_res[i].file == g_cur_res_file)
+                return i;
+    for (i = 0; i < g_res_count; i++) {
+        if (g_res[i].type != type || g_res[i].id != id) continue;
+        if (one_file && g_cur_res_file >= 0 && g_res[i].file >= 0
+                && g_res[i].file != g_cur_res_file)
+            continue;                       /* belongs to another file */
+        return i;
+    }
+    return -1;
+}
+
+/* Put a detached resource's original bytes back. See the long note above. */
+static void res_restore(ResEntry *r)
+{
+    if (r->detached && r->bytes) {
+        unsigned blk = m68k_read_memory_32(r->handle);
+        if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
+        r->detached = 0;
+    }
+}
+
+/* Is entry `i` inside the file being searched?  Counting and walking by
+ * index have to agree with looking up by id, or Count1Resources promises
+ * more than Get1IndResource can deliver -- which is how a stubbed count
+ * once produced 26,245 faults. */
+static int res_in_file(int i, int one_file)
+{
+    if (g_cur_res_file < 0) return 1;
+    if (g_res[i].file == g_cur_res_file) return 1;
+    return one_file ? (g_res[i].file < 0) : 1;
+}
+
+static unsigned res_find_scoped(unsigned type, short id, int one_file)
+{
+    int i = res_index(type, id, one_file);
+    if (i < 0) return 0;
+    res_restore(&g_res[i]);
+    return g_res[i].handle;
+}
+
 static unsigned res_find(unsigned type, short id)
 {
     int i;
@@ -985,17 +1049,16 @@ static int res_name_eq(const char *a, const unsigned char *b, int blen)
 static unsigned res_find_named(unsigned type, const unsigned char *name,
                                int namelen)
 {
-    int i;
-    for (i = 0; i < g_res_count; i++)
-        if (g_res[i].type == type
-                && res_name_eq(g_res[i].name, name, namelen)) {
-            ResEntry *r = &g_res[i];
-            if (r->detached && r->bytes) {
-                unsigned blk = m68k_read_memory_32(r->handle);
-                if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
-                r->detached = 0;
-            }
-            return r->handle;
+    int i, pass;
+    /* Current file first, then anywhere -- names collide across files exactly
+     * as ids do. */
+    for (pass = (g_cur_res_file >= 0 ? 0 : 1); pass < 2; pass++)
+        for (i = 0; i < g_res_count; i++) {
+            if (g_res[i].type != type) continue;
+            if (pass == 0 && g_res[i].file != g_cur_res_file) continue;
+            if (!res_name_eq(g_res[i].name, name, namelen)) continue;
+            res_restore(&g_res[i]);
+            return g_res[i].handle;
         }
     return 0;
 }
@@ -1706,7 +1769,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
     case 0xA9A0: {                       /* _GetResource(type, id) -> Handle */
         short id = (short)m68k_read_memory_16(csp);
         unsigned type = m68k_read_memory_32(csp + 2);
-        unsigned h = res_find(type, id);
+        unsigned h = res_find_scoped(type, id, base == 0xA81Fu);
         log_res(type, id, h != 0);
         g_res_err = h ? 0 : RES_NOT_FOUND;
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
@@ -1746,9 +1809,9 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * from addresses like 0x70726F6B.  Nothing about that looks like a
          * missing trap until you count the calls. */
         unsigned type = m68k_read_memory_32(csp);
-        int i, n = 0;
+        int one = (base == 0xA80Du), i, n = 0;
         for (i = 0; i < g_res_count; i++)
-            if (g_res[i].type == type) n++;
+            if (g_res[i].type == type && res_in_file(i, one)) n++;
         g_res_err = 0;
         m68k_write_memory_16(RES_ERR_ADDR, 0);
         tb_return(exc_sp, 4, (unsigned)n, 2);
@@ -1760,17 +1823,12 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * registered -- which is the order they came out of the file. */
         int idx = (int)(short)m68k_read_memory_16(csp);
         unsigned type = m68k_read_memory_32(csp + 2);
+        int one = (base == 0xA80Eu), i, seen = 0;
         unsigned h = 0;
-        int i, seen = 0;
         for (i = 0; i < g_res_count && !h; i++)
-            if (g_res[i].type == type && ++seen == idx) {
-                ResEntry *r = &g_res[i];
-                if (r->detached && r->bytes) {
-                    unsigned blk = m68k_read_memory_32(r->handle);
-                    if (blk) memcpy(g_ram + blk, r->bytes, (size_t)r->len);
-                    r->detached = 0;
-                }
-                h = r->handle;
+            if (g_res[i].type == type && res_in_file(i, one) && ++seen == idx) {
+                res_restore(&g_res[i]);
+                h = g_res[i].handle;
             }
         g_res_err = h ? 0 : RES_NOT_FOUND;
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
@@ -1895,9 +1953,19 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
     case 0xA9A4:                         /* _HomeResFile(h) -> short         */
         tb_return(exc_sp, 4, 1, 2);
         return 1;
-    case 0xA998:                         /* _UseResFile(short)               */
+    case 0xA998: {                       /* _UseResFile(short)               */
+        /* Selects which file Get1* searches. MacinTalk Pro switches between
+         * its own file and a voice's, and they carry resources with the SAME
+         * type and id -- `gtsg 0` is 1,032 bytes in the engine and 110 in a
+         * voice -- so ignoring this hands back the wrong one. refNum 1 is the
+         * flat table, which means "no particular file". */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(csp));
+        g_cur_res_file = f ? f->file : -1;
+        g_res_err = 0;
+        m68k_write_memory_16(RES_ERR_ADDR, 0);
         tb_return(exc_sp, 2, 0, 0);
         return 1;
+    }
     case 0xA997: {                       /* _OpenResFile(name) -> short      */
         tb_return(exc_sp, 4, 1, 2);
         return 1;
@@ -1912,6 +1980,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * Cecy 1 +$830 tests for, and that is still true. */
         int idx = no_files() ? -1 : file_by_name(m68k_read_memory_32(csp + 2));
         int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
+        if (ref && idx >= 0) g_cur_res_file = idx;
         g_res_err = ref ? 0 : (short)(-43);
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
         tb_return(exc_sp, 12, (unsigned)(ref ? ref : 1), 2);
@@ -1930,14 +1999,25 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
          * it gets back has to name a stream it can actually read. */
         int idx = no_files() ? -1 : file_by_name(m68k_read_memory_32(csp + 4));
         int ref = no_files() ? 1 : file_open(idx, FORK_RSRC);
+        /* The Resource Manager makes a newly opened file the current one, and
+         * that is what scopes every Get1* that follows. */
+        if (ref && idx >= 0) g_cur_res_file = idx;
         g_res_err = ref ? 0 : (short)(-43);              /* fnfErr */
         m68k_write_memory_16(RES_ERR_ADDR, (unsigned)(unsigned short)g_res_err);
         tb_return(exc_sp, 8, (unsigned)(ref ? ref : -1), 2);
         return 1;
     }
-    case 0xA99A:                         /* _CloseResFile(short)             */
+    case 0xA99A: {                       /* _CloseResFile(short)             */
+        OpenFile *f = file_by_ref((int)(short)m68k_read_memory_16(csp));
+        if (f) {
+            if (g_cur_res_file == f->file) g_cur_res_file = -1;
+            f->used = 0;
+        }
+        g_res_err = 0;
+        m68k_write_memory_16(RES_ERR_ADDR, 0);
         tb_return(exc_sp, 2, 0, 0);
         return 1;
+    }
     case 0xA9AF:                         /* _ResError -> short               */
         /* Only ever reached on a failure path -- MacinTalk 2 calls it to turn
          * "the Handle came back nil" into an error code to return. */
@@ -2248,6 +2328,7 @@ OSP_API int osp_init(unsigned ram_size)
     memset(g_files, 0, sizeof(g_files));
     memset(g_open, 0, sizeof(g_open));
     g_file_count = 0;
+    g_cur_res_file = -1;
     g_res_count = 0; g_reslog_n = 0; g_voice_count = 0; g_res_load = 1; g_res_err = 0; g_ticks = 0;
     g_comp_count = 0; g_inst_count = 0;
     g_cmlog_n = 0; g_cp_slot = 0; g_cp_wraps = 0;
@@ -2363,7 +2444,8 @@ OSP_API unsigned osp_heap_used(void) { return g_heap_next - g_heap_base; }
  * deliberately -- it is a fact about outSPOKEN, not about the Resource
  * Manager. */
 OSP_API unsigned osp_add_resource(unsigned type, int id,
-                                  const unsigned char *data, int len)
+                                  const unsigned char *data, int len,
+                                  int file_index)
 {
     unsigned blk, mp;
     if (g_res_count >= MAX_RES) return 0;
@@ -2385,6 +2467,7 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     g_res[g_res_count].len = len;
     g_res[g_res_count].detached = 0;
     g_res[g_res_count].map_entry = 0;
+    g_res[g_res_count].file = file_index;
     memset(g_res[g_res_count].name, 0, sizeof(g_res[g_res_count].name));
     if (g_res[g_res_count].bytes)
         memcpy(g_res[g_res_count].bytes, data, (size_t)len);
@@ -2397,18 +2480,13 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
  * Separate from osp_add_resource rather than another argument to it, because
  * the engines that came first never needed names and their callers should not
  * have to say so.  -> 0, or -1 if that resource was never registered. */
-OSP_API int osp_name_resource(unsigned type, int id,
-                              const char *name, int len)
+OSP_API int osp_name_resource(unsigned handle, const char *name, int len)
 {
-    int i;
-    if (len < 0 || len > 63) return -1;
-    for (i = 0; i < g_res_count; i++)
-        if (g_res[i].type == type && g_res[i].id == (short)id) {
-            memset(g_res[i].name, 0, sizeof(g_res[i].name));
-            memcpy(g_res[i].name, name, (size_t)len);
-            return 0;
-        }
-    return -1;
+    ResEntry *r = res_by_handle(handle);
+    if (!r || len < 0 || len > 63) return -1;
+    memset(r->name, 0, sizeof(r->name));
+    memcpy(r->name, name, (size_t)len);
+    return 0;
 }
 
 /* Tell the host where a resource's entry sits in its file's resource map.
@@ -2416,15 +2494,12 @@ OSP_API int osp_name_resource(unsigned type, int id,
  * Computed on the Python side, where the fork is already parsed -- see
  * rsrc.Resource.map_entry -- rather than parsing the map again in C.
  * -> 0, or -1 if that resource was never registered. */
-OSP_API int osp_map_entry(unsigned type, int id, int entry)
+OSP_API int osp_map_entry(unsigned handle, int entry)
 {
-    int i;
-    for (i = 0; i < g_res_count; i++)
-        if (g_res[i].type == type && g_res[i].id == (short)id) {
-            g_res[i].map_entry = entry;
-            return 0;
-        }
-    return -1;
+    ResEntry *r = res_by_handle(handle);
+    if (!r) return -1;
+    r->map_entry = entry;
+    return 0;
 }
 
 /* Register the one file: its name, and its data fork.

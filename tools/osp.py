@@ -81,17 +81,17 @@ class Host(object):
                                    ctypes.c_char_p, ctypes.c_int,
                                    ctypes.c_char_p, ctypes.c_int]
         L.osp_add_file.restype = ctypes.c_int
-        L.osp_map_entry.argtypes = [ctypes.c_uint, ctypes.c_int,
-                                    ctypes.c_int]
+        L.osp_map_entry.argtypes = [ctypes.c_uint, ctypes.c_int]
         L.osp_map_entry.restype = ctypes.c_int
-        L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
-                                        ctypes.c_char_p, ctypes.c_int]
+        L.osp_name_resource.argtypes = [ctypes.c_uint, ctypes.c_char_p,
+                                        ctypes.c_int]
         L.osp_name_resource.restype = ctypes.c_int
         L.osp_instance_error.restype = ctypes.c_int
         L.osp_last_file_request.restype = ctypes.c_char_p
         L.osp_set_trap_policy.argtypes = [ctypes.c_uint] * 3
         L.osp_add_resource.argtypes = [ctypes.c_uint, ctypes.c_int,
-                                       ctypes.c_char_p, ctypes.c_int]
+                                       ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.c_int]
         L.osp_add_resource.restype = ctypes.c_uint
         L.osp_call_with_args.argtypes = [ctypes.c_uint,
                                          ctypes.POINTER(ctypes.c_uint),
@@ -194,20 +194,19 @@ class Host(object):
     #: Gestalt processor values, which is how the host names a CPU.
     CPU_68000, CPU_68010, CPU_68020, CPU_68030 = 1, 2, 3, 4
 
-    def name_resource(self, restype, res_id, name):
+    def name_resource(self, handle, name):
         """Give a registered resource its Mac name.
 
         **MacinTalk Pro looks its pieces up by name, not by id**: the engine is
         modules called `*TTS`, `*Wave`, `*Lex` and so on, and a voice's unit
-        database is `EnglMBruceData`. Without this, Get1NamedResource has
-        nothing to match and Open fails with resNotFound.
+        database is `EnglMBruceData`. Keyed on the Handle `add_resource`
+        returned, because type and id alone no longer identify one resource.
         """
         if isinstance(name, str):
             name = name.encode("mac-roman", "replace")
         if len(name) > 63:
             raise ValueError("a Mac resource name is at most 63 characters")
-        return self.lib.osp_name_resource(self._ostype(restype), res_id,
-                                          name, len(name)) == 0
+        return self.lib.osp_name_resource(handle, name, len(name)) == 0
 
     def add_file(self, name, data=b"", rsrc=b""):
         """Register a file the engine may open: its name and its two forks.
@@ -229,15 +228,13 @@ class Host(object):
                                  rsrc, len(rsrc)) < 0:
             raise RuntimeError("could not register the file")
 
-    def map_entry(self, restype, res_id, offset):
+    def map_entry(self, handle, offset):
         """Where this resource's entry sits in its file's resource map.
 
         What `RsrcMapEntry` answers. Computed where the fork is already parsed
         -- see rsrc.Resource.map_entry -- rather than parsing the map twice.
         """
-        return self.lib.osp_map_entry(self._ostype(restype), res_id,
-                                      offset) == 0
-
+        return self.lib.osp_map_entry(handle, offset) == 0
 
     def set_cpu(self, proc):
         """Pick the CPU. Call before loading code; 68000 is the default.
@@ -256,16 +253,25 @@ class Host(object):
     def policy(self, trap_word, d0=0, a0=0):
         self.lib.osp_set_trap_policy(trap_word, d0, a0)
 
-    def add_resource(self, restype, res_id, data):
+    def add_resource(self, restype, res_id, data, file_index=-1):
         """Register a resource under the id the *driver* asks for.
 
         outSPOKEN stores these 1000 above the ids `.sp` requests -- TALK 1001
         for TALK 1 -- so the caller does the mapping, not the host.
+
+        `file_index` says which file it came from, for engines that open more
+        than one. **The same type and id name different resources in different
+        files**: MacinTalk Pro's `gtsg 0` is 1,032 bytes in the engine and 110
+        in a voice, so a file-blind table hands back whichever was registered
+        first. -1 means "belongs to no file", which is every resource the older
+        engines register.
+
+        -> the Handle, which is what name_resource and map_entry key on.
         """
         if isinstance(restype, str):
             restype = restype.encode("mac-roman")
         t = struct.unpack(">I", restype[:4].ljust(4, b" "))[0]
-        h = self.lib.osp_add_resource(t, res_id, data, len(data))
+        h = self.lib.osp_add_resource(t, res_id, data, len(data), file_index)
         if not h:
             raise RuntimeError("no room for resource %r %d" % (restype, res_id))
         return h

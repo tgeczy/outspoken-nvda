@@ -159,59 +159,12 @@ def build(want=None, quiet=False):
     h.w16(RESERR, 0)
     h.w16(MEMERR, 0)
 
-    # Everything the engine ships, then everything the voice ships. The host
-    # holds 64 resources; Pro is 50 once `thng` is set aside and a voice is 8,
-    # so ONE voice fits and three do not. That is a real constraint on the
-    # eventual module, not a limitation of this probe.
-    n, skipped, ttvd_id, named = 0, [], None, 0
-    for label, folder in (("engine", d), ("voice", voice.folder)):
-        names = read_names(folder)
-        for name in sorted(os.listdir(folder)):
-            if name in ("datafork.bin", "rsrcfork.bin", "resources.tsv",
-                        "names.tsv"):
-                continue               # not resources; see the notes below
-            got = split(name)
-            if not got:
-                continue
-            rtype, rid = got
-            if rtype in NOT_A_RESOURCE:
-                skipped.append("%s %d" % (rtype, rid))
-                continue
-            data = open(os.path.join(folder, name), "rb").read()
-            try:
-                h.add_resource(rtype, rid, data)
-            except RuntimeError as e:
-                say("  ! %s %d (%d bytes): %s" % (rtype, rid, len(data), e))
-                continue
-            # Pro finds its modules by name -- `*TTS`, `EnglMBruceData` -- so
-            # this is not decoration, it is the whole lookup.
-            entry, mac = names.get((rtype, rid), (0, ""))
-            # Pro asks RsrcMapEntry where a resource sits in the map, then
-            # reads it out of the file itself, so the offset matters as much
-            # as the name.
-            if entry:
-                h.map_entry(rtype, rid, entry)
-            if mac and h.name_resource(rtype, rid, mac):
-                named += 1
-            if rtype == "ttvd":
-                ttvd_id = rid
-            n += 1
-    say("registered     %d resources, %d of them named (%s set aside), "
-          "heap %d KB of %d KB"
-          % (n, named, " ".join(skipped) or "none",
-             h.lib.osp_heap_used() // 1024, HEAP_SIZE // 1024))
-    if not named:
-        say("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
-              "    modules by name and cannot open without them")
-
-    # The forks. Neither is a resource, and both are needed for different
-    # reasons: the engine's lexicon is in ITS data fork, and the voice's 800 KB
-    # of units is in the VOICE file's resource fork, which Pro reads by walking
-    # the map and seeking rather than by asking for a Handle.
-    #
-    # Registered before the component is opened, because Pro locates its own
-    # file during Open.
-    files, voice_file = 0, -1
+    # The forks first, because a resource has to be tagged with the file it
+    # came from and the file has to exist to be tagged with. Neither fork is a
+    # resource, and they are not interchangeable: the engine's lexicon is in
+    # ITS data fork, and a voice's 800 KB of units is in the VOICE file's
+    # resource fork, which Pro reads by walking the map and seeking.
+    where = {}
     for label, folder, macname in (("engine", d, "MacinTalk Pro"),
                                    ("voice", voice.folder, voice.name)):
         dat = rf = b""
@@ -222,23 +175,67 @@ def build(want=None, quiet=False):
         if os.path.isfile(pr):
             rf = open(pr, "rb").read()
         if not dat and not rf:
-            say("  ! %s has neither fork -- re-run tools/extract_rom.py"
-                % label)
+            say("  ! %s has neither fork -- re-run tools/extract_rom.py" % label)
             continue
         h.add_file(macname, dat, rf)
-        if label == "voice":
-            voice_file = files
-        files += 1
+        where[label] = len(where)
         say("file           %-14s data %7d, resource %7d"
             % (macname, len(dat), len(rf)))
 
+    # Everything the engine ships, then everything the voice ships, each tagged
+    # with its file. **The same type and id mean different things in different
+    # files**: `gtsg 0` is 1,032 bytes in the engine and 110 in a voice, so a
+    # file-blind table hands Pro the wrong one.
+    #
+    # The host holds 64 resources; Pro is 50 once `thng` is set aside and a
+    # voice is 10, so ONE voice fits and three do not. That is a real
+    # constraint on the eventual module, not a limitation of this probe.
+    n, skipped, ttvd_id, named = 0, [], None, 0
+    for label, folder in (("engine", d), ("voice", voice.folder)):
+        names = read_names(folder)
+        fidx = where.get(label, -1)
+        for name in sorted(os.listdir(folder)):
+            if name in ("datafork.bin", "rsrcfork.bin", "resources.tsv",
+                        "names.tsv"):
+                continue
+            got = split(name)
+            if not got:
+                continue
+            rtype, rid = got
+            if rtype in NOT_A_RESOURCE:
+                skipped.append("%s %d" % (rtype, rid))
+                continue
+            data = open(os.path.join(folder, name), "rb").read()
+            try:
+                hnd = h.add_resource(rtype, rid, data, fidx)
+            except RuntimeError as e:
+                say("  ! %s %d (%d bytes): %s" % (rtype, rid, len(data), e))
+                continue
+            # Pro finds its modules by name -- `*TTS`, `EnglMBruceData` -- and
+            # asks RsrcMapEntry where each sits before reading it out of the
+            # file, so both ride on the Handle we just got back.
+            entry, mac = names.get((rtype, rid), (0, ""))
+            if entry:
+                h.map_entry(hnd, entry)
+            if mac and h.name_resource(hnd, mac):
+                named += 1
+            if rtype == "ttvd" and label == "voice":
+                ttvd_id = rid
+            n += 1
+    say("registered     %d resources, %d of them named (%s set aside), "
+        "heap %d KB of %d KB"
+        % (n, named, " ".join(skipped) or "none",
+           h.lib.osp_heap_used() // 1024, HEAP_SIZE // 1024))
+    if not named:
+        say("  ! no names -- re-run tools/extract_rom.py; Pro finds its\n"
+            "    modules by name and cannot open without them")
+
     # Which file the voice lives in, and it matters. Pro asks the Speech
     # Manager for the voice's FSSpec -- GetVoiceInfo('fref') -- and then OPENS
-    # it. Handing it a nominal spec with an empty name, which is all MacinTalk
-    # 2 ever needed, sent it to the engine's own fork looking for the voice's
-    # units and it reported resFNotFound.
+    # it. A nominal spec with an empty name, which is all MacinTalk 2 ever
+    # needed, sent it to the engine's own fork looking for the voice's units.
     if ttvd_id is not None:
-        h.add_voice(voice.creator, voice.id, ttvd_id, voice_file)
+        h.add_voice(voice.creator, voice.id, ttvd_id, where.get("voice", -1))
 
     # thng 128: type 'ttsc', subtype 0, manufacturer 'gala'.
     comp = h.add_component("ttsc", b"\0\0\0\0", "gala", CODE)
