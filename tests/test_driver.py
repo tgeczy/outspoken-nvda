@@ -45,9 +45,24 @@ def _expected_bytes(eng, texts):
     return sum(len(eng.speak(eng.translate(t))) for t in texts) * 2
 
 
-def test_check_requires_the_engine():
+def test_it_is_always_offered_and_refuses_rather_than_going_silent(monkeypatch):
+    """Selectable, and then it refuses -- which is not the same as silent.
+
+    The synthesizer is always offered now, so that choosing it produces an
+    explanation instead of an absence nobody could account for: NVDA catches a
+    driver that will not load, falls back, and speech never stops. What must
+    never happen is the other failure -- loading successfully and then saying
+    nothing -- so `__init__` has to raise, and it has to tell the user first.
+    """
     import outspoken
-    assert outspoken.SynthDriver.check() == bool(outspoken._catalogue())
+    assert outspoken.SynthDriver.check() is True
+
+    monkeypatch.setattr(outspoken, "_whyNot", lambda: ["no engine, for a test"])
+    told = []
+    monkeypatch.setattr(outspoken, "_explainLater", told.append)
+    with pytest.raises(Exception):
+        outspoken.SynthDriver()
+    assert told, "it refused to load and told the user nothing"
 
 
 def test_the_1984_voice_ids_never_change(driver):

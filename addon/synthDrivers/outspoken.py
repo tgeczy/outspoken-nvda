@@ -118,6 +118,87 @@ def _catalogue():
         log.debug("outSPOKEN: MacinTalk Pro unavailable", exc_info=True)
     return out
 
+
+def _whyNot():
+    """-> [] when the synthesizer can run, or the reasons it cannot.
+
+    Two quite different failures land here and look identical from outside: an
+    emulator DLL that will not load, and a ROM folder that is short a file.
+    """
+    reasons = []
+    dllPath = "(not resolved)"
+    try:
+        import ctypes
+        import osp
+        # Importing `osp` only works out a path; the DLL is what actually has
+        # to load, and it is the half that can be wrong.
+        #
+        # A 32-bit NVDA loading a 64-bit build raises "[WinError 193] %1 is not
+        # a valid Win32 application", and before this was checked it happened
+        # *after* the user had selected the synthesizer: it appeared in the
+        # list, took the selection, and then never spoke.
+        dllPath = osp.DLL
+        ctypes.CDLL(dllPath)
+    except Exception as e:
+        log.debug("outSPOKEN: the emulator will not load", exc_info=True)
+        reasons.append("the emulator will not load: %s" % e)
+        reasons.append("DLL: %s" % dllPath)
+        return reasons
+    # Either engine is enough. Requiring `.sp` would hide MacinTalk 2 from a
+    # user who extracted only that, which their disk image decides, not us.
+    if not _catalogue():
+        reasons.append("no engine has everything it needs:")
+        try:
+            reasons.extend("  " + ln for ln in rom.explain()[1])
+        except Exception as e:
+            reasons.append("  could not describe the ROM folder: %s" % e)
+    return reasons
+
+
+_MISSING = (
+    "outSPOKEN cannot start, because the engine is not there yet.\n\n"
+    "This add-on ships no part of MacinTalk. You supply it from your own copy "
+    "and put the extracted files into:\n\n"
+    "%s\n\n"
+    "The extract_rom.py tool in the project repository will pull them out of a "
+    "disk image for you. NVDA's log has the full list of what was found and "
+    "what was missing.\n\n"
+    "Open that folder now?"
+)
+
+
+def _explainLater(folder):
+    """Show the engine-missing dialog once NVDA has finished failing.
+
+    Never straight from `__init__`: a modal dialog there would stall the
+    synthesizer switch with speech half torn down. Queued instead, so it
+    arrives after NVDA has fallen back to the previous synthesizer -- which it
+    always does, so the user is never stranded without speech.
+
+    It lands on top of NVDA's own "Could not load the outspoken synthesizer"
+    box rather than after it, because that box runs a nested event loop which
+    dispatches this. That ordering is the right way round: ours is the one with
+    something to act on.
+    """
+    try:
+        import wx
+        import gui
+    except ImportError:
+        return
+
+    def show():
+        try:
+            answer = gui.messageBox(_MISSING % folder, "outSPOKEN",
+                                    wx.YES_NO | wx.ICON_INFORMATION)
+            if answer == wx.YES:
+                os.makedirs(folder, exist_ok=True)
+                os.startfile(folder)
+        except Exception:
+            log.error("outSPOKEN: could not show the engine dialog",
+                      exc_info=True)
+    wx.CallAfter(show)
+
+
 def _sameVoice(a, b):
     """Match on creator and id, never on object identity.
 
@@ -160,65 +241,37 @@ class SynthDriver(SynthDriver):
     supportedCommands = {speech.commands.IndexCommand}
     supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
-    #: So the explanation below is written once per NVDA session rather than
-    #: once per repaint of the synthesizer list.
-    _explained = False
-
     @classmethod
     def check(cls):
-        """Only offer the synthesizer when it can actually speak.
+        """Always offer the synthesizer, and explain on selection if it cannot
+        run.
 
-        One that appears in the list and then says nothing is worse than one
-        that is absent. Discoverability does not suffer: the global plugin
-        explains the empty ROM folder at start-up either way.
+        This used to hide itself unless it could speak, reasoning that one
+        which appears in the list and then says nothing is worse than one that
+        is absent. That is still true -- but it describes a driver that *loads*
+        and then produces no audio, which is what the 32-bit DLL mismatch used
+        to do. It does not describe one that refuses to load: NVDA catches
+        that, falls back to the previous synthesizer, and speech never stops.
 
-        When the answer is no, say why. All NVDA writes is "Synthesizer
-        'outspoken' doesn't pass the check, excluding from list", which is true
-        and tells nobody anything -- and the failures that land here (a DLL of
-        the wrong bitness, two of three ROM files) look identical from outside.
-        A refusal that cannot be diagnosed costs far more than a log line.
+        What hiding cost was every route to an explanation. All NVDA writes is
+        "Synthesizer 'outspoken' doesn't pass the check, excluding from list",
+        and the two failures behind it -- a DLL of the wrong bitness, and two
+        of three ROM files -- are indistinguishable from outside. The start-up
+        dialog was supposed to cover that, and on at least one machine it never
+        appears at all.
+
+        So be present and say why, every time it is chosen, without depending
+        on catching anyone during start-up.
         """
-        reasons = []
-        dllPath = "(not resolved)"
-        try:
-            import ctypes
-            import osp
-            # Importing `osp` only works out a path; the DLL is what actually
-            # has to load, and it is the half that can be wrong.
-            #
-            # A 32-bit NVDA loading a 64-bit build raises
-            # "[WinError 193] %1 is not a valid Win32 application", and until
-            # this check existed that happened *after* the user had selected
-            # the synthesizer: it appeared in the list, took the selection, and
-            # then never spoke. Reported as "it loads but there is no speech",
-            # which is a much harder thing to diagnose than not being offered.
-            dllPath = osp.DLL
-            ctypes.CDLL(dllPath)
-        except Exception as e:
-            log.debug("outSPOKEN: the emulator will not load", exc_info=True)
-            reasons.append("the emulator will not load: %s" % e)
-            reasons.append("DLL: %s" % dllPath)
-        else:
-            # Either engine is enough. Requiring `.sp` would hide MacinTalk 2
-            # from a user who extracted only that, which their disk image
-            # decides, not us.
-            if not _catalogue():
-                reasons.append("no engine has everything it needs:")
-                try:
-                    reasons.extend("  " + ln for ln in rom.explain()[1])
-                except Exception as e:
-                    reasons.append("  could not describe the ROM folder: %s"
-                                   % e)
-        if reasons:
-            if not cls._explained:
-                cls._explained = True
-                log.warning("outSPOKEN is not available:\n  %s"
-                            % "\n  ".join(reasons))
-            return False
         return True
 
     def __init__(self):
         super().__init__()
+        problems = _whyNot()
+        if problems:
+            log.warning("outSPOKEN cannot start:\n  %s" % "\n  ".join(problems))
+            _explainLater(rom.config_dir())
+            raise RuntimeError("outSPOKEN has no engine to run")
         self._rate, self._pitch = 50, 50
         self._numberWords = True
         self._engineRate = 0
