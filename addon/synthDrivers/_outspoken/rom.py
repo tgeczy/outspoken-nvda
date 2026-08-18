@@ -81,6 +81,50 @@ def usable():
     return all(n in found for n in REQUIRED) and "RULZ_1129.bin" in found
 
 
+def engines_present():
+    """-> names of the engines there is enough on disk to run.
+
+    The one place that answers "is there anything here at all". The global
+    plugin used to answer it for itself, with a narrower test than the
+    synthesizer's: it asked only for REQUIRED, while MacinTalk 1 also needs
+    RULZ_1129.bin to turn text into phonemes. A user with the first two files
+    and not the third therefore got no dialog *and* no synthesizer -- the two
+    halves disagreeing produced silence from both.
+    """
+    out = []
+    found, _missing = find()
+    if all(n in found for n in REQUIRED) and "RULZ_1129.bin" in found:
+        out.append("MacinTalk 1")
+    for mod, label in (("macintalk2", "MacinTalk 2"),
+                       ("macintalkpro", "MacinTalk Pro")):
+        try:
+            m = __import__(mod)
+            if m.usable(search_roots()):
+                out.append(label)
+        except Exception:
+            pass
+    return out
+
+
+def explain():
+    """-> (anything_runnable, [lines]) -- describe(), plus the verdict.
+
+    Written for a log someone else will read: every root that was searched,
+    every file that was looked for, and what it concluded.
+    """
+    engines = engines_present()
+    lines = ["searched:"]
+    for r in search_roots():
+        lines.append("  %s %s" % (r, "exists" if os.path.isdir(r)
+                                  else "MISSING"))
+    found, _missing = find()
+    for n, what in FILES.items():
+        lines.append("  %-16s %-8s (%s)"
+                     % (n, "found" if n in found else "MISSING", what))
+    lines.append("runnable engines: %s" % (", ".join(engines) or "none"))
+    return bool(engines), lines
+
+
 def describe():
     found, missing = find()
     lines = ["ROM folder: %s" % config_dir()]

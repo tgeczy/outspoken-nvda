@@ -160,6 +160,10 @@ class SynthDriver(SynthDriver):
     supportedCommands = {speech.commands.IndexCommand}
     supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
+    #: So the explanation below is written once per NVDA session rather than
+    #: once per repaint of the synthesizer list.
+    _explained = False
+
     @classmethod
     def check(cls):
         """Only offer the synthesizer when it can actually speak.
@@ -167,7 +171,15 @@ class SynthDriver(SynthDriver):
         One that appears in the list and then says nothing is worse than one
         that is absent. Discoverability does not suffer: the global plugin
         explains the empty ROM folder at start-up either way.
+
+        When the answer is no, say why. All NVDA writes is "Synthesizer
+        'outspoken' doesn't pass the check, excluding from list", which is true
+        and tells nobody anything -- and the failures that land here (a DLL of
+        the wrong bitness, two of three ROM files) look identical from outside.
+        A refusal that cannot be diagnosed costs far more than a log line.
         """
+        reasons = []
+        dllPath = "(not resolved)"
         try:
             import ctypes
             import osp
@@ -180,14 +192,30 @@ class SynthDriver(SynthDriver):
             # the synthesizer: it appeared in the list, took the selection, and
             # then never spoke. Reported as "it loads but there is no speech",
             # which is a much harder thing to diagnose than not being offered.
-            ctypes.CDLL(osp.DLL)
-        except Exception:
+            dllPath = osp.DLL
+            ctypes.CDLL(dllPath)
+        except Exception as e:
             log.debug("outSPOKEN: the emulator will not load", exc_info=True)
+            reasons.append("the emulator will not load: %s" % e)
+            reasons.append("DLL: %s" % dllPath)
+        else:
+            # Either engine is enough. Requiring `.sp` would hide MacinTalk 2
+            # from a user who extracted only that, which their disk image
+            # decides, not us.
+            if not _catalogue():
+                reasons.append("no engine has everything it needs:")
+                try:
+                    reasons.extend("  " + ln for ln in rom.explain()[1])
+                except Exception as e:
+                    reasons.append("  could not describe the ROM folder: %s"
+                                   % e)
+        if reasons:
+            if not cls._explained:
+                cls._explained = True
+                log.warning("outSPOKEN is not available:\n  %s"
+                            % "\n  ".join(reasons))
             return False
-        # Either engine is enough. Requiring `.sp` would hide MacinTalk 2 from
-        # a user who extracted only that, which their disk image decides, not
-        # us.
-        return bool(_catalogue())
+        return True
 
     def __init__(self):
         super().__init__()
