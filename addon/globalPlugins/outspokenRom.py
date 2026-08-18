@@ -60,18 +60,37 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def __init__(self):
         super().__init__()
         if globalVars.appArgs.secure:
+            log.info("outSPOKEN: secure mode, not checking for the engine")
             return
+        log.info("outSPOKEN: ROM check armed")
         threading.Timer(6.0, self._check).start()
 
     def _check(self):
+        """Decide whether to ask, and leave a record either way.
+
+        The condition is `rom.engines_present()`, which is the same question
+        the synthesizer's own `check()` answers. It used to be a narrower test
+        -- only `rom.REQUIRED`, which omits RULZ_1129.bin -- so a user with two
+        of MacinTalk 1's three files satisfied the dialog and not the
+        synthesizer, and got neither. Two halves disagreeing about the same
+        question is how you end up with silence from both.
+
+        Every step logs, because "no dialog" and "no synthesizer" look
+        identical from outside: like nothing happening at all.
+        """
         try:
-            found, _missing = rom.find()
-            if all(n in found for n in rom.REQUIRED):
+            ok, lines = rom.explain()
+            log.info("outSPOKEN: engine %s\n  %s"
+                     % ("ready" if ok else "NOT ready", "\n  ".join(lines)))
+            if ok:
                 return
             folder = rom.config_dir()
             if os.path.exists(os.path.join(folder, _MARKER)):
+                log.info("outSPOKEN: not asking, %s exists in %s"
+                         % (_MARKER, folder))
                 return
             os.makedirs(folder, exist_ok=True)
+            log.info("outSPOKEN: showing the engine-missing dialog")
             wx.CallAfter(self._ask, folder)
         except Exception:
             log.error("outSPOKEN: ROM check failed", exc_info=True)
