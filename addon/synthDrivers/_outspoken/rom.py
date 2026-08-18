@@ -39,13 +39,26 @@ REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin")
 
 
 def config_dir():
-    """`<nvda user config>/outspoken-roms`."""
+    """`<nvda user config>/outspoken-roms`.
+
+    `globalVars.appArgs.configPath` is the only correct source. NVDA's own
+    `NVDAState.WritePaths.configDir` is a property wrapping exactly this value,
+    so it already accounts for a portable copy and for a config directory given
+    on the command line with `-c`. Expanding `%APPDATA%` ourselves would be
+    right on one machine and wrong on every portable one.
+
+    The fallback exists for running outside NVDA -- the tests, and anything
+    driven from a command line -- and for nothing else.
+    """
+    base = None
     try:
         import globalVars
         base = globalVars.appArgs.configPath
     except Exception:
+        base = None
+    if not base:
         base = os.path.join(os.path.expanduser("~"), ".nvda")
-    return os.path.join(base, "outspoken-roms")
+    return os.path.join(str(base), "outspoken-roms")
 
 
 def search_roots():
