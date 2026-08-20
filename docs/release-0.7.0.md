@@ -15,7 +15,7 @@ rather than by asking for handles. If you extracted your voices before 0.7.0,
 your `voices/Agnes` holds the voice descriptor and nothing else.
 
 ```sh
-py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv" --nvda
+py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv" --nvda   # needs machfs
 ```
 
 `--nvda` is new and writes straight into the folder the add-on actually reads,
@@ -30,6 +30,11 @@ synthesizer that lists a voice and then says nothing is worse than one that
 does not list it, so the add-on now checks that a voice folder is complete and
 not merely that the engine is installed. Those are different failures and only
 one of them was caught before.
+
+The engine folder is checked the same way, and that half is the quieter one: a
+MacinTalk Pro folder missing its `datafork.bin` *opens*, accepts a voice, and
+then speaks nothing, because the lexicon lives in there. A partial extraction
+that opens is indistinguishable from a working one right up to the silence.
 
 The extractor says what will happen before you restart anything:
 

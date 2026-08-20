@@ -277,3 +277,38 @@ def test_half_a_pro_engine_is_not_an_engine(tmp_path, voicelib):
         speakable, bad = voicelib.installed(roots=[root], speakable=True)
         assert speakable == [], "Agnes was offered without %s" % missing
         assert bad and "MacinTalk Pro" in bad[0][1]
+
+
+def test_the_extractor_and_the_driver_agree_about_macintalk_1(extractor):
+    """`report_ready` promises the same judgement the add-on makes, and for
+    MacinTalk 1 it cannot get that from `voices.installed` -- its two voices
+    are a pitch setting, not folders -- so the condition is written out twice
+    and has to be held together.
+
+    The driver needs `rom.REQUIRED` plus the letter-to-sound rules: without
+    RULZ the engine takes phonemes only, which no screen reader sends."""
+    import rom
+    assert set(extractor.MT1_REQUIRED) == set(rom.REQUIRED) | {"RULZ_1129.bin"}
+
+
+def test_the_extractor_does_not_assemble_an_engine_from_two_folders(
+        tmp_path, extractor, capsys):
+    """Names repeat across a rom tree by design, so "have I got these files"
+    has to be asked per directory. Accumulating them declared MacinTalk 1
+    present when its three files were scattered over three folders."""
+    for i, name in enumerate(extractor.MT1_REQUIRED):
+        d = tmp_path / ("part%d" % i)
+        d.mkdir()
+        (d / name).write_bytes(bytes(16))
+    extractor.report_ready(str(tmp_path))
+    assert "MacinTalk 1" not in capsys.readouterr().out, \
+        "an engine was assembled out of three separate folders"
+
+    whole = tmp_path / "macintalk1"
+    whole.mkdir()
+    for name in extractor.MT1_REQUIRED:
+        (whole / name).write_bytes(bytes(16))
+    extractor.report_ready(str(tmp_path))
+    out = capsys.readouterr().out
+    assert "MacinTalk 1" in out and "Male" in out, \
+        "a complete MacinTalk 1 was not reported: %s" % out

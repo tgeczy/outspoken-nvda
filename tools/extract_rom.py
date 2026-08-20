@@ -208,8 +208,14 @@ def take(fork, spec, outdir, label):
 
 
 #: MacinTalk 1 is not a voice-folder engine -- its two voices are a pitch
-#: setting, not files -- so it is checked by its own resources.
-MT1_REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin")
+#: setting, not files -- so it is checked by its own resources rather than
+#: through `voices.installed`.
+#:
+#: **This must match what the driver requires**, which is `rom.REQUIRED` plus
+#: `RULZ_1129.bin`: without the letter-to-sound rules the engine takes phonemes
+#: only, and no screen reader sends those. `_catalogue` in outspoken.py is the
+#: authority and a test holds the two together.
+MT1_REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin", "RULZ_1129.bin")
 
 
 def report_ready(out):
@@ -235,10 +241,13 @@ def report_ready(out):
     for v in ok:
         have.setdefault(v.engine, []).append(v.name)
 
-    found = set()
-    for dirpath, _dirs, names in os.walk(out):
-        found |= {n for n in names if n in MT1_REQUIRED}
-    if found >= set(MT1_REQUIRED):
+    # Per directory, not accumulated across the tree. Names repeat by design --
+    # every MacinTalk Pro voice folder has its own `rsrcfork.bin` -- so summing
+    # them up declares an engine present that was assembled out of pieces of
+    # two. That is a bug this project has already had once, in
+    # `voices.engine_installed`.
+    want = set(MT1_REQUIRED)
+    if any(want <= set(names) for _dp, _dirs, names in os.walk(out)):
         have["MacinTalk 1"] = ["Male", "Female"]
 
     print("\n  NVDA will offer, from %s:" % out)
