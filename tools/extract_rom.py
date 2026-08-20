@@ -39,8 +39,35 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rsrc                                                   # noqa: E402
+import voices as voicelib                                     # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def nvda_roms():
+    """-> `<NVDA user config>/outspoken-roms`, or None if NVDA is not there.
+
+    **This is where the add-on actually reads the engine from**, never its own
+    folder: updating an add-on deletes and recreates that directory, so a ROM
+    kept inside it would be destroyed on every upgrade.
+
+    Extracting into `./rom` and expecting NVDA to notice is the mistake this
+    exists to prevent, and it is not hypothetical -- it is what left three
+    MacinTalk Pro voice folders of one file each on the author's own machine
+    while a complete extraction sat in the repository.
+
+    Refuses to guess. If NVDA's configuration directory is not where NVDA puts
+    it, the user is told rather than handed a folder nothing will read.
+    """
+    base = os.environ.get("APPDATA")
+    cands = []
+    if base:
+        cands.append(os.path.join(base, "nvda"))
+    cands.append(os.path.join(os.path.expanduser("~"), ".nvda"))
+    for c in cands:
+        if os.path.isdir(c):
+            return os.path.join(c, "outspoken-roms")
+    return None
 
 # (folder, [(type, id-or-None, description)]).  id None means "every one".
 WANTED = {
@@ -180,15 +207,95 @@ def take(fork, spec, outdir, label):
     return n, missing
 
 
+#: MacinTalk 1 is not a voice-folder engine -- its two voices are a pitch
+#: setting, not files -- so it is checked by its own resources.
+MT1_REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin")
+
+
+def report_ready(out):
+    """Say what the add-on will actually OFFER from this folder.
+
+    Writing files is not the same as being able to speak, and until now the
+    difference only showed up after restarting NVDA. Two ordinary states get
+    it wrong:
+
+    * an engine extracted without its voices, or voices without their engine
+      -- the extractor pulls MacinTalk Pro's Agnes, Bruce and Victoria out of
+      any image that carries them, whether or not it also had Pro itself;
+    * **voices extracted before this project could drive the engine**, leaving
+      a folder holding a `ttvd` and nothing else. That is what was on the
+      author's own machine on 2026-08-20, and adding the engine afterwards
+      made those stubs look ready. See `voices.VOICE_PARTS`.
+
+    So this reports the same judgement the add-on will make, from the same
+    function, rather than a count of files written.
+    """
+    ok, bad = voicelib.installed(roots=[out], speakable=True)
+    have = {}
+    for v in ok:
+        have.setdefault(v.engine, []).append(v.name)
+
+    found = set()
+    for dirpath, _dirs, names in os.walk(out):
+        found |= {n for n in names if n in MT1_REQUIRED}
+    if found >= set(MT1_REQUIRED):
+        have["MacinTalk 1"] = ["Male", "Female"]
+
+    print("\n  NVDA will offer, from %s:" % out)
+    if not have:
+        print("    nothing yet -- see below")
+    for engine in sorted(have):
+        names = sorted(have[engine])
+        print("    %-14s %2d voice%s  %s"
+              % (engine, len(names), " " if len(names) == 1 else "s",
+                 ", ".join(names)))
+
+    if bad:
+        # Group by reason: twenty MacinTalk 3 voices with the same explanation
+        # is one line, not twenty.
+        why = {}
+        for folder, reason in bad:
+            why.setdefault(reason, []).append(folder)
+        print("\n  Present but NOT offered, and why:")
+        for reason in sorted(why):
+            who = sorted(why[reason])
+            shown = ", ".join(who[:3])
+            if len(who) > 3:
+                shown += " and %d more" % (len(who) - 3)
+            print("    %-34s %s" % (shown[:34], reason))
+        if any("incomplete" in r for r in why):
+            print("\n    An incomplete voice is one extracted before this "
+                  "project could drive its\n    engine. Re-run this tool "
+                  "against your image to complete it -- nothing is\n"
+                  "    lost, the missing pieces are simply added.")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Extract speech engines from your own Mac disk image.")
     ap.add_argument("source", help="an HFS image, or a single Mac file")
-    ap.add_argument("--out", default=os.path.join(ROOT, "rom"),
+    ap.add_argument("--out", default=None,
                     help="destination folder (default: ./rom)")
+    ap.add_argument("--nvda", action="store_true",
+                    help="write straight into NVDA's outspoken-roms folder, "
+                         "which is the one the add-on actually reads")
     ap.add_argument("--list", action="store_true",
                     help="only show what was found; write nothing")
     a = ap.parse_args()
+
+    if a.nvda:
+        if a.out:
+            print("give either --nvda or --out, not both")
+            return 1
+        a.out = nvda_roms()
+        if not a.out:
+            print("cannot find NVDA's configuration directory.\n"
+                  "  Looked for %%APPDATA%%\\nvda and ~/.nvda.\n"
+                  "  Extract with --out <folder> and copy it there yourself.")
+            return 1
+        print("writing into NVDA's own folder: %s\n" % a.out)
+    elif not a.out:
+        a.out = os.path.join(ROOT, "rom")
 
     if not os.path.exists(a.source):
         print("no such file: %s" % a.source)
@@ -294,9 +401,14 @@ def main():
 
     if not a.list:
         print("\n  %d resources written under %s" % (total, a.out))
-        print("  Nothing here is redistributable -- these are your copies, from\n"
-              "  your image, and they stay out of the repository and out of any\n"
-              "  release. See README.md.")
+        report_ready(a.out)
+        if not a.nvda and nvda_roms():
+            print("\n  This folder is not the one NVDA reads. Re-run with "
+                  "--nvda to write\n  straight into %s, or copy it there."
+                  % nvda_roms())
+        print("\n  Nothing here is redistributable -- these are your copies, "
+              "from\n  your image, and they stay out of the repository and "
+              "out of any\n  release. See README.md.")
     return 0
 
 

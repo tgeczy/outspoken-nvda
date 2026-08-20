@@ -70,12 +70,35 @@ Explorer.
 already have:
 
 ```sh
-py -3 tools/extract_rom.py "C:/path/to/outSPOKEN"
-py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv"      # needs machfs
+py -3 tools/extract_rom.py "C:/path/to/outSPOKEN" --nvda
+py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv" --nvda   # needs machfs
 ```
 
+`--nvda` writes straight into the folder the add-on actually reads. Without it
+the files land in `./rom`, which is fine for the tools in this repository and
+invisible to NVDA — a distinction worth one flag, because "extracted it and
+nothing changed" is the commonest way this goes wrong.
+
 It classifies what it finds by what is inside it rather than by name, extracts
-what this project can use, and says plainly what it skipped and why.
+what this project can use, and says plainly what it skipped and why. It then
+reports **what NVDA will actually offer**, using the same function the add-on
+uses, and names anything it will not:
+
+```
+  NVDA will offer, from C:\Users\you\AppData\Roaming\nvda\outspoken-roms:
+    MacinTalk 2    10 voices  Ben, Boris, Brenda, Mariel, ...
+    MacinTalk Pro   3 voices  Agnes, Bruce, Victoria
+
+  Present but NOT offered, and why:
+    Fred and 19 more    MacinTalk 3 is not installed
+    Agnes               incomplete extraction, missing rsrcfork.bin
+```
+
+**If you extracted before 0.7.0, re-run it.** MacinTalk Pro's voices need far
+more than earlier versions took — the unit database, the per-voice code and the
+resource fork itself — so an older `voices/Agnes` holds the descriptor and
+nothing else. Those are not offered rather than offered-and-silent, and re-
+running completes them in place without losing anything.
 
 ## What was learned by reading the binary
 

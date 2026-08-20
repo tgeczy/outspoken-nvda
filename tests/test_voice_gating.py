@@ -181,3 +181,66 @@ def test_a_macintalk_2_voice_without_its_wave_data_is_not_offered(tmp_path,
     speakable, bad = voicelib.installed(roots=[root], speakable=True)
     assert speakable == []
     assert bad and "ttvw" in bad[0][1], bad
+
+
+# The extractor makes the same judgement, before NVDA is ever restarted.
+
+
+@pytest.fixture
+def extractor():
+    import extract_rom
+    return extract_rom
+
+
+def test_the_extractor_says_what_nvda_will_offer(tmp_path, extractor, capsys):
+    """Writing files is not the same as being able to speak, and until this
+    existed the difference only showed up after restarting NVDA."""
+    root = _tree(tmp_path,
+                 {"Agnes": (b"gala", 320, b"Agnes"),
+                  "Ben": (b"mtk2", 3, b"Ben")},
+                 engine_files=["macintalkpro/gtse_1.bin",
+                               "macintalk2/Cecy_1.bin",
+                               "macintalk2/Cecy_3.bin"])
+    extractor.report_ready(root)
+    out = capsys.readouterr().out
+    assert "MacinTalk Pro" in out and "Agnes" in out
+    assert "MacinTalk 2" in out and "Ben" in out
+
+
+def test_the_extractor_names_an_incomplete_voice_and_what_is_missing(
+        tmp_path, extractor, capsys):
+    """The case that actually happened. A voice extracted before this project
+    could drive its engine is a folder holding a `ttvd` and nothing else, and
+    adding the engine afterwards makes it look ready.
+
+    Saying "3 resources written" while NVDA silently drops the voice is the
+    unhelpful half of the truth, so the reason has to be printed with the
+    missing file named."""
+    root = _tree(tmp_path, {"Agnes": (b"gala", 320, b"Agnes")},
+                 engine_files=["macintalkpro/gtse_1.bin"], complete=False)
+    extractor.report_ready(root)
+    out = capsys.readouterr().out
+    assert "NOT offered" in out
+    assert "incomplete" in out and "rsrcfork.bin" in out
+    assert "Re-run this tool" in out, "it must say how to fix it"
+
+
+def test_the_extractor_can_find_where_nvda_actually_reads_from(tmp_path,
+                                                               extractor,
+                                                               monkeypatch):
+    """`--nvda` exists because extracting into ./rom and expecting NVDA to
+    notice is the mistake that left stub voice folders on the author's own
+    machine while a complete extraction sat in the repository.
+
+    It refuses to guess: a folder nothing will read is worse than an error.
+    """
+    fake = tmp_path / "roaming"
+    (fake / "nvda").mkdir(parents=True)
+    monkeypatch.setenv("APPDATA", str(fake))
+    got = extractor.nvda_roms()
+    assert got and got.endswith("outspoken-roms")
+    assert os.path.dirname(got) == str(fake / "nvda")
+
+    monkeypatch.setenv("APPDATA", str(tmp_path / "nothing-here"))
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path / "nope"))
+    assert extractor.nvda_roms() is None, "it guessed instead of refusing"
