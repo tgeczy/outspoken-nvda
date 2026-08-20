@@ -83,15 +83,22 @@ def test_it_will_not_pretend_to_hold_another_voice(pro):
     assert eng.voice.name != other.name, "it kept the voice it really has"
 
 
-def test_it_is_not_offered_to_nvda_until_it_speaks(pro):
-    """The gate. A synthesizer that lists a voice and then says nothing is
-    worse than one that does not list it, so `usable` stays False until a
-    probe has written a WAV somebody heard."""
+def test_it_is_offered_to_nvda_now_that_it_speaks(pro):
+    """The gate, and it is open since 2026-08-20.
+
+    A synthesizer that lists a voice and then says nothing is worse than one
+    that does not list it, so `usable` stayed False for four days while the
+    engine opened, took a voice, ran its synthesis modules and made no sound.
+    What was missing was never in the engine: an asynchronous `_Read` whose
+    completion routine the host never called, and `_FixRatio` never served.
+
+    This asserts the flag as well as the function, so flipping `SPEAKS` back
+    to silence a failure fails here instead -- the flag means a person heard
+    it, and a test cannot hear anything."""
     import paths
     import macintalkpro
-    if macintalkpro.SPEAKS:
-        pytest.skip("SPEAKS is on; audio is expected to work now")
-    assert macintalkpro.usable(paths.roots()) is False
+    assert macintalkpro.SPEAKS is True
+    assert macintalkpro.usable(paths.roots()) is True
 
 
 @pytest.fixture(scope="module")

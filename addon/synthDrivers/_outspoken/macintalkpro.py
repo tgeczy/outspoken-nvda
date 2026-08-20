@@ -79,16 +79,19 @@ NOT_A_BIN = ("datafork.bin", "rsrcfork.bin", "resources.tsv", "names.tsv")
 
 REQUIRED = ("gtse_1.bin",)
 
-#: **Set to True only when Pro has actually produced audio.**
+#: **The gate, and it is open.** 2026-08-20: Tomi listened to Agnes, Bruce and
+#: Victoria and called them "sounding perfect, no stutter, no choppiness".
 #:
-#: The engine opens, takes a voice and runs its synthesis modules, but nothing
-#: has come out of it yet. Listing a voice that then says nothing is the one
-#: failure this project treats as worse than not listing it at all -- see
-#: `SynthDriver.check` -- so the voices stay out of NVDA's list until a probe
-#: has written a WAV somebody has heard.
+#: It stayed False for four days while the engine opened, took a voice and ran
+#: its synthesis modules without a sound coming out, because listing a voice
+#: that then says nothing is the one failure this project treats as worse than
+#: not listing it at all -- see `SynthDriver.check`. What was missing was never
+#: in the engine: an asynchronous `_Read` whose completion routine the host
+#: never called, and `_FixRatio` never served at all.
 #:
-#: `py -3 tools/probe_pro_speak.py "Hello" Bruce` is the gate.
-SPEAKS = False
+#: `py -3 tools/probe_pro_speak.py "Hello" Bruce` writes the WAV, and a person
+#: hearing it is what this flag means. Do not flip it back on a passing test.
+SPEAKS = True
 
 #: What the extractor writes beside the `.bin`s: type, id, map entry, name.
 INDEX_FILE = "resources.tsv"

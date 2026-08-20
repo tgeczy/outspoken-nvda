@@ -70,7 +70,9 @@ def test_the_1984_voice_ids_never_change(driver):
     user's voice on upgrade. Labels may change freely; these two may not."""
     voices = driver._get_availableVoices()
     assert list(voices)[:2] == ["male", "female"]
-    assert all(v.startswith("mtk2:") for v in list(voices)[2:])
+    # Everything since is prefixed by its engine. gala: is MacinTalk Pro,
+    # which reaches this list only on a machine that has it extracted.
+    assert all(v.startswith(("mtk2:", "gala:")) for v in list(voices)[2:])
 
 
 def test_every_listed_voice_can_be_selected(driver):
@@ -511,3 +513,112 @@ def test_every_wx_name_we_use_actually_exists_in_wxpython():
         "these wx names are not in the allowed set. Check they exist in "
         "wxPython -- YES_NO_CANCEL does not -- then add them here: %r"
         % unknown)
+
+
+# --------------------------------------------------------- MacinTalk Pro ---
+#
+# The driver tests above run against whatever is staged into the fake config
+# directory, which is MacinTalk 1 and 2. Pro is large -- the engine plus one
+# voice is well over a megabyte -- so rather than copy it, these point the
+# add-on's own search at the repository's `rom/` folder. That still exercises
+# the real path: `_catalogue`, `_sync`, the rebuild on a voice change, and the
+# worker thread.
+
+
+@pytest.fixture
+def pro_driver(monkeypatch):
+    """A driver that can see MacinTalk Pro, or a skip."""
+    import paths
+    import rom
+    import outspoken
+    import macintalkpro
+    monkeypatch.setattr(rom, "search_roots", lambda: paths.roots())
+    if not macintalkpro.usable(paths.roots()):
+        pytest.skip("MacinTalk Pro is not extracted; run tools/extract_rom.py")
+    d = outspoken.SynthDriver()
+    yield d
+    d.terminate()
+
+
+def _pro_voices(driver):
+    return [v for v in driver._get_availableVoices() if v.startswith("gala:")]
+
+
+def test_pro_voices_reach_nvda_and_all_of_them_speak(pro_driver):
+    """Every Pro voice listed has to make a sound.
+
+    They were deliberately kept out of this list until 2026-08-20, when the
+    asynchronous lexicon read and `_FixRatio` were finally served and Tomi
+    heard all three. A voice in the list that says nothing is the failure this
+    project treats as worse than not listing it."""
+    voices = _pro_voices(pro_driver)
+    assert voices, "MacinTalk Pro is present but no gala: voice is listed"
+    for vid in voices:
+        pro_driver._set_voice(vid)
+        assert _spoken(pro_driver, "Testing one two three.", timeout=20.0), \
+            "%s was listed and produced no audio" % vid
+
+
+def test_pro_survives_being_interrupted(pro_driver):
+    """A screen reader cancels far more often than it finishes.
+
+    Interruption is where every audio fault in this project has lived, and
+    Pro's `stop()` deliberately never touches the emulator: cancel() runs on
+    NVDA's main thread while the worker may be mid-render, and two threads
+    stepping one emulated CPU corrupts it."""
+    voices = _pro_voices(pro_driver)
+    if not voices:
+        pytest.skip("no MacinTalk Pro voice")
+    pro_driver._set_voice(voices[0])
+    long = ("This is a long sentence that will be interrupted before it "
+            "finishes, which is what a screen reader does constantly.")
+    for _ in range(5):
+        pro_driver.speak([long])
+        time.sleep(0.02)
+        pro_driver.cancel()
+    assert _spoken(pro_driver, "Still here.", timeout=20.0), \
+        "it went silent after being interrupted five times"
+
+
+def test_changing_pro_voice_rebuilds_and_still_speaks(pro_driver):
+    """Pro holds ONE voice: the host has 64 resource slots, Pro takes 50 and a
+    voice another ten, so MacinTalk 2's register-them-all trick cannot carry
+    over and a voice change means a rebuild. Doing that after a cancel is the
+    ordinary case -- NVDA cancels before it speaks the confirmation."""
+    voices = _pro_voices(pro_driver)
+    if len(voices) < 2:
+        pytest.skip("only one MacinTalk Pro voice extracted")
+    for vid in voices:
+        pro_driver.speak(["something long enough to still be rendering"])
+        time.sleep(0.01)
+        pro_driver.cancel()
+        pro_driver._set_voice(vid)
+        assert _spoken(pro_driver, "Switched.", timeout=20.0), \
+            "silent after switching to %s" % vid
+        # The rebuild happens on the worker, and audio left over from the
+        # utterance we just cancelled can reach the player before it lands,
+        # so wait for the engine rather than reading it the instant audio
+        # appears. An earlier version of this test raced exactly there.
+        want = vid.split(":", 1)[1]
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 20.0:
+            eng = pro_driver._engine
+            if eng is not None and getattr(eng.voice, "name", None) == want:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("the engine never rebuilt on %s" % vid)
+
+
+def test_crossing_between_pro_and_the_older_engines(pro_driver):
+    """osp_init() resets the emulator's globals, so two engines cannot be live
+    at once and crossing has to close the old one from the worker thread. Pro
+    is the first engine with a 68020 and a self-advancing clock, both of which
+    the others must not inherit."""
+    voices = _pro_voices(pro_driver)
+    if not voices:
+        pytest.skip("no MacinTalk Pro voice")
+    for vid in ("male", voices[0], "male", voices[-1], "male"):
+        pro_driver._set_voice(vid)
+        assert _spoken(pro_driver, "Crossing.", timeout=20.0), \
+            "silent on %s" % vid

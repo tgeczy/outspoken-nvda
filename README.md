@@ -1,22 +1,38 @@
 # outspoken-nvda
 
-An NVDA synthesizer driver for two Macintosh speech engines, both run as real
+An NVDA synthesizer driver for three Macintosh speech engines, all run as real
 68000 code under an emulator:
 
 * **MacinTalk (1984)** — the engine that introduced the Macintosh, written by
   Joseph Katz and Mark Barton, who went on to found SoftVoice. Two voices.
 * **MacinTalk 2 (Apple, 1992)** — ten more: Ben, Boris, Brenda, Mariel, Marvin,
-  Mr. Hughes, Otis, RoboVox, Votron and Xero. **As far as we can establish,
-  these have not run outside a Macintosh before.**
+  Mr. Hughes, Otis, RoboVox, Votron and Xero.
+* **MacinTalk Pro (Apple, 1993)** — Agnes, Bruce and Victoria. The first
+  concatenative Macintosh voices, and the ones most people mean when they
+  remember what a Mac sounded like. Pro needs a 68020, is addressed by resource
+  *name* rather than id, and reads its 573 KB lexicon out of its own file as it
+  speaks — asynchronously, which is why it needed a File Manager that answers
+  completion routines.
+
+**As far as we can establish, neither MacinTalk 2's voices nor MacinTalk Pro's
+have run outside a Macintosh before.**
 
 This project models only the handful of Macintosh services the engines actually
-touch. Whichever of them you have extracted are the ones offered, so either
+touch. Whichever of them you have extracted are the ones offered, so any one
 alone is enough.
 
-> **Status: v0.5.1, and both engines speak inside NVDA.** English text, twelve
-> voices, rate, interruption, symbols and numbers. 84 tests:
+> **Status: all three engines speak inside NVDA.** English text, fifteen
+> voices, rate, interruption, symbols and numbers. 111 tests:
 > `py -3 -m pytest tests -q`. Working log in
 > [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md).
+>
+> MacinTalk Pro's Agnes, Bruce and Victoria arrived on 2026-08-20. Two host
+> services stood between "it opens" and "it speaks", and neither was in the
+> engine: Pro reads its lexicon with an **asynchronous** `_Read` and parks the
+> module that asked until the completion routine wakes it, and `_FixRatio` was
+> never served at all — which cost twenty million out-of-range reads in a
+> single utterance. Both are the same mistake: **a trap answered in the wrong
+> mode is a lie the caller cannot detect.**
 >
 > MacinTalk 1 takes phonemes only, so English is converted by an interpreter
 > written for this project, reading the user's own `RULZ` rules and `DICT`
@@ -31,8 +47,9 @@ alone is enough.
 > zero". It is a checkbox, because digit-by-digit is genuinely better for
 > phone numbers and identifiers.
 >
-> Not yet done: a user pronunciation dictionary, and MacinTalk 2's pitch
-> slider, which is deliberately inert until it can be made to behave.
+> Not yet done: a user pronunciation dictionary, and the pitch sliders for
+> MacinTalk 2 and Pro, both deliberately inert until they can be made to
+> behave.
 
 ## You must supply the engine
 

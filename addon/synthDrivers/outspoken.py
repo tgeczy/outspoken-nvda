@@ -106,9 +106,9 @@ def _catalogue():
         log.debug("outSPOKEN: MacinTalk 2 unavailable", exc_info=True)
     try:
         import macintalkpro
-        # `usable` is False until MacinTalk Pro has actually made a sound --
-        # see macintalkpro.SPEAKS. It opens, takes a voice and runs its
-        # synthesis modules, and that is still not the same as speaking.
+        # `usable` was False until MacinTalk Pro actually made a sound --
+        # see macintalkpro.SPEAKS, open since 2026-08-20. Opening, taking a
+        # voice and running the synthesis modules was never the same thing.
         if macintalkpro.usable(rom.search_roots()):
             _d, pro = macintalkpro.find(rom.search_roots())
             for v in pro:

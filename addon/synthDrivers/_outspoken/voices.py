@@ -69,9 +69,8 @@ ENGINES = {
 #: **A voice folder is not enough, and the two arrive separately.** The
 #: extractor pulls MacinTalk Pro's Victoria, Bruce and Agnes out of any disk
 #: image that carries them -- roughly 900 KB each -- whether or not that image
-#: also had the engine that reads them, and whether or not this project can
-#: drive it yet. So a user can easily hold three Pro voices and nothing able to
-#: speak them.
+#: also had the engine that reads them. So a user can easily hold three Pro
+#: voices and nothing able to speak them.
 #:
 #: `mtk3` is deliberately absent rather than missing: a native NVDA add-on
 #: builds that engine from Apple's own source, so those voices are never ours
