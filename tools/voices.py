@@ -75,9 +75,20 @@ ENGINES = {
 #: `mtk3` is deliberately absent rather than missing: a native NVDA add-on
 #: builds that engine from Apple's own source, so those voices are never ours
 #: to offer however complete the extraction is.
+#: MacinTalk Pro's entry is three files rather than one because **it reads its
+#: own file**, and each fork was measured rather than assumed:
+#:
+#:     everything            speaks
+#:     no rsrcfork.bin       Open returns -64
+#:     no datafork.bin       Open succeeds, takes the voice, and speaks
+#:                           NOTHING -- the lexicon lives there
+#:     neither               "has neither fork"
+#:
+#: The middle one is why this list grew: a partial extraction that *opens* is
+#: indistinguishable from a working one until the silence.
 ENGINE_FILES = {
     "mtk2": ("Cecy_1.bin", "Cecy_3.bin"),
-    "gala": ("gtse_1.bin",),
+    "gala": ("gtse_1.bin", "datafork.bin", "rsrcfork.bin"),
 }
 
 #: What a VOICE FOLDER itself must hold before that voice can speak, as
@@ -216,17 +227,22 @@ def engine_installed(creator, roots=None):
 
     Asks for the engine's own code, not for its voices: having Victoria says
     nothing about whether MacinTalk Pro is there to read her.
+
+    **All of the files have to be in ONE folder.** Accumulating them across the
+    tree looks equivalent and is not: a MacinTalk Pro *voice* folder contains a
+    `rsrcfork.bin` of its own, so a half-extracted engine plus any complete
+    voice satisfied the list between them and the engine was declared present.
+    It then opened -- and said nothing.
     """
     need = ENGINE_FILES.get(creator)
     if not need:
         return False
-    left = set(need)
+    want = set(need)
     for root in (roots if roots is not None else _roots()):
         for _dirpath, _dirs, names in os.walk(root):
-            left -= set(names)
-            if not left:
+            if want <= set(names):
                 return True
-    return not left
+    return False
 
 
 def installed(engine=None, roots=None, speakable=False):
