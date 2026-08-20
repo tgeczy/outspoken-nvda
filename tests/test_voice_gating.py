@@ -29,13 +29,31 @@ def _ttvd(creator=b"gala", vid=210, name=b"Victoria", gender=2):
     return out
 
 
-def _tree(root, voices, engine_files=()):
-    """Lay out a rom folder: some voices, and maybe an engine to speak them."""
+def _tree(root, voices, engine_files=(), complete=True):
+    """Lay out a rom folder: some voices, and maybe an engine to speak them.
+
+    `complete=False` leaves each voice as the bare `ttvd` that a pre-Pro
+    extraction produced. That is a real state to be in rather than an invented
+    one -- see `voices.VOICE_PARTS`.
+    """
+    import voices as _voicelib
     for folder, (creator, vid, name) in voices.items():
         d = os.path.join(root, "voices", folder)
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "ttvd_%d.bin" % vid), "wb") as fh:
             fh.write(_ttvd(creator, vid, name))
+        if not complete:
+            continue
+        need_files, need_types = _voicelib.VOICE_PARTS.get(
+            creator.decode("ascii"), ((), ()))
+        for f in need_files:
+            with open(os.path.join(d, f), "wb") as fh:
+                fh.write(bytes(16))
+        for t in need_types:
+            if t == "ttvd":
+                continue
+            with open(os.path.join(d, "%s_%d.bin" % (t, vid)), "wb") as fh:
+                fh.write(bytes(16))
     for rel in engine_files:
         p = os.path.join(root, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -113,3 +131,53 @@ def test_the_shipped_copy_matches_the_tool(voicelib):
     with open(a, "rb") as fa, open(b, "rb") as fb:
         assert fa.read() == fb.read(), \
             "tools/voices.py and the add-on's copy have diverged"
+
+
+def test_an_incomplete_voice_is_not_offered_even_with_the_engine(tmp_path,
+                                                                 voicelib):
+    """The upgrade case, and it is the worst kind of failure.
+
+    A user who extracted voices before this project could drive MacinTalk Pro
+    has a `voices/Agnes` holding one file -- the `ttvd` -- because that was all
+    anything needed then. Tomi's own machine was in exactly this state on
+    2026-08-20. Installing the engine afterwards makes the stub *look* ready:
+    it is listed, it can be chosen, and then the engine raises "has neither
+    fork" and the voice says nothing.
+
+    Gating on the engine alone cannot catch this, because the engine really is
+    there. See `voices.VOICE_PARTS`.
+    """
+    root = _tree(tmp_path, {"Agnes": (b"gala", 320, b"Agnes")},
+                 engine_files=["macintalkpro/gtse_1.bin"], complete=False)
+    found, _bad = voicelib.installed(roots=[root])
+    assert [v.name for v in found] == ["Agnes"], \
+        "the tools should still see her, so the user can be told why"
+    speakable, bad = voicelib.installed(roots=[root], speakable=True)
+    assert speakable == [], "an incomplete Pro voice was offered to NVDA"
+    assert bad and "incomplete" in bad[0][1], \
+        "it must say what is missing rather than just refusing: %r" % (bad,)
+    assert "rsrcfork.bin" in bad[0][1]
+
+
+def test_a_complete_voice_is_still_offered(tmp_path, voicelib):
+    """The guard on the guard. Gating too broadly is its own failure, and this
+    one would quietly remove every voice the user has."""
+    root = _tree(tmp_path, {"Agnes": (b"gala", 320, b"Agnes")},
+                 engine_files=["macintalkpro/gtse_1.bin"])
+    speakable, _bad = voicelib.installed(roots=[root], speakable=True)
+    assert [v.name for v in speakable] == ["Agnes"]
+
+
+def test_a_macintalk_2_voice_without_its_wave_data_is_not_offered(tmp_path,
+                                                                  voicelib):
+    """The same hole on the other engine: MacinTalk 2 registers three
+    resources per voice, and with only the descriptor it loads and says
+    nothing. Real MacinTalk 2 voice folders carry no `resources.tsv`, so that
+    must not be required of them -- checked against one rather than assumed."""
+    root = _tree(tmp_path, {"Ben": (b"mtk2", 3, b"Ben")},
+                 engine_files=["macintalk2/Cecy_1.bin",
+                               "macintalk2/Cecy_3.bin"],
+                 complete=False)
+    speakable, bad = voicelib.installed(roots=[root], speakable=True)
+    assert speakable == []
+    assert bad and "ttvw" in bad[0][1], bad

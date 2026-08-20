@@ -80,6 +80,42 @@ ENGINE_FILES = {
     "gala": ("gtse_1.bin",),
 }
 
+#: What a VOICE FOLDER itself must hold before that voice can speak, as
+#: (files, resource types).
+#:
+#: `ENGINE_FILES` answers "is the engine here"; this answers "is the voice
+#: complete", and **they fail separately.** The case that made it necessary is
+#: an ordinary upgrade: a user who extracted voices before this project could
+#: drive MacinTalk Pro has a `voices/Agnes` holding one file, `ttvd_320.bin`,
+#: because that was all anything needed then. Installing the engine later made
+#: that stub *look* ready -- listed, chosen, and then `Engine.__init__` raises
+#: "has neither fork" and the voice is silent, which is the failure this
+#: project treats as worse than not listing it at all.
+#:
+#: Checked against a real folder rather than assumed: MacinTalk 2's voices
+#: carry no `resources.tsv` and must not be required to.
+VOICE_PARTS = {
+    # Pro reads a voice's ~800 KB of units out of the voice file's RESOURCE
+    # fork by walking the map, and looks its pieces up by name, so the fork
+    # and the extractor's index both have to be there.
+    "gala": (("rsrcfork.bin", "resources.tsv"), ("ttvd", "gtsv")),
+    # MacinTalk 2 registers each voice's three resources by id. Without the
+    # wave data it would load and then say nothing.
+    "mtk2": ((), ("ttvd", "ttvi", "ttvw")),
+}
+
+
+def voice_incomplete(creator, files, extra):
+    """-> [what is missing] for a voice folder, or [] if it can speak.
+
+    `files` is {resource type: path} and `extra` is {filename: path}, which is
+    how `installed` already has them.
+    """
+    need_files, need_types = VOICE_PARTS.get(creator, ((), ()))
+    short = [f for f in need_files if f not in extra]
+    short += [t for t in need_types if t not in files]
+    return short
+
 
 class Voice(object):
     __slots__ = ("name", "comment", "creator", "id", "version", "gender",
@@ -257,6 +293,13 @@ def installed(engine=None, roots=None, speakable=False):
                     havEngine[v.creator] = engine_installed(v.creator, roots)
                 if not havEngine[v.creator]:
                     bad.append((folder, "%s is not installed" % v.engine))
+                    continue
+                # The engine being present is not the same as this voice being
+                # complete -- see VOICE_PARTS.
+                short = voice_incomplete(v.creator, files, extra)
+                if short:
+                    bad.append((folder, "incomplete extraction, missing %s"
+                                % ", ".join(short)))
                     continue
             out.append(v)
     out.sort(key=lambda v: v.name.lower())
