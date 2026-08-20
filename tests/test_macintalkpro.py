@@ -185,3 +185,46 @@ def test_it_produces_speech_shaped_audio(spoken):
     assert hi - lo > 60, "range %d..%d is too small to be speech" % (lo, hi)
     live = sum(1 for c in pcm if c != 0x80)
     assert live > len(pcm) // 4,         "only %d of %d samples are not silence" % (live, len(pcm))
+
+
+def test_it_speaks_again_on_the_same_instance(pro):
+    """NVDA's first difference from a probe is a second utterance.
+
+    The scheduler puts every node back to its preset of 8 when an utterance
+    ends, and under the old broken state a second `SpeakBuffer` gave six
+    dispatches instead of twenty-one and stayed silent -- so reuse is a
+    genuinely separate path, not an obvious consequence of the first one
+    working. Three in a row, because the failure to look for is drift rather
+    than an immediate stop."""
+    from probe_pro_modules import (SPEAK, SET_INFO, SO_CURRENT_VOICE,
+                                   SO_RATE, fixed)
+    from probe_pro_open import TEXT_BUF, PARAM_BUF, VOICE_SPEC, build
+
+    h, tok, voice, (reason, result) = build()
+    assert reason == 1 and result == 0, "Open failed"
+    creator = voice.creator.encode("mac-roman", "replace")
+    h.w32(VOICE_SPEC, int.from_bytes(creator[:4].ljust(4, b" "), "big"))
+    h.w32(VOICE_SPEC + 4, voice.id)
+    h.component_call(tok, SET_INFO, [SO_CURRENT_VOICE, VOICE_SPEC])
+    h.w32(PARAM_BUF, fixed(180))
+    h.component_call(tok, SET_INFO, [SO_RATE, PARAM_BUF])
+
+    sizes = []
+    for text in (b"The first utterance.", b"And here is a second one.",
+                 b"Three times on one instance."):
+        h.pcm_reset()
+        h.load(TEXT_BUF, text + b"\0")
+        _r, res = h.component_call(tok, SPEAK, [TEXT_BUF, len(text), 0])
+        assert res == 0, "SpeakBuffer %d returned %d" % (len(sizes) + 1, res)
+        while h.buffers_taken < 400:
+            if not h.run_callbacks(max_rounds=8):
+                break
+        pcm = h.pcm
+        assert len(pcm) > 5000, \
+            "utterance %d gave %d bytes" % (len(sizes) + 1, len(pcm))
+        assert min(pcm) != max(pcm), "utterance %d is flat" % (len(sizes) + 1)
+        sizes.append(len(pcm))
+    assert h.fault_count == 0, "%d faults over three utterances" % h.fault_count
+    # Longer text, more audio.  Drift would show as a stuck or shrinking
+    # length while the text grows.
+    assert sizes[0] < sizes[1] < sizes[2], "lengths went %r" % (sizes,)
