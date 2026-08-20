@@ -96,13 +96,26 @@ def test_it_is_not_offered_to_nvda_until_it_speaks(pro):
 
 @pytest.fixture(scope="module")
 def spoken(pro):
-    """One `SpeakBuffer` through the real engine, with the module dispatches
-    recorded. Shares the `pro` fixture's skip, so this whole group disappears
-    when the engine is not extracted."""
+    """One whole utterance through the real engine.
+
+    Speaking is asynchronous: `SpeakBuffer` queues the first buffer and
+    returns, and everything after it only exists if the host keeps being the
+    Sound Manager. Shares the `pro` fixture's skip, so this whole group
+    disappears when the engine is not extracted."""
     import probe_pro_modules
-    h, voice = probe_pro_modules.speak()
-    order, seen = probe_pro_modules.modules(h)
-    return h, order
+    h, _voice = probe_pro_modules.speak(text=b"Hello, this is MacinTalk Pro.")
+    order, _seen = probe_pro_modules.modules(h)
+    # Read the pipeline out BEFORE pumping: once the utterance finishes the
+    # scheduler puts every node back to its preset of 8 for the next one, so a
+    # state read at the end of the run says nothing about what happened during
+    # it. Reading a byte too late is how two landmarks got into the notes.
+    pipeline = [(h.r8(n + 0x3E + 0x0B), h.r32(n + 0x3E + 0x10),
+                 h.r32(n + 0x3E + 0x14)) for _e, n in order]
+    while h.buffers_taken < 400:
+        if not h.run_callbacks(max_rounds=8):
+            break
+    return h, order, pipeline
+
 
 
 def test_the_asynchronous_lexicon_read_gets_its_completion(spoken):
@@ -116,7 +129,7 @@ def test_the_asynchronous_lexicon_read_gets_its_completion(spoken):
     rule as "a stubbed trap is a lie the caller cannot detect", one step on:
     **so is a trap answered synchronously when it was asked asynchronously.**
     """
-    h, _order = spoken
+    h, _order, _pipeline = spoken
     runs, dropped = h.completions
     assert runs > 0, "no completion routine ran; the lexicon lookups are lost"
     assert dropped == 0, "the completion queue overflowed -- a dropped " \
@@ -131,24 +144,44 @@ def test_the_phoneme_stage_consumes_all_of_its_input(spoken):
     it even looks at the pipes, and ends the pass at the first node in state 6.
     EnglPhon suspending itself at a lexicon lookup (state 3) therefore parks
     the whole engine, which is what 93 of 99 units consumed used to mean."""
-    h, order = spoken
-    req = order[1][1] + 0x3E                      # node+$3E is the request
-    avail, used = h.r32(req + 0x10), h.r32(req + 0x14)
-    state = h.r8(req + 0x0B)
+    _h, _order, pipeline = spoken
+    state, avail, used = pipeline[1]              # #1 is EnglPhon
     assert avail > 0, "the text module produced nothing to work on"
     assert used == avail, \
         "EnglPhon left %d of %d units unconsumed" % (avail - used, avail)
     assert state == 6, "EnglPhon reports state %d, not 6 (finished)" % state
 
 
-def test_the_waveform_stage_is_reached_with_real_parameters(spoken):
-    """The stage after the allophone module gets a parameter stream, which is
-    what proves the front end really ran rather than merely returning noErr.
+def test_every_stage_of_the_pipeline_finishes(spoken):
+    """The live chain is Cmd -> Phon -> Allo -> Wave -> Snd, and each stage
+    only starts when the one before it hands something on.
 
-    Deliberately not an assertion about audio: `macintalkpro.SPEAKS` stays
-    False until a WAV somebody heard exists."""
-    h, order = spoken
-    req = order[3][1] + 0x3E                      # #3 is *Wave
-    buf, avail = h.r32(req + 0x0C), h.r32(req + 0x10)
-    assert buf and avail > 100, \
-        "*Wave was handed %d units at 0x%08X" % (avail, buf)
+    `*XPh` and `*XAl` are the phoneme-input alternates and are correctly never
+    primed, so they stay at the scheduler's preset of 8."""
+    _h, _order, pipeline = spoken
+    names = ["*Cmd", "EnglPhon", "*XPh", "*Wave", "*XAl", "EnglAllo", "*Snd"]
+    for i in (0, 1, 3, 5):
+        state = pipeline[i][0]
+        assert state == 6, "%s reports state %d, not 6" % (names[i], state)
+
+
+def test_it_produces_speech_shaped_audio(spoken):
+    """MacinTalk Pro speaking, which is the whole point.
+
+    Not "some bytes": a buffer the engine cleared and never filled is flat,
+    and flat is what every earlier attempt produced. This checks the samples
+    move, which neither silence nor a stuck DC level can fake.
+
+    Two missing services were between here and that. `_FixRatio` unserved was
+    worth twenty million out-of-range reads and no audio at all, and the
+    unanswered asynchronous lexicon read was worth nothing past the phoneme
+    stage. Both looked like the engine failing."""
+    h, _order, _pipeline = spoken
+    pcm = h.pcm
+    assert h.fault_count == 0, "%d memory faults while synthesising" % h.fault_count
+    assert len(pcm) > 10000, "only %d bytes of audio" % len(pcm)
+    lo, hi = min(pcm), max(pcm)
+    assert lo != hi, "flat at %d -- cleared buffers, never filled" % lo
+    assert hi - lo > 60, "range %d..%d is too small to be speech" % (lo, hi)
+    live = sum(1 for c in pcm if c != 0x80)
+    assert live > len(pcm) // 4,         "only %d of %d samples are not silence" % (live, len(pcm))

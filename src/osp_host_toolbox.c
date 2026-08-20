@@ -167,6 +167,45 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 8, fx_mul(m68k_read_memory_32(csp + 4),
                                     m68k_read_memory_32(csp)), 4);
         return 1;
+    case 0xA869: {                       /* _FixRatio(short, short) -> Fixed  */
+        /* Named from its two call sites in `*Wave`, which settle the shape
+         * without any guessing.  At +$4BC4:
+         *
+         *     clr.l   -(a7)              ; the outer result slot
+         *     move.l  -$e(a6), -(a7)     ; a Fixed
+         *     clr.l   -(a7)              ; this call's result slot
+         *     move.w  $2(a4,d0.w), -(a7) ; numerator, out of a table
+         *     move.w  #$64, -(a7)        ; denominator: 100
+         *     _FixRatio
+         *     _FixMul
+         *     move.l  (a7)+, d0
+         *
+         * Two calls back to back popping one long says this takes four bytes
+         * of arguments and leaves four, nested inside a FixMul that takes
+         * eight -- and x/100 as a Fixed is a percentage, which is what the
+         * table holds.
+         *
+         * **Unserved it was worse than absent.** A Toolbox stub leaves the
+         * arguments on the stack and the result slot unwritten, so `*Wave`
+         * took a null for a table base and walked it in 82-byte steps: twenty
+         * million out-of-range reads in one utterance, from two missing
+         * traps.  See the rule at the top of macintalkpro-notes.
+         *
+         * Apple saturates rather than trapping, and so does this. */
+        int denom = (int)(short)m68k_read_memory_16(csp);
+        int numer = (int)(short)m68k_read_memory_16(csp + 2);
+        unsigned r;
+        if (denom == 0) {
+            r = numer < 0 ? 0x80000000u : 0x7FFFFFFFu;
+        } else {
+            long long q = ((long long)numer << 16) / denom;
+            r = q > 0x7FFFFFFFLL ? 0x7FFFFFFFu
+              : q < -0x80000000LL ? 0x80000000u
+              : (unsigned)(int)q;
+        }
+        tb_return(exc_sp, 4, r, 4);
+        return 1;
+    }
     case 0xA84D:                         /* _FixDiv(Fixed, Fixed) -> Fixed    */
         tb_return(exc_sp, 8, fx_div(m68k_read_memory_32(csp + 4),
                                     m68k_read_memory_32(csp)), 4);
