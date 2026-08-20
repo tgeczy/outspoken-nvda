@@ -44,6 +44,9 @@ static void service_atrap(void)
         else         { d0 = 0; g_stub_count++; }
     }
 
+    /* An asynchronous call is not finished when the data has been copied. */
+    if (served) queue_io_completion(word, a0, d0);
+
     if (g_trap_count < MAX_TRAPS) {
         TrapRec *t = &g_traps[g_trap_count];
         t->pc = trap_pc; t->word = word; t->served = served;
@@ -194,6 +197,59 @@ static void run_pending_deferred(void)
     m68k_set_reg(M68K_REG_A1, save_a1);
 }
 
+/* Run one File Manager completion routine, outside m68k_execute.
+ *
+ * The documented convention is **A0 = ParmBlkPtr and D0 = the result code**,
+ * and MacinTalk Pro's routine depends on both: it takes its whole context from
+ * A0, and brackets its body with `exg.l d0,a5` to install its own A5 world and
+ * put the caller's back -- which is what a routine written to be entered at
+ * interrupt time looks like.  It ends in `rts`, so a magic return address on
+ * the stack is enough to catch it.
+ *
+ * FIFO, because requests complete in the order the caller made them and the
+ * caller keeps its own state per request. */
+static void run_pending_completion(void)
+{
+    unsigned proc, pb, result;
+    unsigned save_pc, save_sp, sp;
+    static const int R[15] = {
+        M68K_REG_D0, M68K_REG_D1, M68K_REG_D2, M68K_REG_D3,
+        M68K_REG_D4, M68K_REG_D5, M68K_REG_D6, M68K_REG_D7,
+        M68K_REG_A0, M68K_REG_A1, M68K_REG_A2, M68K_REG_A3,
+        M68K_REG_A4, M68K_REG_A5, M68K_REG_A6 };
+    unsigned save_reg[15];
+    int k;
+
+    if (g_ioc_n <= 0) return;
+    proc = g_ioc[0].proc; pb = g_ioc[0].pb; result = g_ioc[0].result;
+    for (k = 1; k < g_ioc_n; k++) g_ioc[k - 1] = g_ioc[k];
+    g_ioc_n--;
+    if (!proc) return;
+    g_ioc_runs++;
+
+    save_pc = m68k_get_reg(NULL, M68K_REG_PC);
+    save_sp = m68k_get_reg(NULL, M68K_REG_SP);
+    for (k = 0; k < 15; k++)
+        save_reg[k] = m68k_get_reg(NULL, (m68k_register_t)R[k]);
+
+    sp = save_sp - 4;
+    m68k_write_memory_32(sp, MAGIC_IOC_RET);
+    m68k_set_reg(M68K_REG_SP, sp);
+    m68k_set_reg(M68K_REG_A0, pb);
+    m68k_set_reg(M68K_REG_D0, result);
+    m68k_set_reg(M68K_REG_PC, proc);
+
+    g_in_ioc = 1;
+    while (g_in_ioc && g_stop_reason == STOP_RUNNING)
+        m68k_execute(100000);
+    g_in_ioc = 0;
+
+    for (k = 0; k < 15; k++)
+        m68k_set_reg((m68k_register_t)R[k], save_reg[k]);
+    m68k_set_reg(M68K_REG_PC, save_pc);
+    m68k_set_reg(M68K_REG_SP, save_sp);
+}
+
 static int callback_due_in_call(void)
 {
     return g_cb_pending
@@ -237,6 +293,11 @@ static void instr_hook(unsigned int pc)
      * rather than redirecting PC from inside the hook. */
     if (pc == MAGIC_DT_RET) {
         g_in_deferred = 0;
+        m68k_end_timeslice();
+        return;
+    }
+    if (pc == MAGIC_IOC_RET) {
+        g_in_ioc = 0;
         m68k_end_timeslice();
         return;
     }

@@ -233,6 +233,27 @@ static int      g_in_deferred;
 static unsigned g_dt_proc, g_dt_parm;
 static int      g_dt_runs;
 
+/* File Manager completion routines -- the other half of an asynchronous call.
+ *
+ * MacinTalk Pro reads its lexicon with `_Read` and the async bit set ($A402),
+ * parks the module that asked it, and waits for the File Manager to call the
+ * routine in ioCompletion.  Copying the bytes and returning is only half the
+ * service: with no completion the engine sleeps forever, which is exactly what
+ * it did.  A trap answered synchronously when it was asked asynchronously is
+ * the same lie as a stubbed one -- every field comes back correct and only the
+ * callback is missing, so nothing downstream can tell.
+ *
+ * Same construction as the deferred task above, and for the same reason:
+ * running emulated code from inside the trap handler would re-enter the CPU.
+ * A queue rather than one slot, because a caller may have several requests
+ * outstanding, and they must complete in the order they were made. */
+#define IOC_CAP 16
+static struct { unsigned proc, pb, result; } g_ioc[IOC_CAP];
+static int      g_ioc_n;          /* queued and not yet run                 */
+static int      g_in_ioc;
+static int      g_ioc_runs;
+static int      g_ioc_dropped;    /* a full queue is a fault, never silent  */
+
 
 /* A ring of recently executed addresses.  Reasoning about where 21 KB of
  * unfamiliar 68000 decided to give up is guesswork without this; with it, the

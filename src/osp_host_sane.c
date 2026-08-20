@@ -262,6 +262,54 @@ static int serve_sane_trap(unsigned short trap, unsigned exc_sp,
     }
 }
 
+/* Is this one of the File Manager traps this host serves?
+ *
+ * The list matters because bit 10 only means "asynchronous" for the File
+ * Manager.  On the Memory Manager it is the clear/sys flag and on
+ * `_GetTrapAddress` it selects the trap table, and MacinTalk Pro sets it on
+ * all three -- $A722, $A51E and $A746 all appear in one utterance.  Treating
+ * those as async would call a completion routine that was never asked for. */
+static int is_file_trap(unsigned base)
+{
+    switch (base) {
+    case 0xA000u: case 0xA001u: case 0xA002u: case 0xA003u:   /* Open..Write */
+    case 0xA008u: case 0xA009u: case 0xA00Au:      /* Create, Delete, OpenRF */
+    case 0xA011u: case 0xA012u: case 0xA013u:      /* GetEOF, SetEOF, Flush  */
+    case 0xA014u: case 0xA015u: case 0xA017u:      /* GetVol, SetVol, Eject  */
+    case 0xA018u: case 0xA044u: case 0xA060u:      /* GetFPos, SetFPos, HFS  */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Take the completion routine off an asynchronous File Manager call.
+ *
+ * The request itself has already been served by the time this runs, so
+ * ioResult and ioActCount are correct; what is left is the callback, which is
+ * the only way the caller can learn any of that happened.  It is queued rather
+ * than called: running it here would re-enter the CPU mid-instruction.
+ *
+ * The timeslice ends so it runs promptly.  A real File Manager would complete
+ * at interrupt time, but "promptly" is the safer end of that range -- the
+ * caller tests ioResult on the very next instruction, and the scheduler pass
+ * this belongs to can be over in a few thousand more. */
+static void queue_io_completion(unsigned short word, unsigned a0, unsigned d0)
+{
+    unsigned proc;
+    if (word & 0x0800u) return;              /* Toolbox: bit 10 is auto-pop */
+    if (!(word & 0x0400u)) return;           /* not asynchronous            */
+    if (!is_file_trap(word & 0xF9FFu)) return;
+    proc = m68k_read_memory_32(a0 + 12);     /* ioCompletion                */
+    if (!proc) return;
+    if (g_ioc_n >= IOC_CAP) { g_ioc_dropped++; return; }
+    g_ioc[g_ioc_n].proc = proc;
+    g_ioc[g_ioc_n].pb = a0;
+    g_ioc[g_ioc_n].result = d0;
+    g_ioc_n++;
+    m68k_end_timeslice();
+}
+
 /* Returns 1 if we served the trap. */
 static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0_out)
 {

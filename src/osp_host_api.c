@@ -69,6 +69,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
     g_dt_pending = 0; g_in_deferred = 0; g_dt_runs = 0;
     g_dt_proc = g_dt_parm = 0;
+    g_ioc_n = 0; g_in_ioc = 0; g_ioc_runs = 0; g_ioc_dropped = 0;
     g_heap_base = g_heap_end = g_heap_next = 0;
     g_mem_traps = 0;
     return 0;
@@ -413,6 +414,8 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
             run_pending_callback();
         if (g_dt_pending && g_stop_reason == STOP_RUNNING)
             run_pending_deferred();
+        if (g_ioc_n && g_stop_reason == STOP_RUNNING)
+            run_pending_completion();
         if (g_copen_ret && g_stop_reason == STOP_RUNNING)
             finish_open_component();
     }
@@ -439,7 +442,7 @@ OSP_API int osp_call(unsigned entry, unsigned sentinel, long long max_instr)
 OSP_API int osp_run_callbacks(int max_rounds, long long max_instr)
 {
     int n = 0;
-    while ((g_cb_pending || g_dt_pending) && n < max_rounds) {
+    while ((g_cb_pending || g_dt_pending || g_ioc_n) && n < max_rounds) {
         g_stop_reason = STOP_RUNNING;
         g_stop_vector = -1;
         g_instr_count = 0;
@@ -447,8 +450,9 @@ OSP_API int osp_run_callbacks(int max_rounds, long long max_instr)
         /* The callback installs the deferred task, and the deferred task is
          * what renders, so both have to be drained or the chain stops half
          * way with a buffer of silence already queued. */
-        if (g_cb_pending) run_pending_callback();
-        else              run_pending_deferred();
+        if (g_cb_pending)      run_pending_callback();
+        else if (g_dt_pending) run_pending_deferred();
+        else                   run_pending_completion();
         n++;
         if (g_stop_reason != STOP_RUNNING) break;
     }
@@ -503,6 +507,10 @@ OSP_API unsigned osp_cb_scratch(void)   { return CB_SCRATCH; }
 OSP_API void osp_defer_callbacks(int on) { g_defer_cb = on ? 1 : 0; }
 OSP_API int osp_cb_runs(void) { return g_cb_runs; }
 OSP_API int osp_dt_runs(void) { return g_dt_runs; }
+/* Completion routines run, and any a full queue had to drop.  Dropped is a
+ * fault: the caller that never gets its callback waits forever. */
+OSP_API int osp_ioc_runs(void) { return g_ioc_runs; }
+OSP_API int osp_ioc_dropped(void) { return g_ioc_dropped; }
 OSP_API int osp_sndlog_n(void) { return g_sndlog_n; }
 OSP_API int osp_sndlog_get(int i)
 {

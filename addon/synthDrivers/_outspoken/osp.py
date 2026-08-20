@@ -486,6 +486,16 @@ class Host(object):
     @property
     def fault_count(self): return self.lib.osp_fault_count()
 
+    @property
+    def completions(self):
+        """(run, dropped) File Manager completion routines.
+
+        MacinTalk Pro reads its lexicon asynchronously and sleeps until the
+        completion routine wakes it, so a run of zero here means every module
+        waiting on a lexicon lookup is still asleep. **Dropped is a fault**:
+        the caller that never gets its callback waits forever."""
+        return (self.lib.osp_ioc_runs(), self.lib.osp_ioc_dropped())
+
     # --- register snapshots at a PC -------------------------------------
     # Keyed by name so a caller can say snap["a6"] rather than count slots.
     SNAP_NAMES = ("d0 d1 d2 d3 d4 d5 d6 d7 "

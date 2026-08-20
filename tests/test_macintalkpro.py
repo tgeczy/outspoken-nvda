@@ -92,3 +92,63 @@ def test_it_is_not_offered_to_nvda_until_it_speaks(pro):
     if macintalkpro.SPEAKS:
         pytest.skip("SPEAKS is on; audio is expected to work now")
     assert macintalkpro.usable(paths.roots()) is False
+
+
+@pytest.fixture(scope="module")
+def spoken(pro):
+    """One `SpeakBuffer` through the real engine, with the module dispatches
+    recorded. Shares the `pro` fixture's skip, so this whole group disappears
+    when the engine is not extracted."""
+    import probe_pro_modules
+    h, voice = probe_pro_modules.speak()
+    order, seen = probe_pro_modules.modules(h)
+    return h, order
+
+
+def test_the_asynchronous_lexicon_read_gets_its_completion(spoken):
+    """**Pro reads its lexicon with `_Read` and the async bit set ($A402)**,
+    parks the module that asked, and waits for the routine in ioCompletion to
+    wake it. Copying the bytes and returning is only half the service.
+
+    Without the completion the engine sleeps forever and nothing downstream of
+    the phoneme stage ever runs -- and every field of the param block still
+    reads back correct, so nothing in the engine can tell. This is the same
+    rule as "a stubbed trap is a lie the caller cannot detect", one step on:
+    **so is a trap answered synchronously when it was asked asynchronously.**
+    """
+    h, _order = spoken
+    runs, dropped = h.completions
+    assert runs > 0, "no completion routine ran; the lexicon lookups are lost"
+    assert dropped == 0, "the completion queue overflowed -- a dropped " \
+                         "callback is a module asleep forever"
+
+
+def test_the_phoneme_stage_consumes_all_of_its_input(spoken):
+    """Module #1 is `EnglPhon`, and it either finishes or the pipeline stops
+    dead behind it.
+
+    The scheduler's node picker skips any node whose state is 2, 3 or 4 before
+    it even looks at the pipes, and ends the pass at the first node in state 6.
+    EnglPhon suspending itself at a lexicon lookup (state 3) therefore parks
+    the whole engine, which is what 93 of 99 units consumed used to mean."""
+    h, order = spoken
+    req = order[1][1] + 0x3E                      # node+$3E is the request
+    avail, used = h.r32(req + 0x10), h.r32(req + 0x14)
+    state = h.r8(req + 0x0B)
+    assert avail > 0, "the text module produced nothing to work on"
+    assert used == avail, \
+        "EnglPhon left %d of %d units unconsumed" % (avail - used, avail)
+    assert state == 6, "EnglPhon reports state %d, not 6 (finished)" % state
+
+
+def test_the_waveform_stage_is_reached_with_real_parameters(spoken):
+    """The stage after the allophone module gets a parameter stream, which is
+    what proves the front end really ran rather than merely returning noErr.
+
+    Deliberately not an assertion about audio: `macintalkpro.SPEAKS` stays
+    False until a WAV somebody heard exists."""
+    h, order = spoken
+    req = order[3][1] + 0x3E                      # #3 is *Wave
+    buf, avail = h.r32(req + 0x0C), h.r32(req + 0x10)
+    assert buf and avail > 100, \
+        "*Wave was handed %d units at 0x%08X" % (avail, buf)

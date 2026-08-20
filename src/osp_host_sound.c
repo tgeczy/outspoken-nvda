@@ -13,6 +13,7 @@
 #define PCM_CAP       (8u * 1024u * 1024u)
 #define MAGIC_CB_RET  0x00F11000u
 #define MAGIC_DT_RET  0x00F11200u   /* a deferred task has returned */
+#define MAGIC_IOC_RET 0x00F11300u   /* an I/O completion has returned */
 #define CB_SCRATCH    0x00F20000u   /* the SndCommand, copied out of the
                                      * caller's stack frame -- by the time the
                                      * callback runs, that frame is gone */
