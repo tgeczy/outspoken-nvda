@@ -217,6 +217,17 @@ def _sameVoice(a, b):
 #: 232 instead of spending most of the slider in the slow half.
 _RATE_MIN, _RATE_MAX = 60.0, 900.0
 
+#: How far the pitch slider reaches either side of the voice's own pitch, in
+#: semitones. An octave each way, which is as far as any of these stay
+#: recognisable, and the same span the Tiger and Leopard add-ons use so that
+#: one setting means one thing across all of them.
+#:
+#: Both engines run out before the slider does, and harmlessly: MacinTalk 2
+#: renders identically from 'pbas' 72 upward, MacinTalk Pro from about 69,
+#: which is a wasted top end rather than a fault. Measured with
+#: `tools/probe_pitch.py`.
+_PITCH_SEMITONES = 12
+
 
 class SynthDriver(SynthDriver):
     name = "outspoken"
@@ -521,11 +532,33 @@ class SynthDriver(SynthDriver):
             return e[3]
         return 110
 
+    def _pitchTenths(self):
+        """NVDA's 0-100 as tenths of a semitone either side of the voice's own
+        pitch. 50 is the voice exactly as it was recorded.
+
+        An offset rather than an absolute, because every voice has a pitch of
+        its own -- Votron sits at 38 and Mariel at 61, more than an octave
+        apart -- so an absolute scale would put the middle of the slider
+        somewhere different for each one.
+        """
+        return int(round((self._pitch - 50) * _PITCH_SEMITONES * 10 / 50.0))
+
     def _applySettings(self, eng):
         self._engineRate = int(
             _RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (self._rate / 100.0))
         eng.set_rate(self._engineRate)
-        eng.set_voice(self._baseHz() * (0.5 + self._pitch / 100.0))
+        tenths = self._pitchTenths()
+        e = self._entry()
+        if e is not None and e[2] == "sp":
+            # 1984 has no voice apart from its pitch and nothing to ask, so
+            # the offset goes on the base this voice is named for. The engine
+            # takes hertz directly and clamps itself at 65 and 500.
+            eng.set_voice(self._baseHz() * 2.0 ** (tenths / 120.0))
+        else:
+            # The others are Speech Manager components, and 'pbas' is a
+            # musical scale: twelve units to the octave, with 60 at middle C.
+            # They are asked what the voice's own is and told to move from it.
+            eng.set_pitch(tenths)
 
     # -- the threads -------------------------------------------------------
     #

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MacinTalk Pro: that it opens at all, and takes a voice.
+"""MacinTalk Pro: that it opens, takes a voice, and speaks.
 
 Needs the engine and a voice, so it skips when `rom/macintalkpro` is empty.
 
@@ -11,10 +11,10 @@ import os
 
 import pytest
 
-#: What speaking would need on top of this, and does not have yet. These tests
-#: deliberately do not assert audio: the engine opens, takes a voice and runs
-#: its synthesis modules, and that is still not the same as making a sound.
-#: See macintalkpro.SPEAKS.
+#: These asserted no audio for four days, on purpose: the engine opened, took
+#: a voice and ran its synthesis modules without a sound coming out, and
+#: "every stage finished" is not the same claim as "it speaks". Both are
+#: asserted now -- see macintalkpro.SPEAKS, which a person listening set.
 
 
 @pytest.fixture(scope="module")
@@ -235,3 +235,59 @@ def test_it_speaks_again_on_the_same_instance(pro):
     # Longer text, more audio.  Drift would show as a stuck or shrinking
     # length while the text grows.
     assert sizes[0] < sizes[1] < sizes[2], "lengths went %r" % (sizes,)
+
+
+# -- pitch ------------------------------------------------------------------
+#
+# 'pbas' is the same musical scale MacinTalk 2 uses: twelve units to the
+# octave. Measured on Agnes, `tools/probe_pitch.py`: she answers 56, -12 gives
+# 0.507 of the base frequency against a predicted 0.500, +6 gives 1.423
+# against 1.414, +12 gives 1.982 against 2.000.
+#
+# Shared with MacinTalk 2's module rather than with a single pitch module,
+# because two engines cannot be alive at once. See tests/pitchcheck.py.
+import pitchcheck                                              # noqa: E402
+
+
+def test_it_reports_a_musical_pitch(pro):
+    pitchcheck.sane_base(pro[0])
+
+
+def test_it_takes_a_pitch_offset(pro):
+    pitchcheck.takes_the_offset(pro[0])
+
+
+def test_the_pitch_slider_is_audible(pro):
+    pitchcheck.slider_is_audible(pro[0])
+
+
+def test_it_survives_the_top_of_the_pitch_slider(pro):
+    """Regression: high 'pbas' used to halt the engine outright.
+
+    Above roughly 'pbas' 69 -- which the top of the slider reaches for Agnes
+    and Victoria -- MacinTalk Pro issues SANE `_FP68K` opword $0015 to clear
+    its exception flags on the way out of a routine:
+
+        clr.w   -$c(a6)
+        pea     -$c(a6)
+        move.w  #$0015,-(a7)
+        _FP68K
+
+    The host did not serve it, `sane_fail` took vector 10, and the utterance
+    died partway through with "unhandled exception". Nothing had ever asked
+    this engine for a high pitch before, so nothing had ever reached it.
+
+    A longer phrase than the other pitch tests use, on purpose: the crash
+    needed one. Short text survived all the way to 'pbas' 74 and hid it.
+    """
+    eng = pro[0]
+    pitchcheck.live(eng)
+    phrase = ("The rain in Spain falls mainly on the plain, "
+              "and the pitch is set high enough to reach the edge.")
+    for tenths in (120, 180, 240):
+        eng.set_pitch(tenths)
+        pcm = eng.speak(eng.translate(phrase))
+        assert len(pcm) > 10000, (
+            "%+d tenths produced %d samples -- the engine stopped early"
+            % (tenths, len(pcm)))
+    eng.set_pitch(0)

@@ -313,7 +313,10 @@ class _StubEngine(object):
         self._note("set_rate")
 
     def set_voice(self, hz):
-        self._note("set_voice")
+        self._note("set_voice")          # the 1984 engine's absolute hertz
+
+    def set_pitch(self, tenths):
+        self._note("set_pitch")          # what the Speech Manager engines take
 
     def translate(self, text):
         return text

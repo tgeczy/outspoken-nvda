@@ -55,6 +55,10 @@ def load_voice(h, name):
             continue
         out = []
         for f in sorted(os.listdir(d)):
+            # A voice folder holds `resources.tsv` as well as the resources
+            # themselves, and anything without a `type_id.bin` name is not one.
+            if not f.endswith(".bin") or "_" not in f:
+                continue
             rtype, rest = f.split("_", 1)
             rid = int(rest.split(".")[0])
             data = open(os.path.join(d, f), "rb").read()
