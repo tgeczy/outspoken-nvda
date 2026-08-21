@@ -54,6 +54,16 @@ static long long g_cb_queued_instr;
 static int      g_defer_cb;
 #define IN_CALL_CB_WAIT 1000000LL
 
+/* How long to wait, as a per-engine setting rather than a compile-time one.
+ *
+ * The constant above suits MacinTalk 2, whose first callback only sets a flag.
+ * **MacinTalk 3 needs a much shorter wait**: its whole SpeakBuffer is about
+ * 636,000 instructions and it disposes of the record its callback walks into
+ * at ~620,000, so a million-instruction wait means the callback can never fire
+ * in-call at all -- the speak ends first and the callback then runs against
+ * freed memory. */
+static long long g_cb_wait = IN_CALL_CB_WAIT;
+
 /* Every Sound Manager command, in order.  MacinTalk 2 drives audio
  * asynchronously, so "why did it stop after one buffer" is a question about
  * the *sequence* of commands, which no single counter can answer. */

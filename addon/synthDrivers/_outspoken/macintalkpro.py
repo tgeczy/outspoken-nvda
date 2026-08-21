@@ -40,6 +40,7 @@ if _HERE not in sys.path:
 import osp                                                    # noqa: E402
 import numwords                                               # noqa: E402
 import voices as voicelib                                     # noqa: E402
+import ospaudio                                              # noqa: E402
 
 #: Redrawn for Pro rather than inherited.  One voice's unit database is larger
 #: than MacinTalk 2's entire heap, and `osp_add_resource` copies into emulated
@@ -205,6 +206,11 @@ class Engine(object):
     """
 
     number_mode = "words"
+
+    #: `speak` takes a `sink` and hands audio over as it renders. Declared so
+    #: the driver never has to guess from a signature. This engine needs it
+    #: most: 17x realtime, the slowest of the four.
+    STREAMS = True
 
     def __init__(self, engine_folder, allvoices, voice=None):
         for old in _LIVE:
@@ -443,14 +449,30 @@ class Engine(object):
     #: A ceiling on one utterance, in buffers. Reaching it means the engine is
     #: producing without ever finishing, and the right answer is to stop and
     #: say so rather than hand NVDA a minute of noise.
-    MAX_BUFFERS = 400
+    #: A ceiling on one utterance, in buffers. Reaching it means the engine
+    #: is producing without ever finishing, which is a finding rather than an
+    #: utterance -- but it must sit well above anything real, and at 400 it
+    #: did not: Pro's buffers are 1271 bytes, so 400 of them is **23 seconds**
+    #: and a long paragraph was being cut off mid-word. Measured, tripling a
+    #: 366-character line gave 23.59 s and doubling that gave 23.36 -- it had
+    #: simply stopped growing.
+    #:
+    #: 1250 is about 70 seconds, which is the figure the three engines now
+    #: agree on rather than agreeing on a buffer count that means something
+    #: different for each.
+    MAX_BUFFERS = 1250
 
-    def speak(self, text):
-        """-> 8-bit unsigned PCM at NATIVE_RATE, trailing silence trimmed.
+    def speak(self, text, sink=None):
+        """-> 8-bit unsigned PCM at NATIVE_RATE, or b"" when `sink` took it.
 
         Asynchronous, exactly as MacinTalk 2 is: SpeakBuffer returns when the
         first buffer is queued, and the rest exists only because the host
         keeps being the Sound Manager afterwards.
+
+        **This is the slowest engine here** -- about 17x realtime against
+        MacinTalk 2's 194x -- so it is also the one that most needs `sink`.
+        A 26-second utterance took 1.53 s to render, and nothing could be
+        played until all of it existed. See `ospaudio.Stream`.
         """
         if self._dead:
             return b""
@@ -465,19 +487,65 @@ class Engine(object):
                                         max_instr=400_000_000)
         if reason != 1:
             return b""
+        stream = ospaudio.Stream(sink) if sink is not None else None
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break
+            if stream is not None:
+                piece = h.pcm
+                if piece:
+                    h.pcm_reset()
+                    if not stream.feed(piece):
+                        break               # cancelled: stop rendering
             if not self.busy():
                 break
         else:
-            from logHandler import log
-            log.warning("MacinTalk Pro: utterance hit the %d buffer ceiling"
-                        % self.MAX_BUFFERS)
+            # Guarded because this module is driven from tools and tests as
+            # well as from NVDA, and the ceiling is exactly the case those
+            # reach: an unguarded import turned "the utterance was truncated"
+            # into ModuleNotFoundError, which is a far worse way to find out.
+            try:
+                from logHandler import log
+                log.warning("MacinTalk Pro: utterance hit the %d buffer "
+                            "ceiling" % self.MAX_BUFFERS)
+            except ImportError:
+                pass
         pcm = h.pcm
+        if stream is not None and stream.aborted:
+            # **Abandoned, so tell the engine to stop rather than pumping the
+            # rest of the utterance into a bin.** Draining alone still did 40
+            # to 48 per cent of the work: measured on a Mastodon-sized post,
+            # giving up after the first piece took 165 ms of a 342 ms render,
+            # because `run_callbacks` goes on rendering whatever it is handed.
+            # Scrolling past five posts spent seconds on audio nobody heard,
+            # and every keystroke queued behind it.
+            #
+            # StopSpeech(kImmediate) first brings that to 39 ms on MacinTalk 3
+            # and 112 on Pro, and the next utterance stays byte-identical --
+            # which is the thing to check, since a half-stopped engine is
+            # exactly how audio bleeds from one utterance into the next.
+            #
+            # Safe here and NOT from `stop()`: this runs on the worker, inside
+            # speak, and is the only thread driving the 68000. `stop()` is
+            # called on NVDA's main thread and must stay a no-op.
+            self._quiet()
+        elif stream is not None:
+            # Before the drain, never after: what the drain produces is the
+            # engine settling, and discarding it is what stops the next
+            # utterance inheriting this one's ending.
+            stream.finish(pcm)
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return _trim(pcm)
+        return b"" if stream is not None else ospaudio.trim(pcm)
+
+    def _quiet(self):
+        """StopSpeech(kImmediate), from the worker thread only."""
+        if self._dead:
+            return
+        try:
+            self.h.component_call(self.chan, STOP, [0], max_instr=20_000_000)
+        except Exception:
+            pass
 
     def stop(self):
         """Deliberately does not touch the emulator. Read macintalk2.stop

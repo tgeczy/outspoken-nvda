@@ -24,10 +24,20 @@ What it looks for:
   * **MacinTalk Pro voices** -> one folder each, including the `gtss` unit
     database and the per-voice code
 
-MacinTalk 3 is deliberately skipped: an existing NVDA add-on builds that engine
-natively from Apple's own source, and emulating it would be strictly worse.
-MacinTalk Pro is the same kind of component as MacinTalk 2 -- same 'ttsc' type,
-same standard component entry -- so the host glue is shared.
+  * **MacinTalk 3** (`Extensions/MacinTalk 3`) -> the 1994 68k engine, whose
+    code hides in `ttvi` resources named after composers
+  * **MacinTalk 3 voices** -> one folder each; most are a parameter set and
+    nothing else, and nine carry wave data as well
+
+MacinTalk 3 was refused by name until 2026-08-21, on the grounds that a native
+add-on already builds that engine and emulating it would be strictly worse.
+That changed when the 68k build spoke: running the real 1994 code says how the
+engine behaved *then*, which no native port can, and it brings the nineteen
+voices -- Bells, Boing, Cellos, Pipe Organ, Zarvox and the rest -- that the
+formant voices alone do not.
+
+MacinTalk Pro is the same kind of component as MacinTalk 2 and MacinTalk 3 --
+same 'ttsc' type, same standard component entry -- so the host glue is shared.
 
     py -3 tools/extract_rom.py "C:/path/to/MacOS7.hfv"
     py -3 tools/extract_rom.py "C:/path/to/outSPOKEN" --out rom
@@ -70,6 +80,12 @@ def nvda_roms():
     return None
 
 # (folder, [(type, id-or-None, description)]).  id None means "every one".
+#: Resources to leave behind even though the spec asks for their whole type,
+#: keyed by output folder. Only MacinTalk 3 needs one, and it needs it badly:
+#: `ttvi 11` is the PowerPC build of the engine living beside the 68k build in
+#: the same file.
+SKIP_RESOURCES = {"macintalk3": (("ttvi", 11),)}
+
 WANTED = {
     "macintalk1": [("DRVR", 1030, "the 1984 engine, named '.sp'"),
                    ("TALK", 1001, "MacinTalk Rules"),
@@ -87,6 +103,27 @@ WANTED = {
     "voice":      [("ttvi", None, "voice info"),
                    ("ttvd", None, "voice description"),
                    ("ttvw", None, "voice data")],
+    # MacinTalk 3 keeps its CODE in a `ttvi`, because Apple named these
+    # resources after composers: `ttvi 10` is "Bach" and is the component
+    # entry, `ttvi 8` and `9` are more of the engine, and `ttvi 3-7` are its
+    # data. The type that means "voice info" for every other engine here means
+    # "the engine" for this one.
+    #
+    # `ttvi 11` is "Mozart", the **PowerPC** build of the same engine, and is
+    # excluded: 102 KB of code this host cannot run.
+    "macintalk3": [("ttvi", None, "the engine (Bach is ttvi 10) and its data"),
+                   ("ttss", None, "phoneme symbols"),
+                   ("ttsp", None, "parameters"),
+                   ("STR ", None, "strings"),
+                   ("thng", None, "component descriptor"),
+                   ("vers", None, "version")],
+    # A MacinTalk 3 voice is usually a parameter set and nothing else -- Fred
+    # is a 714-byte ttvd -- because the engine is formant and the formant data
+    # lives in the engine. The nine singing and novelty voices also carry a
+    # `ttvw`, and the engine refuses them with -192 without it.
+    "mt3voice":   [("ttvd", None, "voice description and parameters"),
+                   ("ttvw", None, "wave data, only the novelty voices"),
+                   ("vers", None, "version")],
     # MacinTalk Pro is a 'ttsc' component like MacinTalk 2, so the same host
     # glue serves it; see docs/macintalk2-components.md.  Its code is gtse 1
     # and everything else here is table data.
@@ -165,8 +202,18 @@ OLD_INDEX_FILE = "names.tsv"
 FORK_FILE = "rsrcfork.bin"
 
 
-def take(fork, spec, outdir, label):
-    """Write the resources `spec` asks for. -> (written, missing)."""
+def take(fork, spec, outdir, label, skip=(), optional=()):
+    """Write the resources `spec` asks for. -> (written, missing).
+
+    `skip` is (type, id) pairs to leave behind even when the spec asks for the
+    whole type. It exists for one case: MacinTalk 3's `ttvi 11` is the PowerPC
+    build of the same engine sitting beside the 68k one, and asking for every
+    `ttvi` would otherwise drag 102 KB of code this host cannot run.
+
+    `optional` is types whose absence is not worth reporting. Ten of MacinTalk
+    3's nineteen voices have no `ttvw` and are complete without one, so saying
+    they are missing it would train the reader to ignore the word.
+    """
     try:
         rs = rsrc.parse(fork)
     except Exception as e:
@@ -178,9 +225,11 @@ def take(fork, spec, outdir, label):
     os.makedirs(outdir, exist_ok=True)
     n, missing, names = 0, [], []
     for rtype, rid, desc in spec:
-        got = [r for r in by.get(rtype, []) if rid is None or r.id == rid]
+        got = [r for r in by.get(rtype, [])
+               if (rid is None or r.id == rid) and (r.type, r.id) not in skip]
         if not got:
-            missing.append("%s %s (%s)" % (rtype, rid if rid else "*", desc))
+            if rtype not in optional:
+                missing.append("%s %s (%s)" % (rtype, rid if rid else "*", desc))
             continue
         for r in got:
             name = "%s_%d.bin" % (_safe(r.type).strip() or "res", r.id)
@@ -337,6 +386,8 @@ def main():
             jobs.append((path, fork, WANTED["macintalk1"], "macintalk1", b""))
         elif base == "MacinTalk 2" or low.startswith("macintalk 2."):
             jobs.append((path, fork, WANTED["macintalk2"], "macintalk2", b""))
+        elif base == "MacinTalk 3" or low.startswith("macintalk 3."):
+            jobs.append((path, fork, WANTED["macintalk3"], "macintalk3", b""))
         elif base == "MacinTalk Pro" or low.startswith("macintalk pro"):
             # Pro is the only one of these with a data fork that matters: 573 KB
             # of lexicon, which no resource type covers.  Both halves are needed
@@ -360,9 +411,12 @@ def main():
                 jobs.append((path, fork, WANTED["provoice"],
                              "voices/" + _safe(nm), b""))
             elif "ttvd" in kinds:
-                skipped.append((nm, "MacinTalk 3 -- a native NVDA add-on "
-                                    "already builds that engine from Apple's "
-                                    "source; use that instead"))
+                # MacinTalk 3. Refused by name until 2026-08-21, when the 68k
+                # engine spoke under the emulator and Tomi heard it. Ten of
+                # its nineteen voices are a `ttvd` and nothing else; the nine
+                # singing and novelty ones carry a `ttvw` too.
+                jobs.append((path, fork, WANTED["mt3voice"],
+                             "voices/" + _safe(nm), b""))
 
     if not jobs:
         print("  Nothing recognised. Expected outSPOKEN, an Extensions/MacinTalk 2,\n"
@@ -380,7 +434,12 @@ def main():
                 kinds = ["<unreadable>"]
             print("  %-52s %s" % (path[:52], " ".join(kinds)))
             continue
-        n, missing = take(fork, spec, outdir, path)
+        # Ten of MacinTalk 3's nineteen voices have no wave data and are
+        # complete without it, so its absence is not a shortfall to report.
+        optional = ("ttvw",) if spec is WANTED["mt3voice"] else ()
+        n, missing = take(fork, spec, outdir, path,
+                          skip=SKIP_RESOURCES.get(sub, ()),
+                          optional=optional)
         # MacinTalk Pro walks its own resource map and seeks to byte offsets in
         # the file, so parsing the resources out is not enough -- it needs the
         # fork itself. Only Pro does this; the older engines ask the Resource

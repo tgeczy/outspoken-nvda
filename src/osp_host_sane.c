@@ -703,6 +703,22 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         g_dt_proc = m68k_read_memory_32(a0 + 8);
         g_dt_parm = m68k_read_memory_32(a0 + 12);
         g_dt_pending = 1;
+        /* End the timeslice so it runs PROMPTLY.
+         *
+         * A deferred task fires at the end of interrupt processing on a real
+         * Macintosh -- microseconds, not "whenever the caller next yields".
+         * Setting the flag and waiting for the natural end of a 100,000
+         * instruction slice is usually close enough, but it drops the task
+         * entirely when the call reaches its sentinel first: `osp_call` only
+         * runs pending work while the reason is still STOP_RUNNING.
+         *
+         * MacinTalk 3 is where that bites. It installs one task during
+         * SpeakBuffer, the speak returns before the slice ends, and the task
+         * runs on a later pump -- by which time the engine has disposed of the
+         * record the task walks into, guard word `0x12345678` and all. The
+         * result is a jump through freed memory, forty million faults, and it
+         * looks exactly like an engine bug. */
+        m68k_end_timeslice();
         *d0_out = 0; *a0_out = a0;
         return 1;
     }
@@ -711,14 +727,38 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
     case 0xA05A:                       /* _PrimeTime                       */
         *d0_out = 0; *a0_out = a0;
         return 1;
-    case 0xA193: {                     /* _Microseconds -- A0 = UnsignedWide */
-        /* Only reached because we told SysEnvirons this is System 7.  It must
-         * advance, or anything measuring elapsed time sees zero forever; the
-         * instruction count is the one monotonic clock this host has. */
-        unsigned long long us = (unsigned long long)g_instr_count;
-        m68k_write_memory_32(a0 + 0, (unsigned)(us >> 32));
-        m68k_write_memory_32(a0 + 4, (unsigned)(us & 0xFFFFFFFFu));
-        *d0_out = 0; *a0_out = a0;
+    case 0xA193: {                     /* _Microseconds                     */
+        /* **It returns the count in A0 and D0, and writes no memory.**
+         *
+         * This host used to treat A0 as a `UnsignedWide *` and store the
+         * result through it, which is what the C prototype
+         * `Microseconds(UnsignedWide *)` suggests -- and it is wrong. The
+         * pointer belongs to Apple's *glue*, not to the trap. MacinTalk 3
+         * carries that glue verbatim, and it says so plainly:
+         *
+         *     pea      $f6(a4)        push the destination
+         *     _Microseconds
+         *     movea.l  (a7)+,a1       pop it back -- the trap did not take it
+         *     move.l   a0,(a1)+       high word from A0
+         *     move.l   d0,(a1)        low  word from D0
+         *
+         * A0 on entry is whatever the caller happened to leave there, so
+         * storing through it scribbles eight bytes into live data. In
+         * MacinTalk 3 it landed exactly on the engine's own SndCommand and
+         * rewrote its `param2`; the sound callback then walked that pointer
+         * into freed memory and jumped through it, four hundred million bus
+         * faults later. The clock was corrupting the thing it was timing.
+         *
+         * The count must also never go backwards. `g_instr_count` is reset at
+         * every component call and every callback round, so it is a duration
+         * rather than a clock; `g_instr_total` only ever climbs. An engine
+         * subtracting two samples of a clock that restarts sees a huge
+         * negative elapsed time, which is its own class of bug and not one
+         * worth waiting to be bitten by.
+         */
+        unsigned long long us = (unsigned long long)g_instr_total;
+        *a0_out = (unsigned)(us >> 32);
+        *d0_out = (unsigned)(us & 0xFFFFFFFFu);
         return 1;
     }
     case 0xA146:                       /* _GetTrapAddress -- number in D0  */

@@ -40,20 +40,33 @@ def sane_base(eng):
     return base
 
 
-def takes_the_offset(eng):
+def takes_the_offset(eng, tol=0.01, floor=None):
     """Set each end of the slider and read the selector back.
 
     Reading back rather than trusting the result code, which on MacinTalk Pro
     is not a result code at all: it answers 'pbas' with the frequency it just
     computed, so a perfectly good call looks like OSErr -32314.
+
+    `tol` because not every engine stores what it is given. MacinTalk 3 takes
+    the value through a frequency and back, so it holds 40.020 for 40 and
+    59.988 for 60 -- a wobble of about a fortieth of a semitone, inaudible and
+    not worth pretending is exact.
+
+    `floor` is the lowest pitch an engine will hold, for the ones that have
+    one. MacinTalk 3 stops at 31.348 however far down it is asked to go, so
+    the bottom of the slider genuinely bottoms out for its lower voices. That
+    is the engine's answer and the test says so rather than skipping it.
     """
     base = sane_base(eng)
     for _slider, tenths in ENDS:
         eng.set_pitch(tenths)
         got = eng.current_pitch()
-        assert abs(got - (base + tenths / 10.0)) < 0.01, (
-            "asked for %+d tenths from %.1f, engine holds %.3f"
-            % (tenths, base, got))
+        want = base + tenths / 10.0
+        if floor is not None:
+            want = max(want, floor)
+        assert abs(got - want) <= tol, (
+            "asked for %+d tenths from %.3f (expected %.3f), engine holds %.3f"
+            % (tenths, base, want, got))
     eng.set_pitch(0)
 
 

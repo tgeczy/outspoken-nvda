@@ -105,6 +105,18 @@ def _catalogue():
     except Exception:
         log.debug("outSPOKEN: MacinTalk 2 unavailable", exc_info=True)
     try:
+        import macintalk3
+        # The 1994 68k engine, run as 68k. `usable` was False until it made a
+        # sound somebody heard, the same gate MacinTalk Pro went through --
+        # see macintalk3.SPEAKS, open since 2026-08-21.
+        if macintalk3.usable(rom.search_roots()):
+            _d, mt3 = macintalk3.find(rom.search_roots())
+            for v in mt3:
+                out.append(("mtk3:" + v.name, "%s (MacinTalk 3)" % v.name,
+                            "mtk3", v))
+    except Exception:
+        log.debug("outSPOKEN: MacinTalk 3 unavailable", exc_info=True)
+    try:
         import macintalkpro
         # `usable` was False until MacinTalk Pro actually made a sound --
         # see macintalkpro.SPEAKS, open since 2026-08-20. Opening, taking a
@@ -229,6 +241,15 @@ _RATE_MIN, _RATE_MAX = 60.0, 900.0
 _PITCH_SEMITONES = 12
 
 
+def _silence16(ms):
+    """A `BreakCommand`'s pause, as 16-bit signed silence at the output rate.
+
+    Zero is silence in signed 16-bit, so this is just the right number of
+    zeroed bytes -- no need to go through the engine's 8-bit unsigned 0x80.
+    """
+    return bytes(2 * int(OUT_RATE * max(0, int(ms)) / 1000))
+
+
 class SynthDriver(SynthDriver):
     name = "outspoken"
     description = "MacinTalk (outSPOKEN, 1984)"
@@ -249,7 +270,14 @@ class SynthDriver(SynthDriver):
             defaultVal=True,
         ),
     )
-    supportedCommands = {speech.commands.IndexCommand}
+    #: **A command must be listed here or NVDA will not send it at all**,
+    #: which is how "capital pitch change percentage" managed to do nothing
+    #: whatever it was set to: the driver had no way to know it had been asked.
+    supportedCommands = {
+        speech.commands.IndexCommand,
+        speech.commands.BreakCommand,
+        speech.commands.PitchCommand,
+    }
     supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
     @classmethod
@@ -297,6 +325,18 @@ class SynthDriver(SynthDriver):
         self._voiceRefused = None
         self._stopped = False
         self._audioOut = False           # is there audio worth interrupting?
+        #: Bumped by every cancel. A render already in flight compares it with
+        #: what it started under and stops feeding when they differ.
+        #:
+        #: **This is not the generation counter rule 3 forbids.** That one
+        #: stamped items when they were *queued* and compared when they were
+        #: rendered, so a cancel arriving in between made an item stale before
+        #: it had ever been looked at -- and the driver reached a state where
+        #: every item was stale and never recovered. This is read when the
+        #: worker *picks up* an utterance, which is necessarily after any
+        #: cancel that preceded it, so a fresh item can never start stale. It
+        #: only ever abandons the one utterance being rendered right now.
+        self._cancels = 0
         self._nSpoken = self._nEmpty = 0
         self._lastReport = 0.0
         self._queue = queue.Queue()
@@ -363,12 +403,33 @@ class SynthDriver(SynthDriver):
 
     # -- NVDA interface ----------------------------------------------------
     def speak(self, speechSequence):
+        # What NVDA actually sent, when someone has turned debug logging on.
+        # Every "it pauses in the middle of a sentence" so far has been about
+        # where the sequence was divided, and that is invisible from this side
+        # without a log or a guess.
+        if log.isEnabledFor(log.DEBUG):
+            shape = []
+            for item in speechSequence:
+                shape.append(repr(item[:200]) if isinstance(item, str)
+                             else type(item).__name__)
+            log.debug("outSPOKEN: sequence %s" % " | ".join(shape))
         items = []
         for item in speechSequence:
             if isinstance(item, str):
                 items.append(("text", item))
             elif isinstance(item, speech.commands.IndexCommand):
                 items.append(("index", item.index))
+            elif isinstance(item, speech.commands.BreakCommand):
+                # NVDA asking for a pause in so many words. Dropped silently
+                # until now, so the one place a pause was actually wanted was
+                # the one place it did not happen.
+                items.append(("break", item.time))
+            elif isinstance(item, speech.commands.PitchCommand):
+                # **How NVDA marks a capital letter.** An offset on its own
+                # 0-100 pitch scale, 0 meaning the user's setting again. This
+                # is "capital pitch change percentage", and dropping it is why
+                # that setting did nothing at any value.
+                items.append(("pitch", item.offset))
         self._queue.put((items, time.perf_counter()))
 
     def cancel(self):
@@ -381,6 +442,10 @@ class SynthDriver(SynthDriver):
         'space space space I'" looks like. So it is timed.
         """
         t0 = time.perf_counter()
+        # Before draining, so a render in flight sees it as early as possible:
+        # MacinTalk 3 takes the best part of a second over a long sentence,
+        # and without this the whole of an abandoned utterance still arrives.
+        self._cancels += 1
         for q in (self._queue, self._audioQueue):
             while True:
                 try:
@@ -439,10 +504,21 @@ class SynthDriver(SynthDriver):
         self.cancel()
         self._queue.put(None)
         self._audioQueue.put(None)
-        # Long enough for a render to finish (15-150 ms) with room to spare.
-        # If it does not come back it is wedged, and leaking one engine is far
-        # better than unloading a DLL underneath a running thread.
-        self._worker.join(timeout=2.0)
+        # **This used to say "15-150 ms with room to spare", and then two
+        # slower engines arrived.** MacinTalk Pro renders at about 17x
+        # realtime and MacinTalk 3 at 23x, so a long post can take well over a
+        # second -- and switching synthesizer in the middle of one produced
+        # "the worker did not stop; leaving the engine open" in Tomi's log.
+        #
+        # The real fix is above: `_stopped` is set before this, and a
+        # streaming render checks it every piece, so it abandons the utterance
+        # within a buffer or so rather than finishing it. The longer wait is
+        # for the engines that cannot stream -- MacinTalk 1 renders a whole
+        # utterance inside one CPU call with nothing to interrupt.
+        #
+        # If it still does not come back it is wedged, and leaking one engine
+        # is far better than unloading a DLL underneath a running thread.
+        self._worker.join(timeout=5.0)
         if self._worker.is_alive():
             log.warning("outSPOKEN: the worker did not stop; "
                         "leaving the engine open")
@@ -532,7 +608,7 @@ class SynthDriver(SynthDriver):
             return e[3]
         return 110
 
-    def _pitchTenths(self):
+    def _pitchTenths(self, adj=0):
         """NVDA's 0-100 as tenths of a semitone either side of the voice's own
         pitch. 50 is the voice exactly as it was recorded.
 
@@ -540,14 +616,20 @@ class SynthDriver(SynthDriver):
         its own -- Votron sits at 38 and Mariel at 61, more than an octave
         apart -- so an absolute scale would put the middle of the slider
         somewhere different for each one.
-        """
-        return int(round((self._pitch - 50) * _PITCH_SEMITONES * 10 / 50.0))
 
-    def _applySettings(self, eng):
+        `adj` is what NVDA has asked for on top of the user's setting, on its
+        own 0-100 scale: a `PitchCommand` carrying the "capital pitch change
+        percentage". Clamped into 0-100 together, so a user already at 90 who
+        asks for another 30 gets the top rather than an out-of-range request.
+        """
+        pitch = min(100, max(0, self._pitch + adj))
+        return int(round((pitch - 50) * _PITCH_SEMITONES * 10 / 50.0))
+
+    def _applySettings(self, eng, adj=0):
         self._engineRate = int(
             _RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (self._rate / 100.0))
         eng.set_rate(self._engineRate)
-        tenths = self._pitchTenths()
+        tenths = self._pitchTenths(adj)
         e = self._entry()
         if e is not None and e[2] == "sp":
             # 1984 has no voice apart from its pitch and nothing to ask, so
@@ -591,14 +673,16 @@ class SynthDriver(SynthDriver):
             # the same thing crossing between engines already does.
             self._closeEngine()
         eng = self._ensureEngine()
-        if eng is None or entry[2] != "mtk2":
+        if eng is None or entry[2] not in ("mtk2", "mtk3"):
             return eng                           # `.sp` has one voice per id
         want, cur = entry[3], getattr(eng, "voice", None)
         if cur is not None and (cur.creator, cur.id) == (want.creator, want.id):
             return eng
-        # MacinTalk 2 changes voice in place: every voice it has is already
-        # registered, so this is one SetSpeechInfo('cvox') rather than a
-        # rebuild. See macintalk2.Engine.select.
+        # MacinTalk 2 and MacinTalk 3 change voice in place: every voice they
+        # have is already registered, so this is one SetSpeechInfo('cvox')
+        # rather than a rebuild. MacinTalk 3 fits all nineteen because a
+        # formant voice is tiny -- 45 of the host's 64 resource slots for the
+        # engine and every voice together. See the Engine.select of each.
         if eng.select(want):
             self._voiceRefused = None
         elif self._voiceRefused != entry[0]:
@@ -640,6 +724,10 @@ class SynthDriver(SynthDriver):
                 import macintalk2
                 files, allv = macintalk2.find(rom.search_roots())
                 self._engine = macintalk2.Engine(files, allv, payload)
+            elif kind == "mtk3":
+                import macintalk3
+                folder, allv = macintalk3.find(rom.search_roots())
+                self._engine = macintalk3.Engine(folder, allv, payload)
             elif kind == "gala":
                 import macintalkpro
                 folder, allv = macintalkpro.find(rom.search_roots())
@@ -717,33 +805,132 @@ class SynthDriver(SynthDriver):
                 synthDoneSpeaking.notify(synth=self)
                 continue
             try:
-                self._applySettings(eng)
+                #: What NVDA has asked us to add to the user's pitch for the
+                #: text that follows. 0 means the user's own setting.
+                adj = 0
+                #: Text collected since the last flush. **A speech sequence is
+                #: not a list of utterances**: NVDA hands over the pieces of a
+                #: line -- text, a link, more text -- as separate strings, and
+                #: rendering each alone gave every fragment the falling
+                #: intonation and final lengthening of a finished sentence.
+                #: Measured on the sibling add-ons, splitting one line cost
+                #: 163 ms across two joins, and none of it is silence to trim.
+                run = []
+                #: Indexes seen since the last flush, reported just before the
+                #: audio around them. **An index must not force a split**:
+                #: NVDA puts one at the *start* of every line during say-all,
+                #: having already decided through `speakWithoutPauses` that
+                #: those lines belong together, so splitting there undoes that
+                #: decision and puts a full stop mid-sentence.
+                indexes = []
                 for kind, value in items:
+                    if self._stopped:
+                        break
+                    if kind == "text":
+                        run.append(value)
+                        continue
                     if kind == "index":
-                        synthIndexReached.notify(synth=self, index=value)
+                        indexes.append(value)
                         continue
-                    t0 = time.perf_counter()
-                    phonemes = eng.translate(value)
-                    t1 = time.perf_counter()
-                    pcm = eng.speak(phonemes)
-                    t2 = time.perf_counter()
-                    if not pcm:
-                        self._nEmpty += 1
-                        self._report()
-                        continue
-                    self._nSpoken += 1
-                    self._audioOut = True
-                    self._audioQueue.put(self._to16(pcm))
-                    pending = True
-                    total = (time.perf_counter() - queuedAt) * 1000
-                    if total >= 60:
-                        log.info(
-                            "outSPOKEN: %.0f ms for %r -> %r "
-                            "(wait %.0f, translate %.0f, synth %.0f;"
-                            " %.2f s audio, rate %d)"
-                            % (total, value[:24], phonemes[:40],
-                               (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
-                               (t2 - t1) * 1000,
-                               len(pcm) / 22254.5454, self._engineRate))
+                    if self._flush(eng, run, adj, indexes, queuedAt):
+                        pending = True
+                    if kind == "break":
+                        self._audioOut = True
+                        self._audioQueue.put(_silence16(value))
+                        pending = True
+                    elif kind == "pitch":
+                        adj = value
+                if not self._stopped:
+                    if self._flush(eng, run, adj, indexes, queuedAt):
+                        pending = True
+                for index in indexes:           # nothing left to speak
+                    synthIndexReached.notify(synth=self, index=index)
+                del indexes[:]
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
+
+    def _flush(self, eng, run, adj, indexes, queuedAt):
+        """Render everything collected so far as ONE utterance. -> spoke?
+
+        Joins with a space only where neither side has one, or "link" + "Home"
+        would reach the engine as "linkHome".
+
+        The indexes collected since the last flush are reported immediately
+        *before* this audio rather than splitting it. That matches what they
+        mean: NVDA's say-all index is the `lineReached` callback, placed at the
+        start of a line -- "we have just started speaking this" -- and it is
+        also what asks for the next line, so reporting it early keeps the
+        pipeline fed rather than starving it.
+        """
+        text = ""
+        for piece in run:
+            if text and not text[-1].isspace() and piece[:1] and \
+                    not piece[0].isspace():
+                text += " "
+            text += piece
+        del run[:]
+        for index in indexes:
+            synthIndexReached.notify(synth=self, index=index)
+        del indexes[:]
+        if not text.strip():
+            return False
+        # Pitch is re-applied per flush because NVDA's capital-letter offset
+        # changes *within* a sequence, and the engines take it as a setting
+        # rather than as part of the text.
+        self._applySettings(eng, adj)
+        t0 = time.perf_counter()
+        phonemes = eng.translate(text)
+        t1 = time.perf_counter()
+
+        # **Stream when the engine can.** MacinTalk 3 renders at about 24x
+        # realtime against MacinTalk 2's 157x, so a long sentence took the
+        # best part of a second before a sample of it could be played -- heard
+        # as the engine being laggy in a way the others are not. Given a sink
+        # it hands each piece over as it is rendered, and the first sound
+        # arrives after about 30 ms instead of 540.
+        #
+        # `gen` is read HERE, when this utterance starts, which is necessarily
+        # after any cancel that preceded it -- so an utterance can never begin
+        # already stale. See the note on `_cancels`.
+        gen = self._cancels
+        fed = [0]
+
+        def sink(chunk):
+            if self._stopped or self._cancels != gen:
+                return False                # cancelled: stop rendering
+            self._audioOut = True
+            self._audioQueue.put(self._to16(chunk))
+            fed[0] += len(chunk)
+            return True
+
+        # Declared rather than discovered. Catching TypeError around the call
+        # would also swallow one raised *inside* a render and then quietly
+        # speak the whole utterance twice.
+        if getattr(eng, "STREAMS", False):
+            pcm = eng.speak(phonemes, sink=sink)
+        else:
+            pcm = eng.speak(phonemes)
+        t2 = time.perf_counter()
+        if fed[0]:
+            self._nSpoken += 1
+            pcm = None                      # already handed over, piece by piece
+        elif not pcm:
+            self._nEmpty += 1
+            self._report()
+            return False
+        else:
+            self._nSpoken += 1
+            self._audioOut = True
+            self._audioQueue.put(self._to16(pcm))
+        total = (time.perf_counter() - queuedAt) * 1000
+        if total >= 60:
+            log.info(
+                "outSPOKEN: %.0f ms for %r -> %r "
+                "(wait %.0f, translate %.0f, synth %.0f;"
+                " %.2f s audio, rate %d, pitch %+d)"
+                % (total, text[:24], phonemes[:40],
+                   (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
+                   (t2 - t1) * 1000,
+                   (fed[0] if pcm is None else len(pcm)) / 22254.5454,
+                   self._engineRate, adj))
+        return True
