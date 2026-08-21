@@ -45,10 +45,20 @@ import rom                                                    # noqa: E402
 #: failure, so long as there is a way to say no and be believed.
 _MARKER = "do-not-ask"
 
+#: **This said the synthesizer would not appear in NVDA's list until an engine
+#: was supplied, and that stopped being true when `check` started returning
+#: True unconditionally** -- the whole point of that change being that a
+#: synthesizer nobody can find is a synthesizer nobody can be told about. The
+#: message outlived the behaviour it described by several releases.
 _MESSAGE = (
     "MacinTalk has no engine to run yet.\n\n"
-    "This add-on ships no part of MacinTalk. You supply it from your own copy, "
-    "and until then the synthesizer will not appear in NVDA's list at all.\n\n"
+    "This add-on ships no part of MacinTalk. You supply it from your own copy. "
+    "The synthesizer is listed in NVDA either way, and says what is missing if "
+    "you select it before then.\n\n"
+    "The extractor is a single Python file you download and run:\n"
+    "https://github.com/tgeczy/outspoken-nvda/blob/main/tools/extract_rom.py\n"
+    "It needs Python 3.8 or newer installed (tested on 3.13), and the machfs "
+    "package for disk images -- py -3 -m pip install machfs\n\n"
     "Yes  -  open the folder the engine goes in\n"
     "No  -  do not ask again\n"
     "Cancel  -  remind me next time NVDA starts"
