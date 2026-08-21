@@ -291,3 +291,50 @@ def test_it_survives_the_top_of_the_pitch_slider(pro):
             "%+d tenths produced %d samples -- the engine stopped early"
             % (tenths, len(pcm)))
     eng.set_pitch(0)
+
+
+# -- streaming --------------------------------------------------------------
+#
+# **The slowest engine here**: about 17x realtime against MacinTalk 2's 194x,
+# measured on the same text. A 26-second utterance took 1.53 s to render, and
+# nothing could be played until all of it existed -- a second and a half of
+# silence before a long sentence.
+
+
+def test_streaming_produces_exactly_the_same_audio(pro):
+    """The regression gate for the streaming path.
+
+    Concatenating what the sink was handed must equal what the ordinary call
+    returns, byte for byte, trimming included. "a, b, c, d, e" is in the list
+    because it has real silence inside it four times over, which is exactly
+    what a lookbehind can mistake for the end of the utterance.
+    """
+    eng = pro[0]
+    for text in ["button", "s", "a, b, c, d, e", "   ",
+                 "Voice testing, one two three.",
+                 "Just posted a long thread about speech synthesis. " * 4]:
+        prepared = eng.translate(text)
+        whole = bytes(eng.speak(prepared))
+        chunks = []
+        eng.speak(prepared, sink=lambda b: chunks.append(bytes(b)))
+        assert b"".join(chunks) == whole, (
+            "%r: streamed %d bytes, whole %d"
+            % (text[:30], len(b"".join(chunks)), len(whole)))
+
+
+def test_a_long_utterance_is_no_longer_truncated(pro):
+    """MacinTalk Pro's buffers are 1271 bytes, and the ceiling was 400.
+
+    That is 23 seconds, and it was being hit: tripling a 366-character line
+    gave 23.59 s of audio and doubling *that* gave 23.36, having simply
+    stopped growing. Long paragraphs were cut off mid-word.
+    """
+    eng = pro[0]
+    line = ("Provided arguments colon: left bracket, debug logging, dash f, "
+            "C colon backslash Users backslash Tomi backslash App Data. ")
+    short = len(bytes(eng.speak(eng.translate(line * 3))))
+    longer = len(bytes(eng.speak(eng.translate(line * 6))))
+    assert short / 22254.0 > 20, "%.1f s is too short to be testing a ceiling"
+    assert longer > short * 1.7, (
+        "doubling the text gave %.2f s against %.2f -- still truncating"
+        % (longer / 22254.0, short / 22254.0))

@@ -42,6 +42,7 @@ if _HERE not in sys.path:
 import osp                                                    # noqa: E402
 import numwords                                               # noqa: E402
 import voices as voicelib                                     # noqa: E402
+import audio                                                  # noqa: E402
 
 CODE = 0x00040000
 HEAP = 0x00080000
@@ -406,33 +407,16 @@ class Engine(object):
         if reason != 1:
             return b""
 
-        held = b""                          # the lookbehind, and the tail
-        first = True
-        aborted = False
+        stream = audio.Stream(sink) if sink is not None else None
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break                       # nothing pending: really finished
-            if sink is not None:
+            if stream is not None:
                 piece = h.pcm
                 if piece:
                     h.pcm_reset()
-                    held += piece
-                    # Emit everything except a tail that might yet turn out to
-                    # be trailing silence. `_trim_head` only ever cuts on the
-                    # very first piece.
-                    keep = _tail_silence(held)
-                    if keep < len(held):
-                        out = held[:len(held) - keep]
-                        held = held[len(held) - keep:]
-                        if first:
-                            out = _trim_head(out)
-                            first = False
-                        if out and sink(out) is False:
-                            # The caller has lost interest -- a cancel while
-                            # this was rendering. Stop now rather than spend
-                            # another second on audio nobody will hear.
-                            aborted = True
-                            break
+                    if not stream.feed(piece):
+                        break               # cancelled: stop rendering
             if not self.busy():
                 break
         else:
@@ -444,37 +428,13 @@ class Engine(object):
                 pass
 
         pcm = h.pcm
-        if aborted:
-            # Nothing more goes out, but the engine still has to be settled so
-            # the next utterance does not inherit this one's queued audio.
-            h.run_callbacks(max_rounds=64)
-            h.pcm_reset()
-            return b""
-        if sink is not None:
-            held += pcm
-            # **The tail is finished before the drain, never after.** What the
-            # drain produces is the engine settling after the utterance, and it
-            # must reach nobody: that discarded audio is the next utterance's
-            # protection against inheriting this one's ending.
-            if first:
-                # Nothing went out, so this is the whole utterance and the
-                # ordinary two-ended trim applies exactly as it always did.
-                held = _trim(held)
-            elif _tail_silence(held) == len(held):
-                # Only the silence deliberately held back. Keep the usual pad
-                # rather than trimming it to nothing -- `_trim_tail` finds no
-                # last sample to count from here, and dropping it outright is
-                # what made the streamed audio 1200 bytes short of the whole.
-                held = held[:_KEEP]
-            else:
-                held = _trim_tail(held)
-            if held:
-                sink(held)
+        if stream is not None and not stream.aborted:
+            stream.finish(pcm)
         # Drain whatever the engine still has queued and throw it away, so the
         # tail of this utterance cannot arrive at the front of the next one.
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return b"" if sink is not None else _trim(pcm)
+        return b"" if stream is not None else audio.trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator; see macintalk2.stop.
@@ -501,92 +461,6 @@ class Engine(object):
             self.h.close()
         except Exception:
             pass
-
-
-#: 8-bit unsigned silence, which the engine clears its buffers to.
-_SILENT = 0x80
-
-
-#: How much silence to leave at the end of an utterance, and at the start.
-#: MacinTalk 2's numbers unchanged: cutting hard on a sample clicks. About
-#: 54 ms and 10 ms at the engine's rate.
-_KEEP, _LEAD = 1200, 220
-
-
-def _tail_silence(pcm):
-    """-> how many bytes at the end of `pcm` are silent.
-
-    What the streaming path must hold back, because silence at the end of a
-    piece may be the start of the utterance's trailing silence -- or may be a
-    pause with more speech behind it. Only time tells, so it waits.
-    """
-    n = len(pcm)
-    i = n
-    while i > 0 and pcm[i - 1] == _SILENT:
-        i -= 1
-    return n - i
-
-
-def _trim_head(pcm, lead=_LEAD):
-    """Drop the leading silence, leaving `lead` bytes of it."""
-    n = len(pcm)
-    start = 0
-    while start < n and pcm[start] == _SILENT:
-        start += 1
-    if start >= n:
-        return b""
-    return pcm[max(0, start - lead):]
-
-
-def _trim_tail(pcm, keep=_KEEP):
-    """Drop the trailing silence, leaving `keep` bytes of it."""
-    n = len(pcm)
-    end = n
-    while end > 0 and pcm[end - 1] == _SILENT:
-        end -= 1
-    if end == 0:
-        return b""
-    return pcm[:min(n, end + keep)]
-
-
-def _trim(pcm, keep=_KEEP, lead=_LEAD):
-    """Drop the silence at both ends, leaving a little at each.
-
-    The same treatment MacinTalk 2 and MacinTalk Pro get, and leaving it out
-    here was felt immediately: **every MacinTalk 3 utterance ends with about
-    390 ms of nothing**, whatever it says. Measured at the driver's own rate,
-    "edit" is 382 ms of speech followed by 388 ms of silence, and "not
-    checked" 679 ms followed by 388 -- so more than a third of what reaches
-    the player is dead air, on every indexed chunk.
-
-    That single number accounted for all three things Tomi heard. The pauses
-    between chunks were the silence itself. The lag was the same silence
-    ahead of each reply. And the tail of one utterance arriving at the head of
-    the next was it too, at one remove: the engine does not leak -- speaking
-    "not checked" alone and after "check box" gives byte-identical audio --
-    but four tenths of a second of appended silence keeps the player busy long
-    enough for a fast tab to land inside it.
-
-    `keep` and `lead` are MacinTalk 2's, unchanged, because the reason for
-    them is the same: cutting hard on a sample clicks. About 54 ms at the end
-    and 10 ms at the start.
-
-    Only the ends. Bells, Cellos and Pipe Organ have real silence *inside*
-    them -- they are playing tunes -- and a rule that cut at the first silent
-    stretch would truncate them at the first rest.
-    """
-    if not pcm:
-        return pcm
-    n = len(pcm)
-    start = 0
-    while start < n and pcm[start] == _SILENT:
-        start += 1
-    if start >= n:
-        return b""                      # nothing but silence: say nothing
-    end = n
-    while end > start and pcm[end - 1] == _SILENT:
-        end -= 1
-    return pcm[max(0, start - lead):min(n, end + keep)]
 
 
 def _split(name):

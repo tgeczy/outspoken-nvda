@@ -40,6 +40,7 @@ if _HERE not in sys.path:
 import osp                                                    # noqa: E402
 import numwords                                               # noqa: E402
 import voices as voicelib                                     # noqa: E402
+import audio                                                  # noqa: E402
 
 #: Redrawn for Pro rather than inherited.  One voice's unit database is larger
 #: than MacinTalk 2's entire heap, and `osp_add_resource` copies into emulated
@@ -205,6 +206,11 @@ class Engine(object):
     """
 
     number_mode = "words"
+
+    #: `speak` takes a `sink` and hands audio over as it renders. Declared so
+    #: the driver never has to guess from a signature. This engine needs it
+    #: most: 17x realtime, the slowest of the four.
+    STREAMS = True
 
     def __init__(self, engine_folder, allvoices, voice=None):
         for old in _LIVE:
@@ -456,12 +462,17 @@ class Engine(object):
     #: different for each.
     MAX_BUFFERS = 1250
 
-    def speak(self, text):
-        """-> 8-bit unsigned PCM at NATIVE_RATE, trailing silence trimmed.
+    def speak(self, text, sink=None):
+        """-> 8-bit unsigned PCM at NATIVE_RATE, or b"" when `sink` took it.
 
         Asynchronous, exactly as MacinTalk 2 is: SpeakBuffer returns when the
         first buffer is queued, and the rest exists only because the host
         keeps being the Sound Manager afterwards.
+
+        **This is the slowest engine here** -- about 17x realtime against
+        MacinTalk 2's 194x -- so it is also the one that most needs `sink`.
+        A 26-second utterance took 1.53 s to render, and nothing could be
+        played until all of it existed. See `audio.Stream`.
         """
         if self._dead:
             return b""
@@ -476,9 +487,16 @@ class Engine(object):
                                         max_instr=400_000_000)
         if reason != 1:
             return b""
+        stream = audio.Stream(sink) if sink is not None else None
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break
+            if stream is not None:
+                piece = h.pcm
+                if piece:
+                    h.pcm_reset()
+                    if not stream.feed(piece):
+                        break               # cancelled: stop rendering
             if not self.busy():
                 break
         else:
@@ -493,9 +511,14 @@ class Engine(object):
             except ImportError:
                 pass
         pcm = h.pcm
+        if stream is not None and not stream.aborted:
+            # Before the drain, never after: what the drain produces is the
+            # engine settling, and discarding it is what stops the next
+            # utterance inheriting this one's ending.
+            stream.finish(pcm)
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return _trim(pcm)
+        return b"" if stream is not None else audio.trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator. Read macintalk2.stop

@@ -504,10 +504,21 @@ class SynthDriver(SynthDriver):
         self.cancel()
         self._queue.put(None)
         self._audioQueue.put(None)
-        # Long enough for a render to finish (15-150 ms) with room to spare.
-        # If it does not come back it is wedged, and leaking one engine is far
-        # better than unloading a DLL underneath a running thread.
-        self._worker.join(timeout=2.0)
+        # **This used to say "15-150 ms with room to spare", and then two
+        # slower engines arrived.** MacinTalk Pro renders at about 17x
+        # realtime and MacinTalk 3 at 23x, so a long post can take well over a
+        # second -- and switching synthesizer in the middle of one produced
+        # "the worker did not stop; leaving the engine open" in Tomi's log.
+        #
+        # The real fix is above: `_stopped` is set before this, and a
+        # streaming render checks it every piece, so it abandons the utterance
+        # within a buffer or so rather than finishing it. The longer wait is
+        # for the engines that cannot stream -- MacinTalk 1 renders a whole
+        # utterance inside one CPU call with nothing to interrupt.
+        #
+        # If it still does not come back it is wedged, and leaking one engine
+        # is far better than unloading a DLL underneath a running thread.
+        self._worker.join(timeout=5.0)
         if self._worker.is_alive():
             log.warning("outSPOKEN: the worker did not stop; "
                         "leaving the engine open")
