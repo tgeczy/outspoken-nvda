@@ -246,8 +246,14 @@ def test_the_extractor_can_find_where_nvda_actually_reads_from(tmp_path,
     (fake / "nvda").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(fake))
     got = extractor.nvda_roms()
-    assert got and got.endswith("outspoken-roms")
-    assert os.path.dirname(got) == str(fake / "nvda")
+    # Against `rom.CONFIG_DIRNAME` rather than a literal, because the whole
+    # point of this test is that the extractor writes where the driver reads.
+    # A literal on both sides lets them drift apart in step and still pass.
+    import rom
+    assert got, "it refused a configuration directory that exists"
+    assert got == os.path.join(str(fake / "nvda"), rom.CONFIG_DIRNAME), (
+        "the extractor writes to %r; the driver reads %r"
+        % (got, rom.CONFIG_DIRNAME))
 
     monkeypatch.setenv("APPDATA", str(tmp_path / "nothing-here"))
     monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path / "nope"))

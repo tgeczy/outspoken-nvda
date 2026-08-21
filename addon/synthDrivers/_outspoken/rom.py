@@ -10,19 +10,23 @@ Updating an add-on deletes and recreates its directory, so a ROM kept inside it
 would be silently destroyed on every upgrade. The add-on folder is still
 searched, because someone will put it there anyway and it should work.
 
-The folder is `outspoken-roms` rather than anything shorter: it sits directly
-in NVDA's configuration directory alongside every other add-on's data, so a
-generic name like `roms` would be a collision waiting to happen.
+**Every Macintosh engine shares one folder**, `macintalk`, with a subfolder
+per generation. The sibling panthera-speech add-ons keep Tiger's and Leopard's
+trees beside these, so somebody running three of them has one place to look
+rather than three loose folders with three naming conventions:
 
-Subfolders are searched recursively, so the layout `tools/extract_rom.py`
-produces works unchanged:
+    macintalk/
+        outspoken/      <- here
+            macintalk1/     DRVR_1030.bin, TALK_1001.bin, RULZ_1129.bin
+            macintalk2/     macintalk3/     macintalkpro/
+            voices/<name>/
+        tiger/
+        leopard/
 
-    outspoken-roms/
-        macintalk1/     DRVR_1030.bin, TALK_1001.bin, RULZ_1129.bin
-        macintalk2/     (a later engine; not used yet)
-        voices/<name>/  (likewise)
-
-A flat folder with the three files loose in it works just as well.
+`migrate` moves `outspoken-roms` across, once, and the old location is
+searched for good afterwards. Subfolders are searched recursively, so the
+layout `tools/extract_rom.py` produces works unchanged, and a flat folder with
+the files loose in it works just as well.
 """
 import os
 
@@ -37,9 +41,14 @@ FILES = {
 #: speaks, but only if it is handed phonemes, which no screen reader does.
 REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin")
 
+CONFIG_DIRNAME = os.path.join("macintalk", "outspoken")
+
+#: Where every release up to 0.9.0 kept it.
+LEGACY_DIRNAME = "outspoken-roms"
+
 
 def config_dir():
-    """`<nvda user config>/outspoken-roms`.
+    """`<nvda user config>/macintalk/outspoken`.
 
     `globalVars.appArgs.configPath` is the only correct source. NVDA's own
     `NVDAState.WritePaths.configDir` is a property wrapping exactly this value,
@@ -58,13 +67,84 @@ def config_dir():
         base = None
     if not base:
         base = os.path.join(os.path.expanduser("~"), ".nvda")
-    return os.path.join(str(base), "outspoken-roms")
+    return os.path.join(str(base), CONFIG_DIRNAME)
+
+
+def config_base():
+    """The directory the shared `macintalk` folder sits inside."""
+    return os.path.dirname(os.path.dirname(config_dir()))
+
+
+def legacy_dir():
+    return os.path.join(config_base(), LEGACY_DIRNAME)
+
+
+def pointer_file():
+    """A text file naming the folder, for anyone keeping it elsewhere.
+
+    The sibling panthera-speech add-ons have had this from the start,
+    because a Leopard tree is 717 MB and people keep those on another
+    drive. outSPOKEN's engine is 7 MB and nobody needed it -- until the
+    folder moved, and a way to say "it is over there" became the thing
+    that makes moving it safe.
+    """
+    return os.path.join(config_base(), LEGACY_DIRNAME + ".txt")
+
+
+def migrate():
+    """Move `outspoken-roms` under `macintalk`, once. -> path or None
+
+    **A rename, never a copy.** Old and new both sit inside NVDA's
+    configuration directory, so this is one volume and one metadata
+    operation. It matters less here than for the sibling add-ons -- this
+    folder is about 7 MB against Leopard's 717 -- but the rule is the
+    same, and a rename cannot half-succeed.
+
+    Lazy, called from `search_roots` rather than at import, so nothing
+    happens while NVDA is starting. If the rename fails -- a file open, a
+    permission -- nothing has changed and the old folder is still
+    searched, which is why it stays in `search_roots` for good rather
+    than for one release.
+    """
+    new = config_dir()
+    old = legacy_dir()
+    if os.path.isdir(new) or not os.path.isdir(old):
+        return None
+    try:
+        os.makedirs(os.path.dirname(new), exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        return None
+    # **The breadcrumb is load-bearing, not a note to a human.** An
+    # earlier release of this add-on looks only in `outspoken-roms`, so
+    # somebody who rolls back would find nothing where they left it. The
+    # pointer file is read by `search_roots` below, which means a rollback
+    # to any release from this one onward still works -- and anyone who
+    # opens the configuration folder wondering where it went can read it.
+    try:
+        if not os.path.exists(pointer_file()):
+            with open(pointer_file(), "w", encoding="utf-8") as f:
+                f.write(new)
+    except OSError:
+        pass
+    return new
 
 
 def search_roots():
+    migrate()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     addon = os.path.dirname(here)                    # ...\addon
-    return [config_dir(), os.path.join(addon, "rom")]
+    roots = [config_dir(), legacy_dir()]
+    try:
+        if os.path.isfile(pointer_file()):
+            with open(pointer_file(), encoding="utf-8") as f:
+                named = f.read().strip()
+            if named:
+                roots.append(named)
+    except OSError:
+        pass
+    roots.append(os.path.join(addon, "rom"))
+    return roots
 
 
 def find():

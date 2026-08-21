@@ -55,7 +55,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def nvda_roms():
-    """-> `<NVDA user config>/outspoken-roms`, or None if NVDA is not there.
+    """-> `<NVDA user config>/macintalk/outspoken`, or None if NVDA is absent.
 
     **This is where the add-on actually reads the engine from**, never its own
     folder: updating an add-on deletes and recreates that directory, so a ROM
@@ -76,7 +76,7 @@ def nvda_roms():
     cands.append(os.path.join(os.path.expanduser("~"), ".nvda"))
     for c in cands:
         if os.path.isdir(c):
-            return os.path.join(c, "outspoken-roms")
+            return os.path.join(c, "macintalk", "outspoken")
     return None
 
 # (folder, [(type, id-or-None, description)]).  id None means "every one".
@@ -335,7 +335,7 @@ def main():
     ap.add_argument("--out", default=None,
                     help="destination folder (default: ./rom)")
     ap.add_argument("--nvda", action="store_true",
-                    help="write straight into NVDA's outspoken-roms folder, "
+                    help="write straight into NVDA's macintalk folder, "
                          "which is the one the add-on actually reads")
     ap.add_argument("--list", action="store_true",
                     help="only show what was found; write nothing")
