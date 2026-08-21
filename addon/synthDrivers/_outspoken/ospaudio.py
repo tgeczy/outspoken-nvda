@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """Trimming silence, and handing audio over while it is still being made.
 
+**Named `ospaudio` and not `audio`, which is not a style choice.** NVDA ships
+its own `source/audio` package and imports it long before this one exists, so
+`import audio` from here returns NVDA's -- whatever `sys.path` says, because
+`sys.modules` is consulted first. It shipped that way for one deploy and every
+MacinTalk 3 and Pro utterance died with `module 'audio' has no attribute
+'Stream'`: listed voices, selectable, silent. `tests/test_no_module_shadows_nvda.py`
+now checks every module here against NVDA's own.
+
 Shared by the engines that render a buffer at a time. The engine modules are
 otherwise deliberately independent -- one per engine generation, so one
 engine's quirk can never become another's problem -- but this is neither

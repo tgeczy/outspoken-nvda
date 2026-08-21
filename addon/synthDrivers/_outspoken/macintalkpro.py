@@ -40,7 +40,7 @@ if _HERE not in sys.path:
 import osp                                                    # noqa: E402
 import numwords                                               # noqa: E402
 import voices as voicelib                                     # noqa: E402
-import audio                                                  # noqa: E402
+import ospaudio                                              # noqa: E402
 
 #: Redrawn for Pro rather than inherited.  One voice's unit database is larger
 #: than MacinTalk 2's entire heap, and `osp_add_resource` copies into emulated
@@ -472,7 +472,7 @@ class Engine(object):
         **This is the slowest engine here** -- about 17x realtime against
         MacinTalk 2's 194x -- so it is also the one that most needs `sink`.
         A 26-second utterance took 1.53 s to render, and nothing could be
-        played until all of it existed. See `audio.Stream`.
+        played until all of it existed. See `ospaudio.Stream`.
         """
         if self._dead:
             return b""
@@ -487,7 +487,7 @@ class Engine(object):
                                         max_instr=400_000_000)
         if reason != 1:
             return b""
-        stream = audio.Stream(sink) if sink is not None else None
+        stream = ospaudio.Stream(sink) if sink is not None else None
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break
@@ -518,7 +518,7 @@ class Engine(object):
             stream.finish(pcm)
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return b"" if stream is not None else audio.trim(pcm)
+        return b"" if stream is not None else ospaudio.trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator. Read macintalk2.stop

@@ -42,7 +42,7 @@ if _HERE not in sys.path:
 import osp                                                    # noqa: E402
 import numwords                                               # noqa: E402
 import voices as voicelib                                     # noqa: E402
-import audio                                                  # noqa: E402
+import ospaudio                                              # noqa: E402
 
 CODE = 0x00040000
 HEAP = 0x00080000
@@ -407,7 +407,7 @@ class Engine(object):
         if reason != 1:
             return b""
 
-        stream = audio.Stream(sink) if sink is not None else None
+        stream = ospaudio.Stream(sink) if sink is not None else None
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break                       # nothing pending: really finished
@@ -434,7 +434,7 @@ class Engine(object):
         # tail of this utterance cannot arrive at the front of the next one.
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return b"" if stream is not None else audio.trim(pcm)
+        return b"" if stream is not None else ospaudio.trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator; see macintalk2.stop.
