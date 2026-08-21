@@ -60,6 +60,33 @@ either way &mdash; so the middle of the slider is the voice exactly as it was
 recorded, whichever one you pick. NVDA's <em>capital pitch change
 percentage</em> is honoured too.</p>
 
+<p><strong>Volume</strong> works on every engine and every voice. It is
+applied by the driver rather than by the engine, because all four of them
+produce eight-bit audio and turning it down inside one would cost you bits;
+done afterwards, quarter volume is still the full detail of the original.
+There is no boost: 100 is the engine's own level, which is where this add-on
+has always been.</p>
+
+<p><strong>Inflection</strong> sets how far the voice's pitch is allowed to
+move. The middle of the slider is the voice exactly as Apple recorded it, and
+each voice has its own natural amount &mdash; Fred and Ralph use four times as
+much as Albert. There are limits worth knowing:</p>
+
+<ul>
+<li><strong>MacinTalk (1984) ignores it.</strong> Its driver has four
+settings and none of them is intonation.</li>
+<li><strong>MacinTalk 2 has two states, not a scale.</strong> The bottom of
+the slider flattens the voice; everywhere else is the voice as it was.</li>
+<li><strong>Bad&nbsp;News, Bells, Good&nbsp;News and Hysterical ignore it</strong>
+&mdash; they take their pitch from a tune rather than from a contour.</li>
+<li><strong>MacinTalk Pro will not go completely flat.</strong> Asked for a
+modulation near zero it locks up rather than speaking, so the bottom of the
+slider stops just short of it.</li>
+<li><strong>RoboVox, Xero, Zarvox and the other flat voices gain
+intonation above the middle</strong> instead of losing it below, since there
+is nothing there to take away.</li>
+</ul>
+
 <p><strong>Read numbers as words</strong> is on by default. None of these
 engines can read a number: the 1984 rules know the ten digit names and nothing
 else, so <code>30</code> is spoken &ldquo;three zero&rdquo;. Turning it off

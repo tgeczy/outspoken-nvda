@@ -71,6 +71,19 @@ STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
 SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
 SO_RATE = 0x72617465                   # 'rate'
 SO_PITCH_BASE = 0x70626173             # 'pbas'
+SO_PITCH_MOD = 0x706D6F64              # 'pmod'
+
+#: The lowest 'pmod' this engine may be given. **Not a taste decision**: below
+#: a threshold that belongs to the voice rather than the engine -- 0.05 for
+#: Bruce, 0.025 for Agnes, 0 for Victoria -- it loops forever inside
+#: SpeakBuffer on anything longer than one sentence. Ten times the worst of
+#: those. See `set_inflection` and `tools/probe_inflection.py`.
+INFLECTION_FLOOR = 1.0
+
+#: What a voice with no modulation of its own is given at the top of the
+#: slider. All three of Pro's voices have one, so nothing reaches this today;
+#: it is here so a newly extracted voice cannot arrive with a dead slider.
+INFLECTION_REFERENCE = 25.0
 
 #: The component descriptor is the Component Manager's own bookkeeping and is
 #: never asked of the Resource Manager.
@@ -225,6 +238,8 @@ class Engine(object):
         #: never goes stale the way MacinTalk 2's does.
         self._pitch = 0
         self._base_pitch = None
+        self._mod = 50
+        self._base_mod = None
 
         d = engine_folder
         code = open(os.path.join(d, "gtse_1.bin"), "rb").read()
@@ -415,8 +430,68 @@ class Engine(object):
             [SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0)],
             max_instr=200_000_000)
 
+    def base_inflection(self):
+        """This voice's own 'pmod'. Agnes answers 5.688 -- much the smallest
+        of the four engines, where MacinTalk 3's voices sit at 12.5 to 50."""
+        if self._base_mod is None:
+            self._base_mod = self.current_inflection()
+        return self._base_mod
+
+    def current_inflection(self):
+        """GetSpeechInfo('pmod') -- what the channel holds right now."""
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_MOD, PARAM_BUF],
+            max_instr=200_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_inflection(self, percent):
+        """NVDA's 0-100, with 50 leaving the voice exactly as recorded.
+
+        **A 'pmod' near zero hangs this engine forever, and that is why the
+        bottom of the slider is a floor rather than nothing.** Below its
+        threshold the engine never returns from SpeakBuffer: a render that
+        costs 4.3 million instructions was still running after three billion,
+        with no fault, no trap and no audio -- just a loop that cannot
+        converge. It needs more than one clause to happen, which is why a
+        first probe on a single sentence said the selector was harmless.
+
+        **The threshold is the voice's, not the engine's**, which is the part
+        worth remembering. Measured on a four-sentence text: Victoria hangs
+        only at exactly zero, Agnes up to 0.025, and **Bruce all the way to
+        0.05** -- twice Agnes's and five times Victoria's. Fitting a floor to
+        the first voice tried would have shipped a synthesizer that freezes
+        on the second.
+
+        `INFLECTION_FLOOR` is ten times the highest value measured to hang,
+        and about a seventh of what these three voices use, so the bottom of
+        the slider is nearly flat rather than perfectly flat. Perfectly flat
+        is not on offer here at any price.
+
+        The result is ignored rather than checked: like 'pbas', this selector
+        answers with something that is not an OSErr -- 5.688 comes back as
+        -32314 and 2.844 as 18307 while taking perfectly -- so `_set_info`
+        would report failures that did not happen.
+        """
+        self._mod = percent
+        base = self.base_inflection()
+        if base is None:
+            return
+        if base > 0:
+            value = base * percent / 50.0
+        else:
+            value = INFLECTION_REFERENCE * max(0, percent - 50) / 50.0
+        self._set_info(SO_PITCH_MOD,
+                       self._fixed_arg(min(100.0, max(INFLECTION_FLOOR,
+                                                      value))))
+
     def read_settings(self):
-        return {"rate": self._rate, "pitch": self._pitch}
+        return {"rate": self._rate, "pitch": self._pitch,
+                "inflection": self._mod}
 
     # -- speaking ----------------------------------------------------------
     #: Punctuation the engine pronounces as a word, which has to go because

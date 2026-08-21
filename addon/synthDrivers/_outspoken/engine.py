@@ -245,6 +245,24 @@ class Engine(object):
         s = self._storage()
         self.h.w16(s + 0x32, max(40, min(2560, int(rate))))
 
+    #: **1984 has no inflection control and the slider cannot pretend it
+    #: does.** `Control` takes four csCodes and that is the whole of the
+    #: driver's settings: a mode toggle, a rate, a voice bank and a pitch in
+    #: hertz (docs/driver-api.md). There is no fifth.
+    #:
+    #: Flat intonation was looked for and not found. The contour is a per-frame
+    #: divisor the engine computes for itself -- `move.l $34(a5), d7 /
+    #: divu.w d5, d7` -- so holding `d5` still would be a monotone mode, but
+    #: nothing in the driver's interface reaches it. Dropping the stress digits
+    #: from the phoneme string narrows the spread without flattening it
+    #: (sd 53.8 -> 48.6 Hz), so the stress marks contribute rather than cause.
+    #:
+    #: Present rather than absent so the driver can call it on every engine
+    #: without asking which one it has -- and named so that anyone who finds
+    #: the mechanism knows where it goes.
+    def set_inflection(self, percent):
+        pass
+
     # -- speaking ----------------------------------------------------------
     #: How to read digits.  None means "leave them to the engine", which spells
     #: them out one at a time because that is all `RULZ` bucket 26 can do.

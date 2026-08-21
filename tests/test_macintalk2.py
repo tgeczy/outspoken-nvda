@@ -150,3 +150,33 @@ def test_the_pitch_offset_does_not_compound_across_voices(mt2):
             "an octave above %.1f drifted to %.3f"
             % (natural, eng.current_pitch()))
     eng.set_pitch(0)
+
+
+# -- inflection ------------------------------------------------------------
+#
+# **This engine's 'pmod' has two states and not a scale.** Anything above zero
+# is stored as 100.000: 6.25, 12.5, 25 and 50 all read back as 100 and render
+# to the same bytes. So `quantised=True` below is the engine's answer and not
+# a tolerance -- see `macintalk2.set_inflection`.
+import inflectioncheck                                         # noqa: E402
+
+
+def test_it_reports_the_voices_own_modulation(mt2):
+    inflectioncheck.sane_base(mt2[0])
+
+
+def test_it_takes_the_inflection_setting(mt2):
+    inflectioncheck.takes_the_setting(mt2[0], quantised=True)
+
+
+def test_the_inflection_slider_is_audible(mt2):
+    inflectioncheck.slider_is_audible(mt2[0], quantised=True)
+
+
+def test_the_middle_of_the_inflection_slider_changes_nothing(mt2):
+    inflectioncheck.the_midpoint_changes_nothing(mt2[0])
+
+
+def test_every_voice_speaks_at_both_ends_of_the_inflection_slider(mt2):
+    eng, voices = mt2
+    inflectioncheck.every_voice_survives_the_ends(eng, voices)

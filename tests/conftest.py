@@ -161,9 +161,19 @@ def _install_fake_nvda():
         def __init__(self, offset=0):
             self.offset = offset
 
+    class VolumeCommand(object):
+        def __init__(self, offset=0):
+            self.offset = offset
+
+    class RateCommand(object):
+        def __init__(self, offset=0):
+            self.offset = offset
+
     commands.IndexCommand = IndexCommand
     commands.BreakCommand = BreakCommand
     commands.PitchCommand = PitchCommand
+    commands.VolumeCommand = VolumeCommand
+    commands.RateCommand = RateCommand
     speech.commands = commands
     sys.modules["speech"] = speech
     sys.modules["speech.commands"] = commands
@@ -175,7 +185,8 @@ def _install_fake_nvda():
         def __init__(self, id, name, language=None):
             self.id, self.name, self.language = id, name, language
     class SynthDriver(object):
-        VoiceSetting = RateSetting = PitchSetting = VolumeSetting = _Setting
+        VoiceSetting = RateSetting = PitchSetting = _Setting
+        VolumeSetting = InflectionSetting = _Setting
         def __init__(self): pass
     class _Notifier(object):
         """Counts, and lets a test wait for the next notification.

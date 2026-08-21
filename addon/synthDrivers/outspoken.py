@@ -258,6 +258,17 @@ class SynthDriver(SynthDriver):
         SynthDriver.VoiceSetting(),
         SynthDriver.RateSetting(),
         SynthDriver.PitchSetting(),
+        SynthDriver.VolumeSetting(),
+        # **Kept in the list for MacinTalk 1's two voices, which cannot obey
+        # it.** NVDA does rebuild both the settings panel and the settings
+        # ring when the voice changes, so hiding this on those two would work
+        # -- but `initSettings` freezes the config spec from whatever
+        # `supportedSettings` says at start-up, so a driver that begins on
+        # `male` would leave `inflection` out of the spec for the session and
+        # write an unvalidated key on the way out. A control that does nothing
+        # for two voices in thirty-four is the smaller wart, and the readme
+        # names them.
+        SynthDriver.InflectionSetting(),
         # The 1984 rules cannot count: `RULZ` bucket 26 holds the ten digit
         # names and nothing else, so `30` is spoken "three zero". Reading them
         # as words is an addition on our side, and it is offered rather than
@@ -277,6 +288,8 @@ class SynthDriver(SynthDriver):
         speech.commands.IndexCommand,
         speech.commands.BreakCommand,
         speech.commands.PitchCommand,
+        speech.commands.VolumeCommand,
+        speech.commands.RateCommand,
     }
     supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
@@ -312,6 +325,11 @@ class SynthDriver(SynthDriver):
             _explainLater(rom.config_dir())
             raise RuntimeError("outSPOKEN has no engine to run")
         self._rate, self._pitch = 50, 50
+        self._volume, self._inflection = 100, 50
+        #: The conversion tables the worker is rendering with. Set per flush
+        #: rather than per setting change, so a `VolumeCommand` inside a
+        #: sequence and the user's own slider go through the same path.
+        self._gain = self._gainTables(100)
         self._numberWords = True
         self._engineRate = 0
         self._voiceCatalogue = None
@@ -395,10 +413,56 @@ class SynthDriver(SynthDriver):
     #: ~80k Python iterations an utterance and is felt as latency.
     _FLIP = bytes(b ^ 0x80 for b in range(256))
 
+    #: One entry per volume, built on demand. Four engines and a slider the
+    #: user drags, so this is a handful of entries at most.
+    _GAINS = {}
+
     @classmethod
-    def _to16(cls, pcm8):
+    def _gainTables(cls, volume):
+        """The 8-to-16 widening with `volume` already folded into it.
+
+        -> (low bytes or None, high bytes), both `bytes.translate` tables.
+
+        **Volume is applied here rather than in the engines, and the reason is
+        arithmetic.** Every one of the four hands back 8-bit unsigned, so
+        attenuating inside an engine would quantise 256 levels down to
+        whatever the slider left of them -- volume 25 would be six bits and
+        audibly grainy. Scaling after the widening keeps all 256 whatever the
+        slider says. It also works the same everywhere, including MacinTalk 1,
+        whose 1984 driver has no volume control at all: four csCodes, and none
+        of them is amplitude (docs/driver-api.md).
+
+        There is no boost. 100 is the engine's own level, which is where this
+        add-on has always been and is loud enough -- the sibling Leopard
+        driver needed per-voice normalisation and this one does not, so the
+        slider only ever attenuates and nothing can clip that did not clip
+        before.
+
+        **At 100 the tables are the ones the driver has always used**: a zero
+        low byte, and the sample with its top bit flipped. `None` rather than
+        256 zeroes so full volume costs exactly one `translate` as it did.
+        """
+        volume = max(0, min(100, int(volume)))
+        if volume not in cls._GAINS:
+            if volume >= 100:
+                cls._GAINS[volume] = (None, cls._FLIP)
+            else:
+                g = volume / 100.0
+                lo, hi = bytearray(256), bytearray(256)
+                for b in range(256):
+                    v = int(round((b - 128) * 256 * g))
+                    v = max(-32768, min(32767, v))
+                    lo[b] = v & 0xFF
+                    hi[b] = (v >> 8) & 0xFF
+                cls._GAINS[volume] = (bytes(lo), bytes(hi))
+        return cls._GAINS[volume]
+
+    def _to16(self, pcm8):
+        lo, hi = self._gain
         out = bytearray(len(pcm8) * 2)
-        out[1::2] = pcm8.translate(cls._FLIP)
+        out[1::2] = pcm8.translate(hi)
+        if lo is not None:
+            out[0::2] = pcm8.translate(lo)
         return bytes(out)
 
     # -- NVDA interface ----------------------------------------------------
@@ -430,6 +494,12 @@ class SynthDriver(SynthDriver):
                 # is "capital pitch change percentage", and dropping it is why
                 # that setting did nothing at any value.
                 items.append(("pitch", item.offset))
+            elif isinstance(item, speech.commands.VolumeCommand):
+                # Same shape as the pitch one: an offset on the user's own
+                # 0-100 scale, 0 meaning their setting again.
+                items.append(("volume", item.offset))
+            elif isinstance(item, speech.commands.RateCommand):
+                items.append(("rate", item.offset))
         self._queue.put((items, time.perf_counter()))
 
     def cancel(self):
@@ -540,6 +610,25 @@ class SynthDriver(SynthDriver):
     def _set_pitch(self, value):
         self._pitch = max(0, min(100, int(value)))
 
+    def _get_volume(self):
+        return self._volume
+
+    def _set_volume(self, value):
+        """Takes effect on the next utterance, deliberately.
+
+        Nothing is re-scaled in flight: the tables are chosen per flush, so
+        what is already in the audio queue keeps the volume it was rendered
+        at. Changing a setting must never cut off what is being spoken, and
+        NVDA speaks the new value the moment the slider moves.
+        """
+        self._volume = max(0, min(100, int(value)))
+
+    def _get_inflection(self):
+        return self._inflection
+
+    def _set_inflection(self, value):
+        self._inflection = max(0, min(100, int(value)))
+
     def _get_numberWords(self):
         return self._numberWords
 
@@ -625,10 +714,15 @@ class SynthDriver(SynthDriver):
         pitch = min(100, max(0, self._pitch + adj))
         return int(round((pitch - 50) * _PITCH_SEMITONES * 10 / 50.0))
 
-    def _applySettings(self, eng, adj=0):
+    def _applySettings(self, eng, adj=0, radj=0):
+        rate = min(100, max(0, self._rate + radj))
         self._engineRate = int(
-            _RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (self._rate / 100.0))
+            _RATE_MIN * (_RATE_MAX / _RATE_MIN) ** (rate / 100.0))
         eng.set_rate(self._engineRate)
+        # Inflection has no command of its own -- NVDA has no InflectionCommand
+        # -- so unlike rate and pitch there is nothing to offset it by.
+        # MacinTalk 1 takes this and does nothing with it; see engine.py.
+        eng.set_inflection(self._inflection)
         tenths = self._pitchTenths(adj)
         e = self._entry()
         if e is not None and e[2] == "sp":
@@ -805,9 +899,12 @@ class SynthDriver(SynthDriver):
                 synthDoneSpeaking.notify(synth=self)
                 continue
             try:
-                #: What NVDA has asked us to add to the user's pitch for the
-                #: text that follows. 0 means the user's own setting.
-                adj = 0
+                #: What NVDA has asked us to add to the user's pitch, volume
+                #: and rate for the text that follows. 0 means the user's own
+                #: setting. Pitch is the one NVDA core sends -- it is how a
+                #: capital letter is marked -- but all three arrive the same
+                #: way and cost the same to honour.
+                adj = vadj = radj = 0
                 #: Text collected since the last flush. **A speech sequence is
                 #: not a list of utterances**: NVDA hands over the pieces of a
                 #: line -- text, a link, more text -- as separate strings, and
@@ -832,7 +929,8 @@ class SynthDriver(SynthDriver):
                     if kind == "index":
                         indexes.append(value)
                         continue
-                    if self._flush(eng, run, adj, indexes, queuedAt):
+                    if self._flush(eng, run, adj, vadj, radj, indexes,
+                                   queuedAt):
                         pending = True
                     if kind == "break":
                         self._audioOut = True
@@ -840,8 +938,13 @@ class SynthDriver(SynthDriver):
                         pending = True
                     elif kind == "pitch":
                         adj = value
+                    elif kind == "volume":
+                        vadj = value
+                    elif kind == "rate":
+                        radj = value
                 if not self._stopped:
-                    if self._flush(eng, run, adj, indexes, queuedAt):
+                    if self._flush(eng, run, adj, vadj, radj, indexes,
+                                   queuedAt):
                         pending = True
                 for index in indexes:           # nothing left to speak
                     synthIndexReached.notify(synth=self, index=index)
@@ -849,7 +952,7 @@ class SynthDriver(SynthDriver):
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
 
-    def _flush(self, eng, run, adj, indexes, queuedAt):
+    def _flush(self, eng, run, adj, vadj, radj, indexes, queuedAt):
         """Render everything collected so far as ONE utterance. -> spoke?
 
         Joins with a space only where neither side has one, or "link" + "Home"
@@ -876,8 +979,13 @@ class SynthDriver(SynthDriver):
             return False
         # Pitch is re-applied per flush because NVDA's capital-letter offset
         # changes *within* a sequence, and the engines take it as a setting
-        # rather than as part of the text.
-        self._applySettings(eng, adj)
+        # rather than as part of the text. Rate and inflection ride along.
+        self._applySettings(eng, adj, radj)
+        # Volume never reaches an engine: it is folded into the widening that
+        # every chunk goes through on the way to the player. Chosen here so
+        # that a `VolumeCommand` part-way through a sequence applies to the
+        # audio it precedes and to nothing already queued.
+        self._gain = self._gainTables(self._volume + vadj)
         t0 = time.perf_counter()
         phonemes = eng.translate(text)
         t1 = time.perf_counter()
@@ -927,10 +1035,12 @@ class SynthDriver(SynthDriver):
             log.info(
                 "outSPOKEN: %.0f ms for %r -> %r "
                 "(wait %.0f, translate %.0f, synth %.0f;"
-                " %.2f s audio, rate %d, pitch %+d)"
+                " %.2f s audio, rate %d, pitch %+d, volume %d,"
+                " inflection %d)"
                 % (total, text[:24], phonemes[:40],
                    (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
                    (t2 - t1) * 1000,
                    (fed[0] if pcm is None else len(pcm)) / 22254.5454,
-                   self._engineRate, adj))
+                   self._engineRate, adj,
+                   max(0, min(100, self._volume + vadj)), self._inflection))
         return True

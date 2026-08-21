@@ -303,6 +303,7 @@ class _StubEngine(object):
         #: and at what pitch rather than only which thread asked.
         self.spoken = []
         self.pitches = []
+        self.inflections = []
         self.closed = False
 
     def _note(self, what):
@@ -322,6 +323,10 @@ class _StubEngine(object):
     def set_pitch(self, tenths):
         self._note("set_pitch")          # what the Speech Manager engines take
         self.pitches.append(tenths)
+
+    def set_inflection(self, percent):
+        self._note("set_inflection")     # a no-op on the 1984 engine
+        self.inflections.append(percent)
 
     def translate(self, text):
         return text
@@ -808,3 +813,51 @@ def test_a_cancel_stops_a_render_already_in_flight(stubbed):
     assert refused == [b"y"]
     # And the driver is not wedged: the next utterance must still be spoken.
     assert _spoken(driver, "still here")
+
+
+def test_every_voice_speaks_at_both_ends_of_the_inflection_slider(pro_driver):
+    """The whole catalogue, at inflection 0 and 100, through NVDA's own path.
+
+    **This is the test that would have caught the hang.** MacinTalk Pro loops
+    forever inside SpeakBuffer below a modulation depth that belongs to the
+    *voice* rather than to the engine: measured on a four-sentence text, Bruce
+    hangs all the way up to 0.05, Agnes to 0.025 and Victoria only at exactly
+    zero. A floor fitted to the first voice tried -- Agnes, who is also the
+    default -- would have shipped a synthesizer that freezes on the second.
+
+    It runs here rather than in the engine modules because MacinTalk Pro can
+    only ever speak the voice its engine was built with, so covering all three
+    means three engines, and only one may be alive at a time. The driver
+    already rebuilds them per voice, which is also what a user does.
+
+    More than one sentence, deliberately: one clause never reproduced it.
+    """
+    driver = pro_driver
+    voices = list(driver._get_availableVoices())
+    assert voices, "no voices at all"
+    for vid in voices:
+        driver._set_voice(vid)
+        for percent in (0, 100):
+            driver._set_inflection(percent)
+            assert _spoken(
+                driver,
+                "The rain in Spain falls mainly on the plain. "
+                "Is that really what you meant? Nineteen, twenty, twenty one.",
+                timeout=30.0), (
+                "%s produced no audio at inflection %d" % (vid, percent))
+    driver._set_inflection(50)
+
+
+def test_the_volume_slider_reaches_the_player(pro_driver):
+    """Turning it down must reach the audio, and 0 must be silent audio.
+
+    Silent *audio*, not no audio: NVDA still expects the utterance to be
+    delivered and `synthDoneSpeaking` to arrive, or say-all stops dead at the
+    first thing spoken while the slider is at the bottom.
+    """
+    driver = pro_driver
+    driver._set_volume(0)
+    assert _spoken(driver, "Quiet please.", timeout=20.0), (
+        "volume 0 stopped the driver delivering audio at all")
+    driver._set_volume(100)
+    assert _spoken(driver, "Loud again.", timeout=20.0)

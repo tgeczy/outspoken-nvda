@@ -57,6 +57,12 @@ STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
 SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
 SO_RATE = 0x72617465                   # 'rate'
 SO_PITCH_BASE = 0x70626173             # 'pbas'
+SO_PITCH_MOD = 0x706D6F64              # 'pmod'
+
+#: What a voice with no modulation of its own is given at the top of the
+#: slider. Only RoboVox and Xero are affected here, and only above the
+#: midpoint -- at 50 they are still exactly as Apple shipped them.
+INFLECTION_REFERENCE = 25.0
 
 #: The shared tables, which every voice needs.  `ttsd 2` is optional in
 #: principle; in practice every extraction has both.
@@ -153,6 +159,8 @@ class Engine(object):
         #: the engine reports it. The second is per-voice, so `select` drops it.
         self._pitch = 0
         self._base_pitch = None
+        self._mod = 50
+        self._base_mod = None
 
         h = self.h = osp.Host()
         h.load(FRONT_BASE, open(files["Cecy_3.bin"], "rb").read())
@@ -255,6 +263,7 @@ class Engine(object):
         # back as though it were one. The driver re-applies settings after
         # every switch, which is what puts the offset on the new base.
         self._base_pitch = None
+        self._base_mod = None
         return True
 
     def _set_info(self, selector, arg):
@@ -342,8 +351,57 @@ class Engine(object):
             return
         self._set_info(SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0))
 
+    def base_inflection(self):
+        """This voice's own 'pmod'. Eight of the ten answer 100.000.
+
+        The two that answer 0.000 are RoboVox and Xero, and that is the voice
+        rather than a fault: a robot that never varies its pitch is the point
+        of both of them.
+        """
+        if self._base_mod is None:
+            self._base_mod = self.current_inflection()
+        return self._base_mod
+
+    def current_inflection(self):
+        """GetSpeechInfo('pmod') -- what the channel holds right now."""
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_MOD, PARAM_BUF],
+            max_instr=50_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_inflection(self, percent):
+        """NVDA's 0-100, with 50 leaving the voice exactly as recorded.
+
+        **This engine's 'pmod' has two states and not a scale.** Send it
+        anything at all above zero and it stores 100.000: 6.25, 12.5, 25 and
+        50 all read back as 100 and render to the same bytes. So the slider
+        means "flat" at 0 and "as Apple made it" everywhere else, and the
+        arithmetic below -- shared with the two engines that do have a scale --
+        happens to produce exactly that.
+
+        Telling the user that is the readme's job, not this driver's: the
+        alternative is a slider that lies about being continuous on the other
+        engines to be honest about this one.
+        """
+        self._mod = percent
+        base = self.base_inflection()
+        if base is None:
+            return
+        if base > 0:
+            value = base * percent / 50.0
+        else:
+            # RoboVox and Xero, which would otherwise have a dead slider.
+            value = INFLECTION_REFERENCE * max(0, percent - 50) / 50.0
+        self._set_info(SO_PITCH_MOD, self._fixed_arg(min(100.0, value)))
+
     def read_settings(self):
-        return {"rate": self._rate, "pitch": self._pitch}
+        return {"rate": self._rate, "pitch": self._pitch,
+                "inflection": self._mod}
 
     # -- speaking ----------------------------------------------------------
     #: Punctuation MacinTalk 2 pronounces as a word, which has to go because

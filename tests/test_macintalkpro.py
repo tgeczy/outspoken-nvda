@@ -373,3 +373,55 @@ def test_abandoning_a_render_really_abandons_it(pro):
     # The half of it that would actually be noticed: a stopped engine must not
     # leave anything behind for the next utterance to inherit.
     assert bytes(eng.speak(prepared)) == reference
+
+
+# -- inflection ------------------------------------------------------------
+#
+# **The floor is the whole story here.** A 'pmod' near zero makes this engine
+# loop forever inside SpeakBuffer on anything longer than one sentence, and
+# the threshold belongs to the voice: 0.05 for Bruce, 0.025 for Agnes, 0 for
+# Victoria. See `macintalkpro.set_inflection`.
+import inflectioncheck                                         # noqa: E402
+
+
+def test_it_reports_the_voices_own_modulation(pro):
+    inflectioncheck.sane_base(pro[0])
+
+
+def test_it_takes_the_inflection_setting(pro):
+    import macintalkpro
+    inflectioncheck.takes_the_setting(
+        pro[0], floor=macintalkpro.INFLECTION_FLOOR)
+
+
+def test_the_inflection_slider_is_audible(pro):
+    inflectioncheck.slider_is_audible(pro[0])
+
+
+def test_the_middle_of_the_inflection_slider_changes_nothing(pro):
+    # `pristine=False`: the `spoken` fixture above re-initialises the emulator
+    # underneath this one. See `inflectioncheck.the_midpoint_changes_nothing`.
+    inflectioncheck.the_midpoint_changes_nothing(pro[0], pristine=False)
+
+
+def test_the_floor_clears_every_threshold_that_was_measured():
+    """Pure arithmetic, and deliberately not a render.
+
+    Each of those thresholds cost a hung emulator and a hundred million
+    instructions to find. This is the cheap guard that stops somebody lowering
+    the constant toward "more monotone" without going back and repeating them.
+    """
+    import macintalkpro
+    worst = 0.05                     # Bruce, on a four-sentence text
+    assert macintalkpro.INFLECTION_FLOOR >= worst * 10, (
+        "the floor is %r, which is not clear of the %r that hung Bruce"
+        % (macintalkpro.INFLECTION_FLOOR, worst))
+
+
+# Every Pro voice at both ends of the slider is the check that would actually
+# have caught the hang -- Agnes survives depths that freeze Bruce -- but it
+# cannot live here: **this engine can only ever speak the voice it was built
+# with**, so covering all three means building three engines, and only one may
+# be alive at a time. It runs through the driver instead, which is where
+# rebuilding a Pro engine per voice is already handled:
+# `test_driver.test_every_voice_speaks_at_both_ends_of_the_inflection_slider`.

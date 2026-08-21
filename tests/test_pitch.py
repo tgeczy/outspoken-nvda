@@ -52,7 +52,7 @@ def test_each_engine_is_given_pitch_in_the_units_it_takes():
 
     class Spy(object):
         def __init__(self):
-            self.hz = self.tenths = None
+            self.hz = self.tenths = self.percent = None
 
         def set_rate(self, rate):
             pass
@@ -63,8 +63,11 @@ def test_each_engine_is_given_pitch_in_the_units_it_takes():
         def set_pitch(self, tenths):
             self.tenths = tenths
 
+        def set_inflection(self, percent):
+            self.percent = percent
+
     d = outspoken.SynthDriver.__new__(outspoken.SynthDriver)
-    d._rate, d._pitch = 50, 100
+    d._rate, d._pitch, d._inflection = 50, 100, 50
 
     d._entry = lambda: ("male", "Male", "sp", 110)
     d._baseHz = lambda: 110
@@ -79,6 +82,10 @@ def test_each_engine_is_given_pitch_in_the_units_it_takes():
     d._applySettings(spy)
     assert spy.hz is None, "a Speech Manager engine was handed hertz"
     assert spy.tenths == 120
+    # Inflection goes to every engine as NVDA's own 0-100. The 1984 one takes
+    # it and does nothing, which is a property of that engine and not of the
+    # driver -- so the driver must not start deciding who to send it to.
+    assert spy.percent == 50
 
 
 def test_an_octave_is_twelve_units_not_a_doubling_in_hertz():

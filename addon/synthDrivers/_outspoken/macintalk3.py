@@ -65,6 +65,14 @@ STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
 SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
 SO_RATE = 0x72617465                   # 'rate'
 SO_PITCH_BASE = 0x70626173             # 'pbas'
+SO_PITCH_MOD = 0x706D6F64              # 'pmod'
+
+#: The depth given at the top of the slider to a voice that has none of its
+#: own, in 'pmod' units. Chosen between Albert's 12.500 and Fred's 50.000, so
+#: a robot asked for intonation gets a middling amount of it rather than a
+#: caricature. Nothing below the midpoint uses this: at 50 those voices are
+#: still exactly as Apple shipped them.
+INFLECTION_REFERENCE = 25.0
 
 #: The engine's own resources. `ttvi 11` is the PowerPC build of the same
 #: engine: registering it wastes a slot at best and is loaded at worst.
@@ -177,6 +185,8 @@ class Engine(object):
         self._rate = None
         self._pitch = 0
         self._base_pitch = None
+        self._mod = 50
+        self._base_mod = None
 
         h = self.h = osp.Host()
         # Not optional, and not a preference: `+0x234` is `rtd`, so a 68000
@@ -278,6 +288,7 @@ class Engine(object):
         # channel's pitch to that voice's own -- measured, the same way it was
         # for MacinTalk 2. See tests/test_macintalk3.py.
         self._base_pitch = None
+        self._base_mod = None
         return True
 
     def _set_info(self, selector, arg):
@@ -335,8 +346,59 @@ class Engine(object):
             return
         self._set_info(SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0))
 
+    def base_inflection(self):
+        """This voice's own 'pmod', asked of the engine and kept.
+
+        Nineteen voices and five different answers: 50.000 for Fred, Ralph and
+        Whisper, 39.999 for Junior, Kathy and Princess, 25.000 for Boing,
+        12.500 for Albert and Bahh, and **0.000 for the nine novelty voices**
+        -- Zarvox, Trinoids, Deranged and the singing ones. Those last are not
+        broken. A robot that never varies its pitch is the voice, and a sung
+        line gets its pitch from the note rather than from a contour.
+        """
+        if self._base_mod is None:
+            self._base_mod = self.current_inflection()
+        return self._base_mod
+
+    def current_inflection(self):
+        """GetSpeechInfo('pmod') -- what the channel holds right now."""
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_MOD, PARAM_BUF],
+            max_instr=50_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_inflection(self, percent):
+        """NVDA's 0-100, with 50 leaving the voice exactly as recorded.
+
+        'pmod' is a depth rather than a position, so the slider scales it
+        instead of offsetting it: half at 25, the voice's own at 50, twice it
+        at 100. Measured across all nineteen voices, every value is stored
+        exactly as given and every one of them renders differently, so there
+        is nothing here to work around -- see `tools/probe_inflection.py`.
+
+        **The nine voices whose own 'pmod' is zero would otherwise have a dead
+        slider**, since twice nothing is nothing. They get an absolute depth
+        above the midpoint instead, which leaves them untouched at 50 and lets
+        anyone who wants Zarvox to have intonation ask for it.
+        """
+        self._mod = percent
+        base = self.base_inflection()
+        if base is None:
+            return
+        if base > 0:
+            value = base * percent / 50.0
+        else:
+            value = INFLECTION_REFERENCE * max(0, percent - 50) / 50.0
+        self._set_info(SO_PITCH_MOD, self._fixed_arg(min(100.0, value)))
+
     def read_settings(self):
-        return {"rate": self._rate, "pitch": self._pitch}
+        return {"rate": self._rate, "pitch": self._pitch,
+                "inflection": self._mod}
 
     # -- speaking ----------------------------------------------------------
     #: Punctuation the engine pronounces as a word, which has to go because

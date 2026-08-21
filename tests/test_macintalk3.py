@@ -295,3 +295,70 @@ def test_a_sink_that_says_no_stops_the_render(mt3):
     # And the engine is still usable afterwards, which is the part that would
     # actually be noticed: an abandoned utterance must not poison the next.
     assert len(bytes(eng.speak(eng.translate("button")))) > 4000
+
+
+# -- inflection ------------------------------------------------------------
+#
+# Nineteen voices and five different answers for 'pmod': 50 for Fred, Ralph
+# and Whisper, 40 for Junior, Kathy and Princess, 25 for Boing, 12.5 for
+# Albert and Bahh, and **zero for the nine novelty voices**. Zero is the voice
+# rather than a fault -- a robot that never varies its pitch, or a sung line
+# whose pitch comes from the note.
+import inflectioncheck                                         # noqa: E402
+
+
+def test_it_reports_the_voices_own_modulation(mt3):
+    inflectioncheck.sane_base(mt3[0])
+
+
+def test_it_takes_the_inflection_setting(mt3):
+    inflectioncheck.takes_the_setting(mt3[0])
+
+
+def test_the_inflection_slider_is_audible(mt3):
+    inflectioncheck.slider_is_audible(mt3[0])
+
+
+def test_the_middle_of_the_inflection_slider_changes_nothing(mt3):
+    inflectioncheck.the_midpoint_changes_nothing(mt3[0])
+
+
+def test_a_voice_with_no_modulation_still_has_a_working_slider(mt3):
+    """Zarvox, Trinoids and the seven others whose own 'pmod' is zero.
+
+    Twice nothing is nothing, so scaling alone would leave nine voices of
+    nineteen with a dead control. Above the midpoint they are given an
+    absolute depth instead -- and at the midpoint they are still exactly as
+    Apple shipped them, which is the part that must not move.
+    """
+    import macintalk3
+    eng, voices = mt3
+    # **Not any voice whose own depth is zero.** Measured across all nine:
+    # Cellos, Deranged, Pipe Organ, Trinoids and Zarvox take an absolute depth
+    # and change, while Bad News, Bells, Good News and Hysterical ignore
+    # 'pmod' outright however it is set. Four voices in thirty-four where the
+    # control does nothing, and the readme says so.
+    flat = [v for v in voices
+            if v.name in ("Zarvox", "Trinoids", "Deranged", "Cellos",
+                          "Pipe Organ")]
+    if not flat:
+        pytest.skip("none of the novelty voices are extracted")
+    assert eng.select(flat[0])
+    eng.set_rate(RATE)
+    assert eng.base_inflection() == 0.0, (
+        "%s was expected to have no modulation of its own" % flat[0].name)
+    eng.set_inflection(50)
+    middle = bytes(eng.speak(eng.translate(PHRASE)))
+    assert eng.current_inflection() == 0.0, "the midpoint moved"
+    eng.set_inflection(100)
+    top = bytes(eng.speak(eng.translate(PHRASE)))
+    eng.set_inflection(50)
+    assert middle and top
+    assert top != middle, (
+        "the top of the slider did nothing for %s" % flat[0].name)
+    assert macintalk3.INFLECTION_REFERENCE > 0
+
+
+def test_every_voice_speaks_at_both_ends_of_the_inflection_slider(mt3):
+    eng, voices = mt3
+    inflectioncheck.every_voice_survives_the_ends(eng, voices)
