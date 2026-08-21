@@ -65,6 +65,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_pcm_len = 0; g_buffers_taken = 0; g_pcm_overflow = 0; g_short_buffers = 0;
     g_buflog_n = 0;
     g_cb_pending = 0; g_in_callback = 0; g_cb_queued_instr = 0;
+    g_instr_total = 0;
     g_sample_rate = 0;
     g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
     g_cb_wait = IN_CALL_CB_WAIT;

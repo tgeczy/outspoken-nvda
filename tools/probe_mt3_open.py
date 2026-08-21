@@ -227,32 +227,60 @@ if __name__ == "__main__":
     sys.exit(main())
 
 # ---------------------------------------------------------------------------
-# WHERE THIS STOPS, and it is one word.
+# IT SPEAKS, and the Sound Manager was never the problem.
 #
-#   deferred task 0x419EC   a4 = dtParam = 0x0C672C
-#     $8e(a4)=0  $ac(a4)=0x0C6960  $b0(a4)=0x0C6644   all sane, all stable
-#     -> vtable $70 = 0x0B4E42 (heap) -> 0x0B41DE -> ttvi10+0x135E
-#     -> a4 = *(0x0C6964)                          <-- THE BAD WORD
+# For a long time this stopped after two buffers -- 4,480 bytes, 0.20 s -- and
+# then ran away into four hundred million bus faults. The recorded diagnosis
+# was that `SndDoCommand` must COPY each command into the channel's queue, the
+# way real hardware does, so the engine is free to reuse its scratch. That was
+# wrong, and it was wrong in a way worth remembering: the host had copied the
+# command into `CB_SCRATCH` all along. The note and the code disagreed, and
+# nobody had gone back to check which one was lying.
 #
-# `0x0C6960` is the engine's SndCommand scratch. After Open it reads
-# `12 34 56 78 | 00 0c 67 2c`; while the callBackCmd is outstanding it reads
-# `00 0d 00 00 | 00 0c 67 2c` -- cmd 13, param2 = its own context. Then the
-# engine REUSES the scratch during SpeakBuffer and it becomes
-# `00 00 00 00 | 00 09 77 e5`, an odd address, and the task jumps through it.
+# What it actually was:
 #
-# On real hardware `SndDoCommand` COPIES the command into the channel's queue,
-# so reusing the scratch immediately is free and the callback is handed the
-# queued copy. This host takes a buffer the moment it is offered and runs a
-# callBackCmd the moment it is issued -- fine for MacinTalk 2, and Pro uses the
-# queue as a synchronisation primitive. MacinTalk 3 is the engine that will not
-# tolerate the shortcut.
+#   ttvi10+0x08E2   pea      $f6(a4)        push the destination
+#   ttvi10+0x08E6   _Microseconds           ($A193)
+#   ttvi10+0x08E8   movea.l  (a7)+,a1       pop it back -- untouched
+#   ttvi10+0x08EA   move.l   a0,(a1)+       high word from A0
+#   ttvi10+0x08EC   move.l   d0,(a1)        low  word from D0
+#
+# That is Apple's own `Microseconds` glue. **The trap returns the count in the
+# A0/D0 pair and writes no memory**; the pointer belongs to the glue. This host
+# read the C prototype instead -- `Microseconds(UnsignedWide *)` -- and stored
+# eight bytes through A0, which on entry is whatever the caller left there.
+#
+# In MacinTalk 3 it landed exactly on the engine's own SndCommand at 0x000BD864
+# and rewrote its `param2`. The callback trampoline at ttvi10+0x135E takes that
+# word as a record pointer, reads a routine out of `$b4` of it, and jumps:
+#
+#     movea.l  $8(a6),a3      the SndCommand
+#     movea.l  $4(a3),a4      param2 -- the word the clock had just eaten
+#     tst.l    $b4(a4)
+#     movea.l  $b4(a4),a0
+#     jsr      (a0)           -> 0x2E091F0F, and away
+#
+# It ran that trampoline 41 times correctly during one SpeakBuffer. The 42nd
+# was the first one after _Microseconds fired. The clock was corrupting the
+# thing it was timing.
+#
+# Fixed in src/osp_host_sane.c. Fred, Kathy, Princess, Junior and Ralph now
+# render 3.19 s of speech-shaped audio for the same sentence, with zero faults
+# and five distinct renders -- F0 106, 210, 242, 212 and 71 Hz, which is
+# exactly the right order for those five voices. MacinTalk 2 and MacinTalk Pro
+# renders are byte-identical across the change.
 #
 # Ruled out by measurement, so nobody repeats them:
-#   * the clock -- zero references to $016A in any of the three code
-#     resources, `_TickCount` never called, `auto_ticks(True)` changes the
-#     output by nothing at all;
+#   * a Sound Manager command queue -- the command sequence was already
+#     correct and in order: bufferCmd, callBackCmd, bufferCmd, callBackCmd;
+#   * the clock as a *source* -- zero references to $016A in any of the three
+#     code resources, `_TickCount` never called, `auto_ticks(True)` changes
+#     nothing. (The clock was guilty of something else entirely.)
 #   * the in-call callback delay -- `osp_cb_wait` swept 100..1,000,000 gives
-#     byte-identical results, because the callBackCmd is issued near the END of
-#     SpeakBuffer and there is no in-call time left to wait for;
+#     byte-identical results;
 #   * resource ORDER -- the engine does not index its ttvi resources.
+#
+# Still to do before this is an add-on: a `macintalk3.py` engine module, the
+# voice-folder gating, and a person listening to it. Extraction still refuses
+# MacinTalk 3 by name until then.
 # ---------------------------------------------------------------------------

@@ -53,6 +53,10 @@ static int          g_stop_reason;
 static int          g_stop_vector;
 static unsigned     g_stop_pc;
 static long long    g_instr_count;
+/* The same instructions, never reset. `g_instr_count` restarts at every
+ * component call and every callback round, so it measures a duration rather
+ * than telling the time -- and _Microseconds has to be a clock. */
+static long long    g_instr_total;
 static long long    g_instr_budget;
 static unsigned     g_sentinel;
 

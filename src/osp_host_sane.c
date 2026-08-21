@@ -727,14 +727,38 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
     case 0xA05A:                       /* _PrimeTime                       */
         *d0_out = 0; *a0_out = a0;
         return 1;
-    case 0xA193: {                     /* _Microseconds -- A0 = UnsignedWide */
-        /* Only reached because we told SysEnvirons this is System 7.  It must
-         * advance, or anything measuring elapsed time sees zero forever; the
-         * instruction count is the one monotonic clock this host has. */
-        unsigned long long us = (unsigned long long)g_instr_count;
-        m68k_write_memory_32(a0 + 0, (unsigned)(us >> 32));
-        m68k_write_memory_32(a0 + 4, (unsigned)(us & 0xFFFFFFFFu));
-        *d0_out = 0; *a0_out = a0;
+    case 0xA193: {                     /* _Microseconds                     */
+        /* **It returns the count in A0 and D0, and writes no memory.**
+         *
+         * This host used to treat A0 as a `UnsignedWide *` and store the
+         * result through it, which is what the C prototype
+         * `Microseconds(UnsignedWide *)` suggests -- and it is wrong. The
+         * pointer belongs to Apple's *glue*, not to the trap. MacinTalk 3
+         * carries that glue verbatim, and it says so plainly:
+         *
+         *     pea      $f6(a4)        push the destination
+         *     _Microseconds
+         *     movea.l  (a7)+,a1       pop it back -- the trap did not take it
+         *     move.l   a0,(a1)+       high word from A0
+         *     move.l   d0,(a1)        low  word from D0
+         *
+         * A0 on entry is whatever the caller happened to leave there, so
+         * storing through it scribbles eight bytes into live data. In
+         * MacinTalk 3 it landed exactly on the engine's own SndCommand and
+         * rewrote its `param2`; the sound callback then walked that pointer
+         * into freed memory and jumped through it, four hundred million bus
+         * faults later. The clock was corrupting the thing it was timing.
+         *
+         * The count must also never go backwards. `g_instr_count` is reset at
+         * every component call and every callback round, so it is a duration
+         * rather than a clock; `g_instr_total` only ever climbs. An engine
+         * subtracting two samples of a clock that restarts sees a huge
+         * negative elapsed time, which is its own class of bug and not one
+         * worth waiting to be bitten by.
+         */
+        unsigned long long us = (unsigned long long)g_instr_total;
+        *a0_out = (unsigned)(us >> 32);
+        *d0_out = (unsigned)(us & 0xFFFFFFFFu);
         return 1;
     }
     case 0xA146:                       /* _GetTrapAddress -- number in D0  */

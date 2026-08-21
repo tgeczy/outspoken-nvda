@@ -321,6 +321,7 @@ static void instr_hook(unsigned int pc)
         m68k_end_timeslice();
         return;
     }
+    g_instr_total++;
     if (++g_instr_count > g_instr_budget) {
         g_stop_reason = STOP_BUDGET;      /* counted, never silent */
         g_stop_pc = pc;
