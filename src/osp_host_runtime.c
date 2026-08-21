@@ -253,7 +253,7 @@ static void run_pending_completion(void)
 static int callback_due_in_call(void)
 {
     return g_cb_pending
-        && (!g_defer_cb || g_instr_count - g_cb_queued_instr >= IN_CALL_CB_WAIT);
+        && (!g_defer_cb || g_instr_count - g_cb_queued_instr >= g_cb_wait);
 }
 
 static void instr_hook(unsigned int pc)

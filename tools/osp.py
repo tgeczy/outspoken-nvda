@@ -277,6 +277,16 @@ class Host(object):
         if self.lib.osp_set_cpu(proc) != 0:
             raise ValueError("no such CPU: %r" % proc)
 
+    def cb_wait(self, n):
+        """Instructions to wait before answering a sound callback in-call.
+
+        Per engine, not a global truth. MacinTalk 2 wants a long wait because
+        its first callback only sets a flag; MacinTalk 3 wants a short one
+        because it disposes of the record its callback reads before a long
+        wait would ever elapse.
+        """
+        self.lib.osp_cb_wait(ctypes.c_longlong(n))
+
     def mem_traps(self, on=True):
         self.lib.osp_enable_mem_traps(1 if on else 0)
 

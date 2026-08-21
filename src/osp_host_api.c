@@ -67,6 +67,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_cb_pending = 0; g_in_callback = 0; g_cb_queued_instr = 0;
     g_sample_rate = 0;
     g_cb_runs = 0; g_sndlog_n = 0; g_defer_cb = 0;
+    g_cb_wait = IN_CALL_CB_WAIT;
     g_dt_pending = 0; g_in_deferred = 0; g_dt_runs = 0;
     g_dt_proc = g_dt_parm = 0;
     g_ioc_n = 0; g_in_ioc = 0; g_ioc_runs = 0; g_ioc_dropped = 0;
@@ -450,8 +451,21 @@ OSP_API int osp_run_callbacks(int max_rounds, long long max_instr)
         /* The callback installs the deferred task, and the deferred task is
          * what renders, so both have to be drained or the chain stops half
          * way with a buffer of silence already queued. */
-        if (g_cb_pending)      run_pending_callback();
-        else if (g_dt_pending) run_pending_deferred();
+        /* **The deferred task goes first.**
+         *
+         * A deferred task is the tail of the interrupt that installed it: on a
+         * real Macintosh it runs when interrupt processing ends, before any
+         * later interrupt is taken. Running callbacks first inverts that, and
+         * the task then executes one or more callbacks too late -- against
+         * state the engine has already moved past.
+         *
+         * MacinTalk 3 is where it shows. Its sound callback installs a task
+         * AND queues the next callBackCmd, so both are pending at once; with
+         * callbacks first the task fired two rounds late, walked into a record
+         * the engine had disposed of -- guard word `0x12345678` and all -- and
+         * jumped through freed memory. */
+        if (g_dt_pending)      run_pending_deferred();
+        else if (g_cb_pending) run_pending_callback();
         else                   run_pending_completion();
         n++;
         if (g_stop_reason != STOP_RUNNING) break;
@@ -505,6 +519,9 @@ OSP_API int osp_pcm_get(unsigned char *out, int max)
 OSP_API unsigned osp_cb_scratch(void)   { return CB_SCRATCH; }
 
 OSP_API void osp_defer_callbacks(int on) { g_defer_cb = on ? 1 : 0; }
+/* Instructions to wait before answering a callback in-call. Per engine:
+ * see the note beside IN_CALL_CB_WAIT. */
+OSP_API void osp_cb_wait(long long n) { g_cb_wait = n > 0 ? n : 1; }
 OSP_API int osp_cb_runs(void) { return g_cb_runs; }
 OSP_API int osp_dt_runs(void) { return g_dt_runs; }
 /* Completion routines run, and any a full queue had to drop.  Dropped is a

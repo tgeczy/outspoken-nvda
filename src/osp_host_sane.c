@@ -677,6 +677,22 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         g_dt_proc = m68k_read_memory_32(a0 + 8);
         g_dt_parm = m68k_read_memory_32(a0 + 12);
         g_dt_pending = 1;
+        /* End the timeslice so it runs PROMPTLY.
+         *
+         * A deferred task fires at the end of interrupt processing on a real
+         * Macintosh -- microseconds, not "whenever the caller next yields".
+         * Setting the flag and waiting for the natural end of a 100,000
+         * instruction slice is usually close enough, but it drops the task
+         * entirely when the call reaches its sentinel first: `osp_call` only
+         * runs pending work while the reason is still STOP_RUNNING.
+         *
+         * MacinTalk 3 is where that bites. It installs one task during
+         * SpeakBuffer, the speak returns before the slice ends, and the task
+         * runs on a later pump -- by which time the engine has disposed of the
+         * record the task walks into, guard word `0x12345678` and all. The
+         * result is a jump through freed memory, forty million faults, and it
+         * looks exactly like an engine bug. */
+        m68k_end_timeslice();
         *d0_out = 0; *a0_out = a0;
         return 1;
     }
