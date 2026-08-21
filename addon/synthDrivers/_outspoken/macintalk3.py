@@ -148,11 +148,23 @@ class Engine(object):
 
     number_mode = "words"
 
+    #: `speak` takes a `sink` and hands audio over as it renders. Declared so
+    #: the driver never has to guess from a signature or catch a TypeError,
+    #: which would also swallow one raised inside a render.
+    #:
+    #: This engine is the one that needs it: about 24x realtime against
+    #: MacinTalk 2's 157x, so a long sentence cost the best part of a second
+    #: before anything could be played. The others may follow once this has
+    #: been heard in NVDA.
+    STREAMS = True
+
     #: A ceiling on one utterance. Reaching it means the engine is producing
-    #: without ever finishing, which is a finding rather than an utterance.
-    #: Bells and Hysterical are the long ones -- about 170 KB for a sentence,
-    #: which is 76 buffers -- so this is generous on purpose.
-    MAX_BUFFERS = 600
+    #: without ever finishing, which is a finding rather than an utterance --
+    #: so it must sit well above anything real. About 70 seconds here, since
+    #: this engine's buffers are 2237 bytes; counted in seconds rather than
+    #: buffers because the same count meant 23 s on MacinTalk Pro, where long
+    #: paragraphs were being truncated mid-word.
+    MAX_BUFFERS = 700
 
     def __init__(self, folder, allvoices, voice=None):
         for old in _LIVE:
@@ -353,12 +365,30 @@ class Engine(object):
             return False
         return bool(self.h.r8(STATUS_BUF)) or bool(self.h.r32(STATUS_BUF + 2))
 
-    def speak(self, text):
-        """-> 8-bit unsigned PCM at NATIVE_RATE.
+    def speak(self, text, sink=None):
+        """-> 8-bit unsigned PCM at NATIVE_RATE, or b"" when `sink` took it.
 
         SpeakBuffer returns as soon as the first buffer is queued, so the audio
         only exists if the host keeps being the Sound Manager afterwards: each
         callback installs a deferred task, and *that* renders the next buffer.
+
+        **`sink` is why long sentences stopped costing a second of silence.**
+        This engine renders at about 24x realtime -- MacinTalk 2 manages 157x,
+        so it is genuinely the slow one -- and a 23-second utterance therefore
+        took the best part of a second before a sample of it could be played.
+        Given a sink, each piece goes out as it is rendered instead, so the
+        first sound arrives after one buffer rather than after all of them.
+
+        Handing it out is not quite as simple as sending every piece, because
+        the trailing silence can only be recognised once it has stopped
+        growing. So one piece is always held back -- the lookbehind the Tiger
+        add-on needed for the same reason -- and the held piece keeps
+        *absorbing* while it is entirely silent, or a tail spanning two
+        buffers would ship half of itself. Only the last piece is trimmed at
+        the end; only the first at the start.
+
+        With no sink the return value is exactly what it always was, and the
+        two paths are asserted byte-identical in tests/test_macintalk3.py.
         """
         if self._dead:
             return b""
@@ -375,9 +405,34 @@ class Engine(object):
                                         max_instr=400_000_000)
         if reason != 1:
             return b""
+
+        held = b""                          # the lookbehind, and the tail
+        first = True
+        aborted = False
         while h.buffers_taken < self.MAX_BUFFERS:
             if not h.run_callbacks(max_rounds=8):
                 break                       # nothing pending: really finished
+            if sink is not None:
+                piece = h.pcm
+                if piece:
+                    h.pcm_reset()
+                    held += piece
+                    # Emit everything except a tail that might yet turn out to
+                    # be trailing silence. `_trim_head` only ever cuts on the
+                    # very first piece.
+                    keep = _tail_silence(held)
+                    if keep < len(held):
+                        out = held[:len(held) - keep]
+                        held = held[len(held) - keep:]
+                        if first:
+                            out = _trim_head(out)
+                            first = False
+                        if out and sink(out) is False:
+                            # The caller has lost interest -- a cancel while
+                            # this was rendering. Stop now rather than spend
+                            # another second on audio nobody will hear.
+                            aborted = True
+                            break
             if not self.busy():
                 break
         else:
@@ -389,11 +444,37 @@ class Engine(object):
                 pass
 
         pcm = h.pcm
+        if aborted:
+            # Nothing more goes out, but the engine still has to be settled so
+            # the next utterance does not inherit this one's queued audio.
+            h.run_callbacks(max_rounds=64)
+            h.pcm_reset()
+            return b""
+        if sink is not None:
+            held += pcm
+            # **The tail is finished before the drain, never after.** What the
+            # drain produces is the engine settling after the utterance, and it
+            # must reach nobody: that discarded audio is the next utterance's
+            # protection against inheriting this one's ending.
+            if first:
+                # Nothing went out, so this is the whole utterance and the
+                # ordinary two-ended trim applies exactly as it always did.
+                held = _trim(held)
+            elif _tail_silence(held) == len(held):
+                # Only the silence deliberately held back. Keep the usual pad
+                # rather than trimming it to nothing -- `_trim_tail` finds no
+                # last sample to count from here, and dropping it outright is
+                # what made the streamed audio 1200 bytes short of the whole.
+                held = held[:_KEEP]
+            else:
+                held = _trim_tail(held)
+            if held:
+                sink(held)
         # Drain whatever the engine still has queued and throw it away, so the
         # tail of this utterance cannot arrive at the front of the next one.
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return _trim(pcm)
+        return b"" if sink is not None else _trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator; see macintalk2.stop.
@@ -426,7 +507,49 @@ class Engine(object):
 _SILENT = 0x80
 
 
-def _trim(pcm, keep=1200, lead=220):
+#: How much silence to leave at the end of an utterance, and at the start.
+#: MacinTalk 2's numbers unchanged: cutting hard on a sample clicks. About
+#: 54 ms and 10 ms at the engine's rate.
+_KEEP, _LEAD = 1200, 220
+
+
+def _tail_silence(pcm):
+    """-> how many bytes at the end of `pcm` are silent.
+
+    What the streaming path must hold back, because silence at the end of a
+    piece may be the start of the utterance's trailing silence -- or may be a
+    pause with more speech behind it. Only time tells, so it waits.
+    """
+    n = len(pcm)
+    i = n
+    while i > 0 and pcm[i - 1] == _SILENT:
+        i -= 1
+    return n - i
+
+
+def _trim_head(pcm, lead=_LEAD):
+    """Drop the leading silence, leaving `lead` bytes of it."""
+    n = len(pcm)
+    start = 0
+    while start < n and pcm[start] == _SILENT:
+        start += 1
+    if start >= n:
+        return b""
+    return pcm[max(0, start - lead):]
+
+
+def _trim_tail(pcm, keep=_KEEP):
+    """Drop the trailing silence, leaving `keep` bytes of it."""
+    n = len(pcm)
+    end = n
+    while end > 0 and pcm[end - 1] == _SILENT:
+        end -= 1
+    if end == 0:
+        return b""
+    return pcm[:min(n, end + keep)]
+
+
+def _trim(pcm, keep=_KEEP, lead=_LEAD):
     """Drop the silence at both ends, leaving a little at each.
 
     The same treatment MacinTalk 2 and MacinTalk Pro get, and leaving it out

@@ -325,6 +325,18 @@ class SynthDriver(SynthDriver):
         self._voiceRefused = None
         self._stopped = False
         self._audioOut = False           # is there audio worth interrupting?
+        #: Bumped by every cancel. A render already in flight compares it with
+        #: what it started under and stops feeding when they differ.
+        #:
+        #: **This is not the generation counter rule 3 forbids.** That one
+        #: stamped items when they were *queued* and compared when they were
+        #: rendered, so a cancel arriving in between made an item stale before
+        #: it had ever been looked at -- and the driver reached a state where
+        #: every item was stale and never recovered. This is read when the
+        #: worker *picks up* an utterance, which is necessarily after any
+        #: cancel that preceded it, so a fresh item can never start stale. It
+        #: only ever abandons the one utterance being rendered right now.
+        self._cancels = 0
         self._nSpoken = self._nEmpty = 0
         self._lastReport = 0.0
         self._queue = queue.Queue()
@@ -430,6 +442,10 @@ class SynthDriver(SynthDriver):
         'space space space I'" looks like. So it is timed.
         """
         t0 = time.perf_counter()
+        # Before draining, so a render in flight sees it as early as possible:
+        # MacinTalk 3 takes the best part of a second over a long sentence,
+        # and without this the whole of an abandoned utterance still arrives.
+        self._cancels += 1
         for q in (self._queue, self._audioQueue):
             while True:
                 try:
@@ -854,15 +870,47 @@ class SynthDriver(SynthDriver):
         t0 = time.perf_counter()
         phonemes = eng.translate(text)
         t1 = time.perf_counter()
-        pcm = eng.speak(phonemes)
+
+        # **Stream when the engine can.** MacinTalk 3 renders at about 24x
+        # realtime against MacinTalk 2's 157x, so a long sentence took the
+        # best part of a second before a sample of it could be played -- heard
+        # as the engine being laggy in a way the others are not. Given a sink
+        # it hands each piece over as it is rendered, and the first sound
+        # arrives after about 30 ms instead of 540.
+        #
+        # `gen` is read HERE, when this utterance starts, which is necessarily
+        # after any cancel that preceded it -- so an utterance can never begin
+        # already stale. See the note on `_cancels`.
+        gen = self._cancels
+        fed = [0]
+
+        def sink(chunk):
+            if self._stopped or self._cancels != gen:
+                return False                # cancelled: stop rendering
+            self._audioOut = True
+            self._audioQueue.put(self._to16(chunk))
+            fed[0] += len(chunk)
+            return True
+
+        # Declared rather than discovered. Catching TypeError around the call
+        # would also swallow one raised *inside* a render and then quietly
+        # speak the whole utterance twice.
+        if getattr(eng, "STREAMS", False):
+            pcm = eng.speak(phonemes, sink=sink)
+        else:
+            pcm = eng.speak(phonemes)
         t2 = time.perf_counter()
-        if not pcm:
+        if fed[0]:
+            self._nSpoken += 1
+            pcm = None                      # already handed over, piece by piece
+        elif not pcm:
             self._nEmpty += 1
             self._report()
             return False
-        self._nSpoken += 1
-        self._audioOut = True
-        self._audioQueue.put(self._to16(pcm))
+        else:
+            self._nSpoken += 1
+            self._audioOut = True
+            self._audioQueue.put(self._to16(pcm))
         total = (time.perf_counter() - queuedAt) * 1000
         if total >= 60:
             log.info(
@@ -871,6 +919,7 @@ class SynthDriver(SynthDriver):
                 " %.2f s audio, rate %d, pitch %+d)"
                 % (total, text[:24], phonemes[:40],
                    (t0 - queuedAt) * 1000, (t1 - t0) * 1000,
-                   (t2 - t1) * 1000, len(pcm) / 22254.5454,
+                   (t2 - t1) * 1000,
+                   (fed[0] if pcm is None else len(pcm)) / 22254.5454,
                    self._engineRate, adj))
         return True

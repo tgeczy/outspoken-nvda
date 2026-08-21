@@ -395,7 +395,10 @@ class Engine(object):
     #: it -- a long sentence is about thirty -- so reaching it means the engine
     #: is producing without ever finishing, and the right answer is to stop and
     #: say so rather than hand NVDA two minutes of silence.
-    MAX_BUFFERS = 400
+    #: About 70 seconds: this engine's buffers are 2057 bytes. Counted in
+    #: seconds rather than buffers because the same count means 23 s on
+    #: MacinTalk Pro and 60 on MacinTalk 3, and Pro was being truncated.
+    MAX_BUFFERS = 800
 
     def speak(self, text):
         """-> 8-bit unsigned PCM at NATIVE_RATE, trailing silence trimmed.
@@ -430,9 +433,14 @@ class Engine(object):
             if not self.busy():
                 break
         else:
-            from logHandler import log
-            log.warning("MacinTalk 2: utterance hit the %d buffer ceiling"
-                        % self.MAX_BUFFERS)
+            # Guarded: this module is driven from tools and tests as well as
+            # from NVDA, and the ceiling is exactly the case those reach.
+            try:
+                from logHandler import log
+                log.warning("MacinTalk 2: utterance hit the %d buffer ceiling"
+                            % self.MAX_BUFFERS)
+            except ImportError:
+                pass
 
         # Take the audio *now*, then let the engine settle and throw away
         # whatever that produces.

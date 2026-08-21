@@ -202,3 +202,92 @@ def test_the_pitch_offset_does_not_compound_across_voices(mt3):
             "an octave above %.3f drifted to %.3f"
             % (natural, eng.current_pitch()))
     eng.set_pitch(0)
+
+
+# -- streaming --------------------------------------------------------------
+#
+# This engine renders at about 24x realtime where MacinTalk 2 manages 157x, so
+# a long sentence took the best part of a second before a sample of it could
+# be played. `speak(sink=...)` hands each piece over as it is rendered.
+
+STREAM_TEXTS = ["button", "s", "a, b, c, d, e",
+                "Voice testing, one two three.", "   ",
+                "Provided arguments colon: left bracket, debug logging. " * 3]
+
+
+def test_streaming_produces_exactly_the_same_audio(mt3):
+    """The regression gate for the whole streaming path.
+
+    Concatenating what the sink was handed must equal what the ordinary call
+    returns, byte for byte, including the trimming at both ends. "a, b, c, d,
+    e" is in the list on purpose: it has real silence *inside* it, four times
+    over, which is what the lookbehind has to not mistake for the end.
+    """
+    eng, _voices = mt3
+    pitchcheck.live(eng)
+    for text in STREAM_TEXTS:
+        prepared = eng.translate(text)
+        whole = bytes(eng.speak(prepared))
+        chunks = []
+        eng.speak(prepared, sink=lambda b: chunks.append(bytes(b)))
+        assert b"".join(chunks) == whole, (
+            "%r: streamed %d bytes, whole %d"
+            % (text[:30], len(b"".join(chunks)), len(whole)))
+
+
+def test_streaming_hands_over_the_first_piece_early(mt3):
+    """The point of it. A long utterance must not be silent while it renders.
+
+    Asserted as a fraction of the whole render rather than a millisecond
+    count, so it does not become a speed test of whatever machine runs it.
+    """
+    import time
+    eng, _voices = mt3
+    pitchcheck.live(eng)
+    prepared = eng.translate(
+        "Provided arguments colon: left bracket, debug logging. " * 3)
+    t0 = time.perf_counter()
+    eng.speak(prepared)
+    whole = time.perf_counter() - t0
+
+    stamps = []
+    t0 = time.perf_counter()
+    eng.speak(prepared, sink=lambda b: stamps.append(time.perf_counter() - t0))
+    assert len(stamps) > 4, "only %d pieces for a long utterance" % len(stamps)
+    assert stamps[0] < whole / 3, (
+        "first piece at %.0f ms of a %.0f ms render"
+        % (stamps[0] * 1000, whole * 1000))
+
+
+def test_a_sink_that_says_no_stops_the_render(mt3):
+    """How a cancel reaches an utterance already being rendered.
+
+    Returning False means the caller has lost interest. Without it a cancelled
+    long sentence goes on rendering for most of a second and then plays.
+    """
+    import time
+    eng, _voices = mt3
+    pitchcheck.live(eng)
+    prepared = eng.translate(
+        "Provided arguments colon: left bracket, debug logging. " * 3)
+    t0 = time.perf_counter()
+    eng.speak(prepared)
+    whole = time.perf_counter() - t0
+
+    seen = []
+
+    def refuse(chunk):
+        seen.append(chunk)
+        return False                        # give up after the first piece
+
+    t0 = time.perf_counter()
+    out = eng.speak(prepared, sink=refuse)
+    stopped = time.perf_counter() - t0
+    assert len(seen) == 1, "kept going for %d pieces" % len(seen)
+    assert out == b"", "an aborted render still returned audio"
+    assert stopped < whole / 2, (
+        "abandoning took %.0f ms of a %.0f ms render"
+        % (stopped * 1000, whole * 1000))
+    # And the engine is still usable afterwards, which is the part that would
+    # actually be noticed: an abandoned utterance must not poison the next.
+    assert len(bytes(eng.speak(eng.translate("button")))) > 4000

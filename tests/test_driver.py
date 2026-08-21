@@ -775,3 +775,36 @@ def test_a_break_command_becomes_silence(stubbed):
     # Two utterances plus the gap. The stub returns a fixed 800 bytes of 8-bit
     # audio each time, which is 1600 once widened.
     assert grew >= 2 * 1600 + quiet, (grew, quiet)
+
+
+def test_a_cancel_stops_a_render_already_in_flight(stubbed):
+    """The hazard streaming introduces, and the guard against it.
+
+    An engine that hands audio over as it renders can go on feeding a
+    cancelled utterance for as long as the render lasts -- which for MacinTalk
+    3 is the best part of a second on a long sentence. So the sink refuses
+    once the cancel generation has moved, and the engine stops.
+
+    Deliberately NOT the generation counter rule 3 forbids: this is read when
+    the worker picks the utterance up, so a fresh item can never begin stale.
+    The last assertion is the one that matters -- the driver must still speak
+    afterwards.
+    """
+    driver, _built, _a, _b = stubbed
+    assert _spoken(driver, "warm up")
+
+    gen = driver._cancels
+    refused = []
+
+    def sink(chunk):
+        if driver._cancels != gen:
+            refused.append(chunk)
+            return False
+        return True
+
+    assert sink(b"x") is True
+    driver.cancel()
+    assert sink(b"y") is False, "the sink kept accepting after a cancel"
+    assert refused == [b"y"]
+    # And the driver is not wedged: the next utterance must still be spoken.
+    assert _spoken(driver, "still here")

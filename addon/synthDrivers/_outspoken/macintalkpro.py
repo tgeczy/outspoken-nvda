@@ -443,7 +443,18 @@ class Engine(object):
     #: A ceiling on one utterance, in buffers. Reaching it means the engine is
     #: producing without ever finishing, and the right answer is to stop and
     #: say so rather than hand NVDA a minute of noise.
-    MAX_BUFFERS = 400
+    #: A ceiling on one utterance, in buffers. Reaching it means the engine
+    #: is producing without ever finishing, which is a finding rather than an
+    #: utterance -- but it must sit well above anything real, and at 400 it
+    #: did not: Pro's buffers are 1271 bytes, so 400 of them is **23 seconds**
+    #: and a long paragraph was being cut off mid-word. Measured, tripling a
+    #: 366-character line gave 23.59 s and doubling that gave 23.36 -- it had
+    #: simply stopped growing.
+    #:
+    #: 1250 is about 70 seconds, which is the figure the three engines now
+    #: agree on rather than agreeing on a buffer count that means something
+    #: different for each.
+    MAX_BUFFERS = 1250
 
     def speak(self, text):
         """-> 8-bit unsigned PCM at NATIVE_RATE, trailing silence trimmed.
@@ -471,9 +482,16 @@ class Engine(object):
             if not self.busy():
                 break
         else:
-            from logHandler import log
-            log.warning("MacinTalk Pro: utterance hit the %d buffer ceiling"
-                        % self.MAX_BUFFERS)
+            # Guarded because this module is driven from tools and tests as
+            # well as from NVDA, and the ceiling is exactly the case those
+            # reach: an unguarded import turned "the utterance was truncated"
+            # into ModuleNotFoundError, which is a far worse way to find out.
+            try:
+                from logHandler import log
+                log.warning("MacinTalk Pro: utterance hit the %d buffer "
+                            "ceiling" % self.MAX_BUFFERS)
+            except ImportError:
+                pass
         pcm = h.pcm
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
