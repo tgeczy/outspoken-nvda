@@ -35,16 +35,51 @@ would take your engine with it.</p>
 
 <h2>Voices</h2>
 
-<p>Two, male and female, differing in pitch &mdash; 110&nbsp;Hz and 250&nbsp;Hz.
-That is the entire voice list this engine has. Rate and pitch sliders map onto
-the driver's own ranges.</p>
+<p>Thirty-four, across four engines &mdash; whichever of them you have
+extracted. Any one alone is enough; a voice is only ever offered if the engine
+that speaks it is present and the voice itself is complete.</p>
+
+<ul>
+<li><strong>MacinTalk (1984)</strong> &mdash; Male and Female, differing in
+pitch. That is the entire voice list this engine has.</li>
+<li><strong>MacinTalk 2 (1992)</strong> &mdash; Ben, Boris, Brenda, Mariel,
+Marvin, Mr.&nbsp;Hughes, Otis, RoboVox, Votron, Xero.</li>
+<li><strong>MacinTalk 3 (1994)</strong> &mdash; Fred, Kathy, Princess, Junior,
+Ralph, Albert, Whisper, Zarvox, Trinoids, and the singing and novelty voices:
+Bells, Cellos, Pipe&nbsp;Organ, Good&nbsp;News, Bad&nbsp;News, Boing, Bubbles,
+Bahh, Deranged, Hysterical.</li>
+<li><strong>MacinTalk Pro (1993)</strong> &mdash; Agnes, Bruce, Victoria. The
+first concatenative Macintosh voices.</li>
+</ul>
+
+<h2>Settings</h2>
+
+<p><strong>Rate</strong> and <strong>pitch</strong> both work on every engine.
+Pitch is an offset from each voice's own natural pitch &mdash; an octave
+either way &mdash; so the middle of the slider is the voice exactly as it was
+recorded, whichever one you pick. NVDA's <em>capital pitch change
+percentage</em> is honoured too.</p>
+
+<p><strong>Read numbers as words</strong> is on by default. None of these
+engines can read a number: the 1984 rules know the ten digit names and nothing
+else, so <code>30</code> is spoken &ldquo;three zero&rdquo;. Turning it off
+gives you the engine exactly as it was, which is genuinely easier to follow
+for version strings and phone numbers.</p>
 
 <h2>Notes</h2>
 
-<p>The engine speaks phonemes and nothing else; its own English front end was a
-separate component that outSPOKEN supplied. English is converted here by an
-interpreter written for this project, reading the letter-to-sound rules out of
-your own <code>RULZ</code> resource.</p>
+<p>The 1984 engine speaks phonemes and nothing else; its own English front end
+was a separate component that outSPOKEN supplied. English is converted here by
+an interpreter written for this project, reading the letter-to-sound rules out
+of your own <code>RULZ</code> resource. The later three engines each bring
+their own front end.</p>
+
+<p><strong>MacinTalk Pro is the slowest of the four</strong>, and noticeably so
+on a long passage. Its <code>SpeakBuffer</code> analyses the whole text before
+producing a single buffer, so there is a pause before a long paragraph begins
+that the other engines do not have. That is the engine, not the driver: it was
+written in 1993, when nothing was going to hand it a screenful of somebody's
+timeline.</p>
 
 <p>The same engine, 67.8% byte-identical, shipped as the Amiga's
 <code>narrator.device</code>. If the voice sounds familiar, that is why.</p>
