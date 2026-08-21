@@ -51,7 +51,7 @@ NATIVE_RATE = 22254
 #: Standard component selectors, from the -1..-6 table at Cecy 3 +$30.
 OPEN, CLOSE = -1, -2
 #: Component selectors, identified from their handlers.
-STATUS, SPEAK, STOP, SET_INFO = 0, 1, 2, 6
+STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
 
 #: Speech Manager selectors, from Apple's Speech.h.
 SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
@@ -71,6 +71,13 @@ _LIVE = []
 def _fixed(x):
     """A Fixed 16.16, which is how the Speech Manager passes rate and pitch."""
     return int(round(x * 65536.0)) & 0xFFFFFFFF
+
+
+def _unfixed(u):
+    """A Fixed 16.16 back to a float, signed."""
+    if u & 0x80000000:
+        u -= 1 << 32
+    return u / 65536.0
 
 
 def find(roots):
@@ -142,6 +149,10 @@ class Engine(object):
         self.voices = list(allvoices)
         self.voice = voice or self.voices[0]
         self._rate = None
+        #: Tenths of a semitone from the voice's own pitch, and that pitch as
+        #: the engine reports it. The second is per-voice, so `select` drops it.
+        self._pitch = 0
+        self._base_pitch = None
 
         h = self.h = osp.Host()
         h.load(FRONT_BASE, open(files["Cecy_3.bin"], "rb").read())
@@ -232,6 +243,18 @@ class Engine(object):
         if self._set_info(SO_CURRENT_VOICE, VOICE_SPEC) != 0:
             return False
         self.voice = voice
+        # The new voice brings its own 'pbas' -- Votron's 38 against Mariel's
+        # 61 is more than an octave apart -- so the cached one is now wrong.
+        #
+        # Dropping it rather than re-reading it here is safe because taking a
+        # voice resets the channel's pitch to that voice's own: measured, Ben
+        # reads 60, moving the slider to the top makes it 72, selecting Votron
+        # makes it 38, and coming back to Ben makes it 60 again. So the cache
+        # is empty exactly when the channel is untouched, and the next
+        # question gets the voice's real pitch rather than our own offset read
+        # back as though it were one. The driver re-applies settings after
+        # every switch, which is what puts the offset on the new base.
+        self._base_pitch = None
         return True
 
     def _set_info(self, selector, arg):
@@ -264,24 +287,63 @@ class Engine(object):
         self._rate = rate
         self._set_info(SO_RATE, self._fixed_arg(rate))
 
-    def set_voice(self, pitch_hz):
-        """Deliberately does nothing yet. Named for `.sp`, where a voice *is*
-        a pitch; here a voice is a whole formant set and pitch is separate.
+    def base_pitch(self):
+        """The current voice's own 'pbas', asked of the engine and kept.
 
-        `soPitchBase` is wired and reaches the engine, but it does not behave:
-        90 Hz and 180 Hz produce byte-identical audio while both drop the peak
-        amplitude from 78 to 37. Something about the value or its units is
-        wrong, and a pitch slider that quietly halves the volume and changes
-        nothing else is worse than one that is honestly inert.
-
-        Left as measured rather than guessed at. The next step is to check
-        what the handler at Cecy 3 +$11AE does with 'pbas' specifically,
-        the same way 'cvox' was settled.
+        Every voice has its own: Votron sits at 38 and Mariel at 61, so an
+        absolute scale would put the middle of a slider in a different place
+        for each one. Asking beats tabulating -- the number is in the voice,
+        and a table here could disagree with the files on disk.
         """
-        return
+        if self._base_pitch is None:
+            self._base_pitch = self.current_pitch()
+        return self._base_pitch
+
+    def current_pitch(self):
+        """GetSpeechInfo('pbas') -- what the channel holds right now.
+
+        Not the same question as `base_pitch`: this one moves as the slider
+        does. It is how the tests check that an offset arrived, since the
+        result code cannot be trusted to say so.
+        """
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_BASE, PARAM_BUF],
+            max_instr=50_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_pitch(self, tenths):
+        """Tenths of a semitone away from the voice's own pitch.
+
+        **'pbas' is a musical scale, not hertz** -- twelve units to the
+        octave, and 60.000 is where Apple put middle C. That one fact is the
+        whole of why this was switched off for so long: the driver was handing
+        it hertz, so a request for 90 Hz meant a note near 2 kHz and 180 Hz
+        meant one near 350 kHz. Both landed past the engine's ceiling, both
+        clamped to the same place, and the byte-identical renders that came
+        back looked like the selector was broken rather than obeyed.
+
+        Measured on Ben, `tools/probe_pitch.py`: -24 gives 0.253 of the base
+        frequency where the scale predicts 0.250, -6 gives 0.722 against
+        0.707, +6 gives 1.391 against 1.414. It is twelve to the octave.
+
+        The engine has a ceiling of its own around 'pbas' 72 -- Ben renders
+        identically at 72, 78, 84, 90 and 180 -- which is harmless, and is
+        why nothing here needs to clamp: asking too high wastes the top of
+        the slider rather than breaking anything.
+        """
+        self._pitch = tenths
+        base = self.base_pitch()
+        if base is None:
+            return
+        self._set_info(SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0))
 
     def read_settings(self):
-        return {"rate": self._rate}
+        return {"rate": self._rate, "pitch": self._pitch}
 
     # -- speaking ----------------------------------------------------------
     #: Punctuation MacinTalk 2 pronounces as a word, which has to go because

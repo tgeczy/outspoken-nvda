@@ -90,3 +90,63 @@ def test_every_voice_survives_being_chosen_twice(mt2):
             bad.append("%s %.2f s -> %.2f s"
                        % (v.name, firstTime[v.name] / 22254.0, n / 22254.0))
     assert not bad, "second visit rendered far more audio: " + "; ".join(bad)
+
+
+# -- pitch ------------------------------------------------------------------
+#
+# 'pbas' was wired years ago and then deliberately switched off, because the
+# driver was handing it hertz and it is a musical scale: twelve units to the
+# octave. Measured here, `tools/probe_pitch.py`: Ben answers 60, -24 gives
+# 0.253 of the base frequency against a predicted 0.250, -6 gives 0.722
+# against 0.707, +6 gives 1.391 against 1.414.
+#
+# Shared with MacinTalk Pro's module rather than with a single pitch module,
+# because two engines cannot be alive at once. See tests/pitchcheck.py.
+import pitchcheck                                              # noqa: E402
+
+
+def test_it_reports_a_musical_pitch(mt2):
+    pitchcheck.sane_base(mt2[0])
+
+
+def test_it_takes_a_pitch_offset(mt2):
+    pitchcheck.takes_the_offset(mt2[0])
+
+
+def test_the_pitch_slider_is_audible(mt2):
+    pitchcheck.slider_is_audible(mt2[0])
+
+
+def test_the_pitch_offset_does_not_compound_across_voices(mt2):
+    """The near miss this design has to keep avoiding.
+
+    `set_pitch` works from the voice's own 'pbas', which it asks the engine
+    for once and remembers. If that question were ever asked *after* an offset
+    had been applied, the answer would be our own offset read back as though
+    it were the voice's -- and the pitch would climb another octave every time
+    the user changed voice.
+
+    It is safe because taking a voice resets the channel's pitch to that
+    voice's own: Ben reads 60, the top of the slider makes it 72, selecting
+    Votron makes it 38, and coming back to Ben makes it 60 again. So the cache
+    is dropped exactly when the channel is pristine. That is a property of the
+    engine rather than of our code, so it is measured rather than assumed.
+    """
+    eng, voices = mt2
+    pitchcheck.live(eng)
+    if len(voices) < 2:
+        pytest.skip("need two MacinTalk 2 voices")
+    a, b = voices[0], voices[1]
+
+    assert eng.select(a)
+    natural = eng.current_pitch()
+    for _round in range(3):
+        eng.set_pitch(120)
+        assert eng.select(b)
+        eng.set_pitch(120)
+        assert eng.select(a)
+        eng.set_pitch(120)
+        assert abs(eng.current_pitch() - (natural + 12.0)) < 0.01, (
+            "an octave above %.1f drifted to %.3f"
+            % (natural, eng.current_pitch()))
+    eng.set_pitch(0)

@@ -250,6 +250,32 @@ static int serve_sane_trap(unsigned short trap, unsigned exc_sp,
     case 0x0003u:                         /* FGETENV */
         m68k_write_memory_16(dst, g_sane_env);
         return sane_return(exc_sp, 6);
+    case 0x0015u:                         /* exception flags, in or out    */
+        /* One pointer operand and six bytes to pop -- read off the call site
+         * rather than off a table, because a wrong pop size corrupts the
+         * frame of an engine that is otherwise working:
+         *
+         *     clr.w   -$c(a6)        zero a 16-bit local
+         *     pea     -$c(a6)        push its address        (4)
+         *     move.w  #$0015,-(a7)   push the opword         (2)
+         *     _FP68K
+         *     bra     ...            -> unlk a6 / rts
+         *
+         * Whether the word travels in or out cannot be told apart from one
+         * call site that clears it first and never reads it after, so it
+         * travels both ways: zero goes back, and whatever came in is taken.
+         * This host raises no SANE exceptions, so "none pending" is the true
+         * answer to a read, and consuming the operand is the right answer to
+         * a write.
+         *
+         * MacinTalk Pro reaches this only above roughly 'pbas' 69, and only
+         * on longer text -- which is why wiring up a pitch slider found it
+         * and every utterance before now did not. Unserved, it halted the
+         * engine outright: `sane_fail` takes vector 10, so the symptom was
+         * "unhandled exception" partway through a sentence.
+         */
+        m68k_write_memory_16(dst, 0);
+        return sane_return(exc_sp, 6);
     case 0x0017u:                         /* FPROCENTRY */
         m68k_write_memory_16(dst, g_sane_env);
         g_sane_env = 0;

@@ -69,6 +69,7 @@ STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
 #: Speech Manager selectors, from Apple's Speech.h.
 SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
 SO_RATE = 0x72617465                   # 'rate'
+SO_PITCH_BASE = 0x70626173             # 'pbas'
 
 #: The component descriptor is the Component Manager's own bookkeeping and is
 #: never asked of the Resource Manager.
@@ -106,6 +107,13 @@ def _fixed(x):
 
 def _signed(v):
     return v - 0x100000000 if v & 0x80000000 else v
+
+
+def _unfixed(u):
+    """A Fixed 16.16 back to a float, signed."""
+    if u & 0x80000000:
+        u -= 1 << 32
+    return u / 65536.0
 
 
 def engine_dir(roots):
@@ -206,6 +214,11 @@ class Engine(object):
         self.voices = list(allvoices)
         self.voice = voice or self.voices[0]
         self._rate = None
+        #: Tenths of a semitone from the voice's own pitch, and that pitch as
+        #: the engine reports it. One voice per Engine here, so the second
+        #: never goes stale the way MacinTalk 2's does.
+        self._pitch = 0
+        self._base_pitch = None
 
         d = engine_folder
         code = open(os.path.join(d, "gtse_1.bin"), "rb").read()
@@ -343,14 +356,61 @@ class Engine(object):
         self._rate = rate
         self._set_info(SO_RATE, self._fixed_arg(rate))
 
-    def set_voice(self, pitch_hz):
-        """Named for `.sp`, where a voice *is* a pitch. Inert here until
-        'pbas' has been measured on Pro the way it was on MacinTalk 2 -- and
-        that one misbehaved, so measure before wiring a slider."""
-        return
+    def base_pitch(self):
+        """This voice's own 'pbas', asked of the engine and kept.
+
+        Agnes answers 56, Victoria 54 and Bruce 42 -- more than an octave
+        between the ends -- so the offset has to be applied to whichever one
+        is speaking rather than to a number chosen here.
+        """
+        if self._base_pitch is None:
+            self._base_pitch = self.current_pitch()
+        return self._base_pitch
+
+    def current_pitch(self):
+        """GetSpeechInfo('pbas') -- what the channel holds right now.
+
+        The getter is well behaved even though the setter is not: it returns
+        noErr and fills the buffer, which is the only reliable way to see that
+        a `set_pitch` arrived.
+        """
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_BASE, PARAM_BUF],
+            max_instr=200_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_pitch(self, tenths):
+        """Tenths of a semitone away from the voice's own pitch.
+
+        'pbas' is a musical scale at twelve units to the octave, the same one
+        MacinTalk 2 uses. Measured on Agnes, `tools/probe_pitch.py`: -12 gives
+        0.507 of the base frequency against a predicted 0.500, +6 gives 1.423
+        against 1.414, +12 gives 1.982 against 2.000.
+
+        **The result code is not one, and must not be read as one.** Pro
+        answers this selector with the frequency it just computed: 'pbas' 44
+        returns 49379 and 56 returns 33222, which is 49379 doubled and then
+        truncated to sixteen bits -- exactly the octave those twelve units are
+        worth. Sign-extended it looks like OSErr -16157 and -32314, and the
+        value takes perfectly every time. `_set_info` is bypassed for that
+        reason: it would report a failure that did not happen.
+        """
+        self._pitch = tenths
+        base = self.base_pitch()
+        if base is None or self._dead:
+            return
+        self.h.component_call(
+            self.chan, SET_INFO,
+            [SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0)],
+            max_instr=200_000_000)
 
     def read_settings(self):
-        return {"rate": self._rate}
+        return {"rate": self._rate, "pitch": self._pitch}
 
     # -- speaking ----------------------------------------------------------
     #: Punctuation the engine pronounces as a word, which has to go because
