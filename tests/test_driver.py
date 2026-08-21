@@ -299,6 +299,10 @@ class _StubEngine(object):
         self._threading = threading
         self.voice = voice
         self.calls = []                  # [(name, thread ident)]
+        #: What actually reached the engine, so a test can ask what was said
+        #: and at what pitch rather than only which thread asked.
+        self.spoken = []
+        self.pitches = []
         self.closed = False
 
     def _note(self, what):
@@ -317,12 +321,14 @@ class _StubEngine(object):
 
     def set_pitch(self, tenths):
         self._note("set_pitch")          # what the Speech Manager engines take
+        self.pitches.append(tenths)
 
     def translate(self, text):
         return text
 
     def speak(self, text):
         self._note("speak")
+        self.spoken.append(text)
         time.sleep(0.05)                 # long enough to be raced
         return b"\x80\x90" * 400
 
@@ -625,3 +631,147 @@ def test_crossing_between_pro_and_the_older_engines(pro_driver):
         pro_driver._set_voice(vid)
         assert _spoken(pro_driver, "Crossing.", timeout=20.0), \
             "silent on %s" % vid
+
+
+# -- NVDA's speech sequence -------------------------------------------------
+#
+# The driver kept only IndexCommand and rendered every string as its own
+# utterance. Three faults came out of that, and the sibling add-ons fixed all
+# three on 2026-08-18; this is the backport, and these are its guards.
+
+
+def _drain(driver, seq, timeout=5.0):
+    """Speak a whole sequence and wait for the audio to reach the player."""
+    before = driver._player.bytes
+    driver.speak(seq)
+    t0 = time.perf_counter()
+    while (driver._player.bytes <= before
+           and time.perf_counter() - t0 < timeout):
+        time.sleep(0.005)
+    time.sleep(0.15)                     # let the rest of the sequence land
+    return driver._player.bytes > before
+
+
+def test_nvda_is_told_which_commands_we_want(stubbed):
+    """**A command NVDA is not told about is never sent.**
+
+    That is precisely how "capital pitch change percentage" managed to do
+    nothing at any value: the driver had no way to know it had been asked,
+    because it had never declared it could be.
+    """
+    import speech.commands
+    driver, _built, _a, _b = stubbed
+    assert speech.commands.PitchCommand in driver.supportedCommands
+    assert speech.commands.BreakCommand in driver.supportedCommands
+    assert speech.commands.IndexCommand in driver.supportedCommands
+
+
+def test_a_pitch_command_reaches_the_engine(stubbed):
+    """Capital pitch change, end to end.
+
+    NVDA marks a capital by wrapping it in a PitchCommand carrying an offset
+    on its own 0-100 scale, then another with 0 to put it back. Both have to
+    arrive as real pitch changes around the letter, or the setting is inert.
+    """
+    import speech.commands as cmd
+    driver, built, _a, _b = stubbed
+    assert _drain(driver, ["plain"])
+    eng = built[0]
+    del eng.pitches[:]
+    assert _drain(driver, [cmd.PitchCommand(offset=30), "A",
+                           cmd.PitchCommand(offset=0), " apple"])
+    assert len(eng.pitches) >= 2, eng.pitches
+    # The raised letter, then back to the user's own setting. 50 is the
+    # middle of NVDA's scale and means the voice as recorded, so the offset
+    # must move away from 0 tenths and then return to it.
+    assert eng.pitches[0] > eng.pitches[-1], eng.pitches
+    assert eng.pitches[-1] == 0, eng.pitches
+
+
+def test_the_pitch_offset_is_clamped_with_the_users_setting(stubbed):
+    """A user already at 90 who is asked for another 30 gets the top.
+
+    Clamped together rather than separately, so the request is never out of
+    range and never wraps.
+    """
+    driver, _built, _a, _b = stubbed
+    driver._pitch = 90
+    assert driver._pitchTenths(30) == driver._pitchTenths(100)
+    driver._pitch = 10
+    assert driver._pitchTenths(-50) == driver._pitchTenths(-100)
+    driver._pitch = 50
+    assert driver._pitchTenths(0) == 0
+
+
+def test_adjacent_strings_become_one_utterance(stubbed):
+    """A speech sequence is not a list of utterances.
+
+    NVDA hands over the pieces of a line -- text, a link, more text -- as
+    plain adjacent strings, and rendering each alone gave every fragment the
+    falling intonation of a finished sentence. Two testers reported it on the
+    sibling add-ons within a minute of each other as "it pauses between the
+    text and the link".
+    """
+    driver, built, _a, _b = stubbed
+    assert _drain(driver, ["one"])
+    eng = built[0]
+    del eng.spoken[:]
+    assert _drain(driver, ["Home", " ", "link"])
+    assert len(eng.spoken) == 1, eng.spoken
+    assert eng.spoken[0] == "Home link"
+
+
+def test_joining_does_not_run_words_together(stubbed):
+    """Join with a space only where neither side has one.
+
+    Otherwise "link" + "Home" reaches the engine as "linkHome", and a naive
+    join puts a double space into text that already had one.
+    """
+    driver, built, _a, _b = stubbed
+    assert _drain(driver, ["one"])
+    eng = built[0]
+    del eng.spoken[:]
+    assert _drain(driver, ["link", "Home"])
+    assert eng.spoken == ["link Home"], eng.spoken
+    del eng.spoken[:]
+    assert _drain(driver, ["link ", "Home"])
+    assert eng.spoken == ["link Home"], eng.spoken
+
+
+def test_an_index_does_not_split_the_utterance(stubbed):
+    """NVDA puts one at the START of every say-all line.
+
+    It has already decided through `speakWithoutPauses` that those lines
+    belong together, so splitting at the index undoes that decision and hands
+    the engine a fragment ending in nothing -- heard as a full stop in the
+    middle of a sentence, at exactly the wrapped line boundaries.
+    """
+    import speech.commands as cmd
+    driver, built, _a, _b = stubbed
+    assert _drain(driver, ["one"])
+    eng = built[0]
+    del eng.spoken[:]
+    assert _drain(driver, [cmd.IndexCommand(1), "the first line",
+                           cmd.IndexCommand(2), " and the second"])
+    assert len(eng.spoken) == 1, eng.spoken
+    assert eng.spoken[0] == "the first line and the second"
+
+
+def test_a_break_command_becomes_silence(stubbed):
+    """NVDA asking for a pause in so many words.
+
+    Dropped silently until now, so the one place a pause was actually wanted
+    was the one place it did not happen.
+    """
+    import outspoken
+    import speech.commands as cmd
+    driver, built, _a, _b = stubbed
+    assert _drain(driver, ["one"])
+    before = driver._player.bytes
+    assert _drain(driver, ["a", cmd.BreakCommand(time=200), "b"])
+    grew = driver._player.bytes - before
+    quiet = len(outspoken._silence16(200))
+    assert quiet > 0
+    # Two utterances plus the gap. The stub returns a fixed 800 bytes of 8-bit
+    # audio each time, which is 1600 once widened.
+    assert grew >= 2 * 1600 + quiet, (grew, quiet)

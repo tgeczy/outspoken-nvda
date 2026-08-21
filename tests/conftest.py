@@ -121,6 +121,11 @@ def _install_fake_nvda():
         def debug(self, m, *a, **k): self._rec("debug", m, *a)
         def warning(self, m, *a, **k): self._rec("warning", m, *a)
         def error(self, m, *a, **k): self._rec("error", m, *a)
+        # NVDA's log is a logging.Logger, so the driver may ask whether debug
+        # is on before building an expensive message. Off here, which is the
+        # normal case and the one worth exercising.
+        DEBUG = 10
+        def isEnabledFor(self, level): return False
     logh.log = _Log()
     sys.modules["logHandler"] = logh
 
@@ -140,10 +145,25 @@ def _install_fake_nvda():
 
     speech = types.ModuleType("speech")
     commands = types.ModuleType("speech.commands")
+    # Field names match NVDA's own, because the driver reads them: an
+    # IndexCommand carries `index`, a BreakCommand `time` in milliseconds, and
+    # a PitchCommand `offset` on NVDA's 0-100 scale -- which is how "capital
+    # pitch change percentage" arrives.
     class IndexCommand(object):
         def __init__(self, index):
             self.index = index
+
+    class BreakCommand(object):
+        def __init__(self, time=0):
+            self.time = time
+
+    class PitchCommand(object):
+        def __init__(self, offset=0):
+            self.offset = offset
+
     commands.IndexCommand = IndexCommand
+    commands.BreakCommand = BreakCommand
+    commands.PitchCommand = PitchCommand
     speech.commands = commands
     sys.modules["speech"] = speech
     sys.modules["speech.commands"] = commands

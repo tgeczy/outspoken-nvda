@@ -393,7 +393,7 @@ class Engine(object):
         # tail of this utterance cannot arrive at the front of the next one.
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
-        return pcm
+        return _trim(pcm)
 
     def stop(self):
         """Deliberately does not touch the emulator; see macintalk2.stop.
@@ -420,6 +420,50 @@ class Engine(object):
             self.h.close()
         except Exception:
             pass
+
+
+#: 8-bit unsigned silence, which the engine clears its buffers to.
+_SILENT = 0x80
+
+
+def _trim(pcm, keep=1200, lead=220):
+    """Drop the silence at both ends, leaving a little at each.
+
+    The same treatment MacinTalk 2 and MacinTalk Pro get, and leaving it out
+    here was felt immediately: **every MacinTalk 3 utterance ends with about
+    390 ms of nothing**, whatever it says. Measured at the driver's own rate,
+    "edit" is 382 ms of speech followed by 388 ms of silence, and "not
+    checked" 679 ms followed by 388 -- so more than a third of what reaches
+    the player is dead air, on every indexed chunk.
+
+    That single number accounted for all three things Tomi heard. The pauses
+    between chunks were the silence itself. The lag was the same silence
+    ahead of each reply. And the tail of one utterance arriving at the head of
+    the next was it too, at one remove: the engine does not leak -- speaking
+    "not checked" alone and after "check box" gives byte-identical audio --
+    but four tenths of a second of appended silence keeps the player busy long
+    enough for a fast tab to land inside it.
+
+    `keep` and `lead` are MacinTalk 2's, unchanged, because the reason for
+    them is the same: cutting hard on a sample clicks. About 54 ms at the end
+    and 10 ms at the start.
+
+    Only the ends. Bells, Cellos and Pipe Organ have real silence *inside*
+    them -- they are playing tunes -- and a rule that cut at the first silent
+    stretch would truncate them at the first rest.
+    """
+    if not pcm:
+        return pcm
+    n = len(pcm)
+    start = 0
+    while start < n and pcm[start] == _SILENT:
+        start += 1
+    if start >= n:
+        return b""                      # nothing but silence: say nothing
+    end = n
+    while end > start and pcm[end - 1] == _SILENT:
+        end -= 1
+    return pcm[max(0, start - lead):min(n, end + keep)]
 
 
 def _split(name):
