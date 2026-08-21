@@ -105,6 +105,18 @@ def _catalogue():
     except Exception:
         log.debug("outSPOKEN: MacinTalk 2 unavailable", exc_info=True)
     try:
+        import macintalk3
+        # The 1994 68k engine, run as 68k. `usable` was False until it made a
+        # sound somebody heard, the same gate MacinTalk Pro went through --
+        # see macintalk3.SPEAKS, open since 2026-08-21.
+        if macintalk3.usable(rom.search_roots()):
+            _d, mt3 = macintalk3.find(rom.search_roots())
+            for v in mt3:
+                out.append(("mtk3:" + v.name, "%s (MacinTalk 3)" % v.name,
+                            "mtk3", v))
+    except Exception:
+        log.debug("outSPOKEN: MacinTalk 3 unavailable", exc_info=True)
+    try:
         import macintalkpro
         # `usable` was False until MacinTalk Pro actually made a sound --
         # see macintalkpro.SPEAKS, open since 2026-08-20. Opening, taking a
@@ -591,14 +603,16 @@ class SynthDriver(SynthDriver):
             # the same thing crossing between engines already does.
             self._closeEngine()
         eng = self._ensureEngine()
-        if eng is None or entry[2] != "mtk2":
+        if eng is None or entry[2] not in ("mtk2", "mtk3"):
             return eng                           # `.sp` has one voice per id
         want, cur = entry[3], getattr(eng, "voice", None)
         if cur is not None and (cur.creator, cur.id) == (want.creator, want.id):
             return eng
-        # MacinTalk 2 changes voice in place: every voice it has is already
-        # registered, so this is one SetSpeechInfo('cvox') rather than a
-        # rebuild. See macintalk2.Engine.select.
+        # MacinTalk 2 and MacinTalk 3 change voice in place: every voice they
+        # have is already registered, so this is one SetSpeechInfo('cvox')
+        # rather than a rebuild. MacinTalk 3 fits all nineteen because a
+        # formant voice is tiny -- 45 of the host's 64 resource slots for the
+        # engine and every voice together. See the Engine.select of each.
         if eng.select(want):
             self._voiceRefused = None
         elif self._voiceRefused != entry[0]:
@@ -640,6 +654,10 @@ class SynthDriver(SynthDriver):
                 import macintalk2
                 files, allv = macintalk2.find(rom.search_roots())
                 self._engine = macintalk2.Engine(files, allv, payload)
+            elif kind == "mtk3":
+                import macintalk3
+                folder, allv = macintalk3.find(rom.search_roots())
+                self._engine = macintalk3.Engine(folder, allv, payload)
             elif kind == "gala":
                 import macintalkpro
                 folder, allv = macintalkpro.find(rom.search_roots())

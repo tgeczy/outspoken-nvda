@@ -54,6 +54,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 VOICE_DESCRIPTION_LEN = 362
 
+#: Where a MacinTalk 3 `ttvd` names its wave resource, and the value that
+#: means it has none. An absolute offset rather than one relative to the
+#: standard record, because that is how it was found and how it can be
+#: re-checked: `struct.unpack_from(">h", ttvd, 648)`.
+MTK3_WAVE_OFF = 648
+MTK3_NO_WAVE = 1
+
 #: VoiceDescription.gender
 GENDER = {0: "neuter", 1: "male", 2: "female"}
 
@@ -72,9 +79,11 @@ ENGINES = {
 #: also had the engine that reads them. So a user can easily hold three Pro
 #: voices and nothing able to speak them.
 #:
-#: `mtk3` is deliberately absent rather than missing: a native NVDA add-on
-#: builds that engine from Apple's own source, so those voices are never ours
-#: to offer however complete the extraction is.
+#: `mtk3` names `ttvi_10.bin` because that is where MacinTalk 3 keeps its code:
+#: Apple named its resources after composers, so the component entry is `ttvi`
+#: 10 -- "Bach" -- and the type that means "voice info" everywhere else means
+#: "the engine" here. `ttvi` 11 is the PowerPC build of the same thing and is
+#: never extracted.
 #: MacinTalk Pro's entry is three files rather than one because **it reads its
 #: own file**, and each fork was measured rather than assumed:
 #:
@@ -89,6 +98,7 @@ ENGINES = {
 ENGINE_FILES = {
     "mtk2": ("Cecy_1.bin", "Cecy_3.bin"),
     "gala": ("gtse_1.bin", "datafork.bin", "rsrcfork.bin"),
+    "mtk3": ("ttvi_10.bin", "ttvi_8.bin", "ttvi_9.bin", "ttss_0.bin"),
 }
 
 #: What a VOICE FOLDER itself must hold before that voice can speak, as
@@ -113,18 +123,33 @@ VOICE_PARTS = {
     # MacinTalk 2 registers each voice's three resources by id. Without the
     # wave data it would load and then say nothing.
     "mtk2": ((), ("ttvd", "ttvi", "ttvw")),
+    # MacinTalk 3 is formant, so most of its voices ARE just the parameter
+    # set: Fred is a 714-byte `ttvd` and nothing else. The nine singing and
+    # novelty voices additionally need their wave, and say so in the `ttvd`
+    # itself -- see `describe`, which is why this entry does not name `ttvw`
+    # and `voice_incomplete` asks the voice instead of the table.
+    "mtk3": ((), ("ttvd",)),
 }
 
 
-def voice_incomplete(creator, files, extra):
+def voice_incomplete(creator, files, extra, voice=None):
     """-> [what is missing] for a voice folder, or [] if it can speak.
 
     `files` is {resource type: path} and `extra` is {filename: path}, which is
     how `installed` already has them.
+
+    `voice` is optional so the table alone still answers for the engines whose
+    voices are all the same shape. MacinTalk 3's are not: ten of its nineteen
+    need only a `ttvd` and nine need a `ttvw` as well, and which is which is
+    written in the voice rather than in any list kept here.
     """
     need_files, need_types = VOICE_PARTS.get(creator, ((), ()))
     short = [f for f in need_files if f not in extra]
     short += [t for t in need_types if t not in files]
+    if voice is not None and voice.creator == "mtk3" and voice.ttvw_id:
+        want = "ttvw_%d.bin" % voice.ttvw_id
+        if "ttvw" not in files or not files["ttvw"].endswith(want):
+            short.append(want)
     return short
 
 
@@ -201,6 +226,20 @@ def describe(data):
         ext = data[VOICE_DESCRIPTION_LEN:]
         v.ttvi_id, v.ttvw_id = struct.unpack(">h", ext[8:10])[0], \
             struct.unpack(">h", ext[0x12:0x14])[0]
+    elif v.creator == "mtk3" and len(data) > MTK3_WAVE_OFF + 2:
+        # MacinTalk 3 is formant, so most of its voices are a parameter set
+        # and nothing else -- Fred is 714 bytes with no companion resource.
+        # Nine of the nineteen are different: the singing and novelty voices
+        # carry a `ttvw`, and **the engine will not take them without it**.
+        # Asking for one whose wave is absent is refused outright with -192,
+        # resNotFound, rather than going quiet, which is at least honest.
+        #
+        # Measured across all nineteen: the nine that need one name it here,
+        # and the ten that do not all read 1. Bells says 40, Boing 7, Cellos
+        # 9, Pipe Organ 5 -- each matching the file beside it -- while Fred,
+        # Kathy, Ralph and the rest say 1 and have no wave at all.
+        wave = struct.unpack_from(">h", data, MTK3_WAVE_OFF)[0]
+        v.ttvw_id = wave if wave != MTK3_NO_WAVE else None
     v.folder = None
     v.files = {}
     v.names = {}
@@ -312,7 +351,7 @@ def installed(engine=None, roots=None, speakable=False):
                     continue
                 # The engine being present is not the same as this voice being
                 # complete -- see VOICE_PARTS.
-                short = voice_incomplete(v.creator, files, extra)
+                short = voice_incomplete(v.creator, files, extra, v)
                 if short:
                     bad.append((folder, "incomplete extraction, missing %s"
                                 % ", ".join(short)))

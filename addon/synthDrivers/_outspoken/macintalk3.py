@@ -1,0 +1,434 @@
+# -*- coding: utf-8 -*-
+"""Classic MacinTalk 3 as an engine the driver can drive.
+
+The 1994 68k build, running as 68k -- not a native port. Same shape as
+`macintalk2.py` (`translate`, `speak`, `stop`, `set_rate`, `set_pitch`,
+`close`) and the same `'ttsc'` Component Manager protocol, so the host glue
+carries over unchanged. What differs is worth reading before touching anything:
+
+* **It requires a 68040.** `ttvi 10 +0x234` is `rtd`, which is 68010 and up,
+  and only a 68040 answers Open with 0.
+* **The engine hides in a `ttvi`.** Apple named these resources after
+  composers, so the component code is `ttvi` 10 -- "Bach" -- and the type that
+  means "voice info" for every other engine here means "the engine" for this
+  one. `ttvi` 8 and 9 are more of it; `ttvi` 11 is the **PowerPC** build of the
+  same engine and must never be registered.
+* **A voice is usually nothing but a parameter set.** MacinTalk 3 is formant,
+  so Fred is a 714-byte `ttvd` with no companion resource at all. Nine of the
+  nineteen -- the singing and novelty voices -- also carry a `ttvw`, and the
+  engine refuses them outright with -192 without it. See `voices.VOICE_PARTS`.
+* **All nineteen fit at once.** 17 engine resources plus 19 `ttvd` plus 9
+  `ttvw` is 45 against the host's 64, and 19 voices against 32, so every voice
+  is registered up front and switching is a single SetSpeechInfo('cvox') --
+  the MacinTalk 2 model rather than Pro's one-voice-per-instance.
+
+**The bug that hid this engine for days is worth remembering.** It rendered
+two buffers and then ran away into four hundred million bus faults, and the
+recorded diagnosis -- that the host needed a Sound Manager command queue --
+was wrong; the host had been copying commands all along. It was
+`_Microseconds`, which returns its count in the A0/D0 pair and writes no
+memory. The host had stored eight bytes through A0, which held whatever the
+caller left there; here that was the engine's own SndCommand. The clock was
+corrupting the thing it was timing. See `tools/probe_mt3_open.py`.
+"""
+import ctypes
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import osp                                                    # noqa: E402
+import numwords                                               # noqa: E402
+import voices as voicelib                                     # noqa: E402
+
+CODE = 0x00040000
+HEAP = 0x00080000
+HEAP_SIZE = 0x00200000
+STACK = 0x00400000
+TEXT_BUF = 0x00410000
+VOICE_SPEC = 0x00411000
+STATUS_BUF = 0x00412000
+PARAM_BUF = 0x00413000
+
+CPUFLAG, RESERR, MEMERR = 0x012F, 0x0A60, 0x0220
+
+#: The classic Macintosh rate, as every other engine here renders at.
+NATIVE_RATE = 22254
+
+OPEN, CLOSE = -1, -2
+#: The same selector map MacinTalk 2 and MacinTalk Pro use.
+STATUS, SPEAK, STOP, GET_INFO, SET_INFO = 0, 1, 2, 5, 6
+
+SO_CURRENT_VOICE = 0x63766F78          # 'cvox'
+SO_RATE = 0x72617465                   # 'rate'
+SO_PITCH_BASE = 0x70626173             # 'pbas'
+
+#: The engine's own resources. `ttvi 11` is the PowerPC build of the same
+#: engine: registering it wastes a slot at best and is loaded at worst.
+ENGINE_TYPES = ("ttvi", "ttss", "ttsp", "STR ", "vers")
+SKIP = (("ttvi", 11),)
+
+REQUIRED = ("ttvi_10.bin",)
+
+#: **The gate, and it is open.** 2026-08-21: Tomi listened to Fred, Kathy,
+#: Princess and Ralph and said "all sound perfect and clear, no choppyness,
+#: nothing like that at all".
+#:
+#: Before that it stayed False on a branch while the engine opened, took a
+#: voice and rendered 0.20 s of real audio before running away -- because
+#: listing a voice that then says nothing is the one failure this project
+#: treats as worse than not listing it at all. See `SynthDriver.check`.
+#:
+#: `py -3 tools/probe_mt3_open.py --speak "..."` writes the WAV, and a person
+#: hearing it is what this flag means. Do not flip it back on a passing test.
+SPEAKS = True
+
+_LIVE = []
+
+
+def _fixed(x):
+    """A Fixed 16.16, which is how the Speech Manager passes rate and pitch."""
+    return int(round(x * 65536.0)) & 0xFFFFFFFF
+
+
+def _unfixed(u):
+    if u & 0x80000000:
+        u -= 1 << 32
+    return u / 65536.0
+
+
+def _signed(v):
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
+def engine_dir(roots):
+    for root in roots:
+        d = os.path.join(root, "macintalk3")
+        if os.path.isdir(d) and os.path.isfile(os.path.join(d, "ttvi_10.bin")):
+            return d
+    return None
+
+
+def find(roots):
+    """-> (engine folder, [Voice]) for whatever of MacinTalk 3 is installed.
+
+    Empty rather than raising when it is absent: a user with only the older
+    engines must still get a working synthesizer.
+    """
+    d = engine_dir(roots)
+    if not d:
+        return None, []
+    found, _bad = voicelib.installed("mtk3", roots=roots, speakable=True)
+    return d, found
+
+
+def usable(roots):
+    """Also checks the DLL can actually do components.
+
+    A stale osp_host.dll is easy to end up with, because NVDA holds it open
+    while the synthesizer is loaded and it cannot be replaced in place.
+    Listing voices against a binary that cannot run them would offer the user
+    voices guaranteed to be silent.
+    """
+    if not SPEAKS:
+        return False
+    d, found = find(roots)
+    if not (d and found):
+        return False
+    try:
+        return hasattr(ctypes.CDLL(osp.DLL), "osp_add_component")
+    except Exception:
+        return False
+
+
+class Engine(object):
+    """One open MacinTalk 3, with every installed voice registered."""
+
+    number_mode = "words"
+
+    #: A ceiling on one utterance. Reaching it means the engine is producing
+    #: without ever finishing, which is a finding rather than an utterance.
+    #: Bells and Hysterical are the long ones -- about 170 KB for a sentence,
+    #: which is 76 buffers -- so this is generous on purpose.
+    MAX_BUFFERS = 600
+
+    def __init__(self, folder, allvoices, voice=None):
+        for old in _LIVE:
+            old._dead = True
+        _LIVE.append(self)
+        self._dead = False
+        self.voices = list(allvoices)
+        self.voice = voice or self.voices[0]
+        self._rate = None
+        self._pitch = 0
+        self._base_pitch = None
+
+        h = self.h = osp.Host()
+        # Not optional, and not a preference: `+0x234` is `rtd`, so a 68000
+        # refuses to Open, and the synthesis path uses instructions a 68020
+        # does not have either.
+        h.set_cpu(osp.Host.CPU_68040)
+        with open(os.path.join(folder, "ttvi_10.bin"), "rb") as fh:
+            h.load(CODE, fh.read())
+        h.heap(HEAP, HEAP_SIZE)
+        h.mem_traps(True)
+        h.w8(CPUFLAG, 0)
+        h.w16(RESERR, 0)
+        h.w16(MEMERR, 0)
+
+        for name in sorted(os.listdir(folder)):
+            split = _split(name)
+            if not split or split in SKIP or split[0] not in ENGINE_TYPES:
+                continue
+            with open(os.path.join(folder, name), "rb") as fh:
+                h.add_resource(split[0], split[1], fh.read())
+
+        # Every voice's resources, under the ids its own ttvd asks for. A voice
+        # that will not load is dropped rather than fatal: one bad extraction
+        # must not cost the user the other eighteen.
+        loaded = []
+        for v in self.voices:
+            try:
+                ttvd = None
+                for kind, path in sorted(v.files.items()):
+                    if kind not in ("ttvd", "ttvw"):
+                        continue          # `vers` is metadata, not a resource
+                    rid = int(os.path.basename(path).split("_")[1].split(".")[0])
+                    with open(path, "rb") as fh:
+                        h.add_resource(kind, rid, fh.read())
+                    if kind == "ttvd":
+                        ttvd = rid
+                if ttvd is None:
+                    continue
+                # We are the Speech Manager: GetVoiceInfo('fref') answers with
+                # the ttvd id, which is what the engine opens a voice by. The
+                # two are not the same number -- Bubbles is VoiceSpec id 50 in
+                # a resource numbered 12 -- so neither may be assumed for the
+                # other.
+                h.add_voice(v.creator, v.id, ttvd)
+                loaded.append(v)
+            except Exception:
+                continue
+        self.voices = loaded
+        if not loaded:
+            raise RuntimeError("no MacinTalk 3 voice could be loaded")
+        if self.voice not in loaded:
+            self.voice = loaded[0]
+
+        self.comp = h.add_component("ttsc", "mtk3", "mtk3", CODE)
+        self.chan = h.open_instance(self.comp)
+        h.set_reg(osp.A7, STACK)
+        h.set_reg(osp.SR, 0x2700)
+        # Not optional either. The engine's callback installs a deferred task
+        # and queues the next command; running callbacks inside the call runs
+        # them against state SpeakBuffer has already moved past.
+        h.defer_callbacks(True)
+
+        reason, result = h.component_call(self.chan, OPEN, [self.chan],
+                                          max_instr=50_000_000)
+        if reason != 1 or _signed(result) != 0:
+            self._dead = True
+            raise RuntimeError("MacinTalk 3 would not open (%s, result %d)"
+                               % (osp.STOP[reason], _signed(result)))
+        if not self.select(self.voice):
+            raise RuntimeError("MacinTalk 3 would not take voice %s"
+                               % self.voice.name)
+
+    # -- set-up ------------------------------------------------------------
+    def _match(self, voice):
+        for v in self.voices:
+            if v.creator == voice.creator and v.id == voice.id:
+                return v
+        return None
+
+    def select(self, voice):
+        """Switch voice without rebuilding: SetSpeechInfo('cvox', VoiceSpec).
+
+        -> True if the engine took it. A refusal leaves the previous voice in
+        place, which is the right failure: still speaking in the wrong voice
+        beats silence. -192 here means the voice wanted a `ttvw` that is not
+        registered, which the gate in `voices.py` should have caught first.
+        """
+        if self._dead:
+            return False
+        voice = self._match(voice) or voice
+        creator = voice.creator.encode("mac-roman", "replace")
+        self.h.w32(VOICE_SPEC, int.from_bytes(creator[:4].ljust(4, b" "), "big"))
+        self.h.w32(VOICE_SPEC + 4, voice.id)
+        if self._set_info(SO_CURRENT_VOICE, VOICE_SPEC) != 0:
+            return False
+        self.voice = voice
+        # The new voice brings its own 'pbas'. Dropping the cache rather than
+        # re-reading it here is safe because taking a voice resets the
+        # channel's pitch to that voice's own -- measured, the same way it was
+        # for MacinTalk 2. See tests/test_macintalk3.py.
+        self._base_pitch = None
+        return True
+
+    def _set_info(self, selector, arg):
+        """SetSpeechInfo(selector, ptr) -> OSErr."""
+        if self._dead:
+            return -1
+        reason, result = self.h.component_call(
+            self.chan, SET_INFO, [selector, arg], max_instr=50_000_000)
+        return _signed(result) if reason == 1 else -1
+
+    # -- settings ----------------------------------------------------------
+    def _fixed_arg(self, value):
+        """Put a Fixed somewhere and return its address.
+
+        **SetSpeechInfo takes a pointer for every selector**, the scalar ones
+        included. Passing the value directly has the engine dereference it,
+        which cost a day on MacinTalk 2.
+        """
+        self.h.w32(PARAM_BUF, _fixed(value))
+        return PARAM_BUF
+
+    def set_rate(self, rate):
+        """Words per minute, which is what the Speech Manager's 'rate' is."""
+        self._rate = rate
+        self._set_info(SO_RATE, self._fixed_arg(rate))
+
+    def base_pitch(self):
+        """This voice's own 'pbas', asked of the engine and kept."""
+        if self._base_pitch is None:
+            self._base_pitch = self.current_pitch()
+        return self._base_pitch
+
+    def current_pitch(self):
+        """GetSpeechInfo('pbas') -- what the channel holds right now."""
+        if self._dead:
+            return None
+        self.h.w32(PARAM_BUF, 0)
+        reason, result = self.h.component_call(
+            self.chan, GET_INFO, [SO_PITCH_BASE, PARAM_BUF],
+            max_instr=50_000_000)
+        if reason != 1 or result != 0:
+            return None
+        return _unfixed(self.h.r32(PARAM_BUF))
+
+    def set_pitch(self, tenths):
+        """Tenths of a semitone away from the voice's own pitch.
+
+        'pbas' is a musical scale at twelve units to the octave, the same one
+        the other two engines use -- not hertz. See macintalk2.set_pitch for
+        the whole of that story.
+        """
+        self._pitch = tenths
+        base = self.base_pitch()
+        if base is None:
+            return
+        self._set_info(SO_PITCH_BASE, self._fixed_arg(base + tenths / 10.0))
+
+    def read_settings(self):
+        return {"rate": self._rate, "pitch": self._pitch}
+
+    # -- speaking ----------------------------------------------------------
+    #: Punctuation the engine pronounces as a word, which has to go because
+    #: NVDA has already named whatever the user asked to hear. Taken from
+    #: MacinTalk 2, whose front end this one is descended from.
+    SPOKEN_PUNCTUATION = "()[]{}<>@#$%^&*+=/\\|~`\"_"
+
+    def translate(self, text):
+        """MacinTalk 3 has its own front end, so this only prepares the text."""
+        if self.number_mode in ("words", "digits"):
+            text = numwords.normalise(
+                text, spell_out=(self.number_mode == "digits"))
+        for ch in self.SPOKEN_PUNCTUATION:
+            if ch in text:
+                text = text.replace(ch, " ")
+        return text
+
+    def busy(self):
+        """SpeechStatusInfo.outputBusy, which is how it says it is done."""
+        if self._dead:
+            return False
+        for off in (0, 4, 8):
+            self.h.w32(STATUS_BUF + off, 0)
+        reason, _r = self.h.component_call(self.chan, STATUS, [STATUS_BUF],
+                                           max_instr=20_000_000)
+        if reason != 1:
+            return False
+        return bool(self.h.r8(STATUS_BUF)) or bool(self.h.r32(STATUS_BUF + 2))
+
+    def speak(self, text):
+        """-> 8-bit unsigned PCM at NATIVE_RATE.
+
+        SpeakBuffer returns as soon as the first buffer is queued, so the audio
+        only exists if the host keeps being the Sound Manager afterwards: each
+        callback installs a deferred task, and *that* renders the next buffer.
+        """
+        if self._dead:
+            return b""
+        raw = text.strip().encode("mac-roman", "replace")
+        if not raw:
+            return b""
+        h = self.h
+        h.pcm_reset()
+        # The engine reads its text buffer as a C string in places, so the
+        # terminator goes in even though the length is passed too.
+        h.load(TEXT_BUF, raw + b"\0")
+        reason, _res = h.component_call(self.chan, SPEAK,
+                                        [TEXT_BUF, len(raw), 0],
+                                        max_instr=400_000_000)
+        if reason != 1:
+            return b""
+        while h.buffers_taken < self.MAX_BUFFERS:
+            if not h.run_callbacks(max_rounds=8):
+                break                       # nothing pending: really finished
+            if not self.busy():
+                break
+        else:
+            try:
+                from logHandler import log
+                log.warning("MacinTalk 3: utterance hit the %d buffer ceiling"
+                            % self.MAX_BUFFERS)
+            except ImportError:
+                pass
+
+        pcm = h.pcm
+        # Drain whatever the engine still has queued and throw it away, so the
+        # tail of this utterance cannot arrive at the front of the next one.
+        h.run_callbacks(max_rounds=64)
+        h.pcm_reset()
+        return pcm
+
+    def stop(self):
+        """Deliberately does not touch the emulator; see macintalk2.stop.
+
+        `cancel()` runs on NVDA's main thread while `speak()` runs on the
+        worker, and a component call drives the 68000. Two threads stepping
+        one CPU corrupts it.
+        """
+        return
+
+    def close(self):
+        if self._dead:
+            return
+        self._dead = True
+        try:
+            _LIVE.remove(self)
+        except ValueError:
+            pass
+        try:
+            self.h.component_call(self.chan, CLOSE, [], max_instr=20_000_000)
+        except Exception:
+            pass
+        try:
+            self.h.close()
+        except Exception:
+            pass
+
+
+def _split(name):
+    """`ttvi_10.bin` -> ('ttvi', 10).  None for anything that is not one."""
+    stem, ext = os.path.splitext(name)
+    if ext.lower() != ".bin" or "_" not in stem:
+        return None
+    rtype, rest = stem.rsplit("_", 1)
+    try:
+        return rtype, int(rest)
+    except ValueError:
+        return None
