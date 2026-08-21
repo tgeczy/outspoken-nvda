@@ -432,11 +432,23 @@ class SynthDriver(SynthDriver):
         whose 1984 driver has no volume control at all: four csCodes, and none
         of them is amplitude (docs/driver-api.md).
 
-        There is no boost. 100 is the engine's own level, which is where this
-        add-on has always been and is loud enough -- the sibling Leopard
-        driver needed per-voice normalisation and this one does not, so the
-        slider only ever attenuates and nothing can clip that did not clip
-        before.
+        **There is no boost, and that is measured rather than assumed.** The
+        sibling Leopard driver needed per-voice normalisation; this one does
+        not, for two reasons that both had to be checked:
+
+        * *There is no headroom.* Eleven of MacinTalk 3's nineteen voices and
+          two of Pro's three already peak at 127 or 128 of a possible 128.
+          Nothing here can be turned up; Leopard's fix was only available
+          because its `[[volm]]` goes above 1.0 into float samples.
+        * *The default is not the quiet one.* Leopard's real complaint was
+          that Alex sat 8 dB below Bruce and was also the default. Measured
+          across all thirty-four voices at rate 200, the everyday ones span
+          about 5 dB -- Ben 15.1 RMS to the 1984 Female's 27.0 -- and the
+          voice this driver starts on, the 1984 Male at 19.8, is in the upper
+          half of it. Whisper's 8.6 is the voice doing what it is named for.
+
+        So the slider only ever attenuates, and nothing can clip that did not
+        clip before.
 
         **At 100 the tables are the ones the driver has always used**: a zero
         low byte, and the sample with its top bit flipped. `None` rather than
