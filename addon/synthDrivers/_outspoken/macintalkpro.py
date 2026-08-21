@@ -511,7 +511,25 @@ class Engine(object):
             except ImportError:
                 pass
         pcm = h.pcm
-        if stream is not None and not stream.aborted:
+        if stream is not None and stream.aborted:
+            # **Abandoned, so tell the engine to stop rather than pumping the
+            # rest of the utterance into a bin.** Draining alone still did 40
+            # to 48 per cent of the work: measured on a Mastodon-sized post,
+            # giving up after the first piece took 165 ms of a 342 ms render,
+            # because `run_callbacks` goes on rendering whatever it is handed.
+            # Scrolling past five posts spent seconds on audio nobody heard,
+            # and every keystroke queued behind it.
+            #
+            # StopSpeech(kImmediate) first brings that to 39 ms on MacinTalk 3
+            # and 112 on Pro, and the next utterance stays byte-identical --
+            # which is the thing to check, since a half-stopped engine is
+            # exactly how audio bleeds from one utterance into the next.
+            #
+            # Safe here and NOT from `stop()`: this runs on the worker, inside
+            # speak, and is the only thread driving the 68000. `stop()` is
+            # called on NVDA's main thread and must stay a no-op.
+            self._quiet()
+        elif stream is not None:
             # Before the drain, never after: what the drain produces is the
             # engine settling, and discarding it is what stops the next
             # utterance inheriting this one's ending.
@@ -519,6 +537,15 @@ class Engine(object):
         h.run_callbacks(max_rounds=64)
         h.pcm_reset()
         return b"" if stream is not None else ospaudio.trim(pcm)
+
+    def _quiet(self):
+        """StopSpeech(kImmediate), from the worker thread only."""
+        if self._dead:
+            return
+        try:
+            self.h.component_call(self.chan, STOP, [0], max_instr=20_000_000)
+        except Exception:
+            pass
 
     def stop(self):
         """Deliberately does not touch the emulator. Read macintalk2.stop

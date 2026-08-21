@@ -338,3 +338,38 @@ def test_a_long_utterance_is_no_longer_truncated(pro):
     assert longer > short * 1.7, (
         "doubling the text gave %.2f s against %.2f -- still truncating"
         % (longer / 22254.0, short / 22254.0))
+
+
+def test_abandoning_a_render_really_abandons_it(pro):
+    """Scrolling a timeline is nothing but this.
+
+    A sink returning False means the listener has moved on. Before the engine
+    was told to stop, the drain afterwards went on rendering anyway: giving up
+    after the first piece still did 48 per cent of the work on a
+    Mastodon-sized post, so scrolling past five spent seconds on audio nobody
+    heard and every keystroke queued behind it.
+
+    Pro cannot get as low as MacinTalk 3 does, because its SpeakBuffer
+    analyses the whole text before returning a single buffer -- about 110 ms
+    of a 340 ms render, and that part is not skippable.
+    """
+    import time
+    eng = pro[0]
+    prepared = eng.translate(
+        "the esoteric programmer boosted David Tovey. Just posted a long "
+        "thread about the history of speech synthesis on the Macintosh, and "
+        "how much of it still runs today. Reply, boost, favourite. ")
+    t0 = time.perf_counter()
+    reference = bytes(eng.speak(prepared))
+    whole = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    out = eng.speak(prepared, sink=lambda c: False)
+    stopped = time.perf_counter() - t0
+    assert out == b""
+    assert stopped < whole * 0.6, (
+        "abandoning took %.0f ms of a %.0f ms render -- is StopSpeech still "
+        "being issued before the drain?" % (stopped * 1000, whole * 1000))
+    # The half of it that would actually be noticed: a stopped engine must not
+    # leave anything behind for the next utterance to inherit.
+    assert bytes(eng.speak(prepared)) == reference

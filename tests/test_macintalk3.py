@@ -285,9 +285,13 @@ def test_a_sink_that_says_no_stops_the_render(mt3):
     stopped = time.perf_counter() - t0
     assert len(seen) == 1, "kept going for %d pieces" % len(seen)
     assert out == b"", "an aborted render still returned audio"
-    assert stopped < whole / 2, (
-        "abandoning took %.0f ms of a %.0f ms render"
-        % (stopped * 1000, whole * 1000))
+    # **A third, not a half.** Refusing used to save far less than it looks:
+    # the drain afterwards went on rendering, so giving up after the first
+    # piece still did 38 per cent of the work. Issuing StopSpeech before the
+    # drain brought that to 9. Scrolling a timeline is nothing but this.
+    assert stopped < whole / 3, (
+        "abandoning took %.0f ms of a %.0f ms render -- is StopSpeech still "
+        "being issued before the drain?" % (stopped * 1000, whole * 1000))
     # And the engine is still usable afterwards, which is the part that would
     # actually be noticed: an abandoned utterance must not poison the next.
     assert len(bytes(eng.speak(eng.translate("button")))) > 4000
