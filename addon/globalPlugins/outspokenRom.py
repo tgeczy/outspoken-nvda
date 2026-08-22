@@ -35,6 +35,30 @@ if _ENGINE_DIR not in sys.path:
 
 import rom                                                    # noqa: E402
 
+#: **One start-up dialog between all the Macintosh speech add-ons, not one
+#: each.** They run in the same NVDA process, so the first to get here speaks
+#: for the rest by claiming this attribute on `globalVars`.
+#:
+#: Tested by renaming the shared `macintalk` folder and restarting: three
+#: add-ons meant *three* modal dialogs stacked at start-up, each naming its own
+#: engine, with nothing in the Tools menu to reach the other two afterwards.
+#: For a screen-reader user that is three dialogs to hear and dismiss before
+#: NVDA is usable.
+#:
+#: `dict.setdefault` rather than get-then-set: three `threading.Timer(6.0)`
+#: fire within milliseconds of each other, and setdefault is one atomic
+#: operation under the GIL where a read followed by a write is two.
+#:
+#: Suppressing the others is only safe because of the Tools menu entry below --
+#: without a way to ask again on purpose, a suppressed dialog is a lost one.
+_SESSION_CLAIM = "_macintalkEngineDialogShown"
+
+
+def _claim_the_startup_dialog(who):
+    """-> True if this add-on is the one that should ask this session."""
+    return globalVars.__dict__.setdefault(_SESSION_CLAIM, who) == who
+
+
 #: Written only when the user explicitly says "stop asking".
 #:
 #: This used to be written *before* the dialog appeared, so it showed exactly
@@ -59,6 +83,9 @@ _MESSAGE = (
     "https://github.com/tgeczy/outspoken-nvda/blob/main/tools/extract_rom.py\n"
     "It needs Python 3.8 or newer installed (tested on 3.13), and the machfs "
     "package for disk images -- py -3 -m pip install machfs\n\n"
+    "If you have the Tiger or Leopard speech add-ons too, they share the same "
+    "macintalk folder and each has its own entry in NVDA's Tools menu. Only "
+    "one of them asks at start-up.\n\n"
     "Yes  -  open the folder the engine goes in\n"
     "No  -  do not ask again\n"
     "Cancel  -  remind me next time NVDA starts"
@@ -67,13 +94,74 @@ _MESSAGE = (
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
+    #: Shown in NVDA's Tools menu. Translators: an item in NVDA's Tools menu.
+    MENU_LABEL = _("&MacinTalk engine (outSPOKEN)...")
+    MENU_HELP = _("Check whether outSPOKEN can find its engine, and open the "
+                  "folder it goes in.")
+
     def __init__(self):
         super().__init__()
+        self._menuItem = None
         if globalVars.appArgs.secure:
             log.info("outSPOKEN: secure mode, not checking for the engine")
             return
+        self._addMenuItem()
         log.info("outSPOKEN: ROM check armed")
         threading.Timer(6.0, self._check).start()
+
+    def _addMenuItem(self):
+        """A way to ask on purpose, which is what makes "do not ask" safe.
+
+        Without this, saying no once meant deleting a file called
+        `do-not-ask` by hand to ever see it again -- and there was no route at
+        all to "is my engine actually installed?" short of selecting the
+        synthesizer and listening for silence.
+        """
+        try:
+            sysTrayIcon = gui.mainFrame.sysTrayIcon
+            self._menuItem = sysTrayIcon.toolsMenu.Append(
+                wx.ID_ANY, self.MENU_LABEL, self.MENU_HELP)
+            sysTrayIcon.Bind(wx.EVT_MENU, self._onMenu, self._menuItem)
+            log.info("outSPOKEN: added the Tools menu item")
+        except Exception:
+            # Never fatal: the add-on still speaks without a menu entry, and
+            # global plugins load while the GUI is still assembling itself.
+            log.error("outSPOKEN: could not add the Tools menu item",
+                      exc_info=True)
+
+    def terminate(self):
+        """Take the menu item away again, or reloading duplicates it."""
+        try:
+            if self._menuItem is not None:
+                gui.mainFrame.sysTrayIcon.toolsMenu.Remove(self._menuItem.Id)
+                self._menuItem.Destroy()
+                self._menuItem = None
+        except Exception:
+            log.error("outSPOKEN: could not remove the Tools menu item",
+                      exc_info=True)
+        super().terminate()
+
+    def _onMenu(self, evt):
+        """Always ask, whatever the marker says and whoever else asked today.
+
+        Chosen on purpose: somebody who opens this from a menu is asking the
+        question right now, and answering "you said not to ask" would be
+        obtuse.
+        """
+        ok, lines = rom.explain()
+        log.info("outSPOKEN: engine %s (from the Tools menu)\n  %s"
+                 % ("ready" if ok else "NOT ready", "\n  ".join(lines)))
+        folder = rom.config_dir()
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
+        if ok:
+            gui.messageBox(
+                "outSPOKEN has its engine.\n\n%s" % "\n".join(lines),
+                "MacinTalk", wx.OK | wx.ICON_INFORMATION)
+            return
+        self._ask(folder)
 
     def _check(self):
         """Decide whether to ask, and leave a record either way.
@@ -100,6 +188,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                          % (_MARKER, folder))
                 return
             os.makedirs(folder, exist_ok=True)
+            if not _claim_the_startup_dialog("outspoken"):
+                log.info("outSPOKEN: another Macintosh speech add-on has "
+                         "already asked this session; Tools menu has ours")
+                return
             log.info("outSPOKEN: showing the engine-missing dialog")
             wx.CallAfter(self._ask, folder)
         except Exception:
