@@ -237,10 +237,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             os.makedirs(folder, exist_ok=True)
         except OSError:
             pass
+        # Invisible state that presents exactly like a broken dialog:
+        # somebody clicks "do not ask again" during a test and wonders
+        # months later why start-up says nothing.
+        if os.path.exists(os.path.join(folder, _MARKER)):
+            lines = list(lines) + [
+                "start-up reminders are OFF -- delete %s in the folder "
+                "above to turn them back on" % _MARKER]
         if ok:
             gui.messageBox(
                 "outSPOKEN has its engine.\n\n%s" % "\n".join(lines),
-                "MacinTalk", wx.OK | wx.ICON_INFORMATION)
+                _DIALOG_TITLE, wx.OK | wx.ICON_INFORMATION)
             return
         self._ask(folder)
 
