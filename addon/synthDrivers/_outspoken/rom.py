@@ -41,6 +41,18 @@ FILES = {
 #: speaks, but only if it is handed phonemes, which no screen reader does.
 REQUIRED = ("DRVR_1030.bin", "TALK_1001.bin")
 
+#: Every engine that lives in its own module, and the name a person sees.
+#: MacinTalk 1 is not here because it is the `.sp` driver and has no module of
+#: its own -- it is the three files in `REQUIRED` plus the rules.
+#:
+#: **Add to this when an engine is added, or the add-on will tell people they
+#: have no engine while speaking to them in nineteen voices.**
+ENGINE_MODULES = (
+    ("macintalk2", "MacinTalk 2"),
+    ("macintalk3", "MacinTalk 3"),
+    ("macintalkpro", "MacinTalk Pro"),
+)
+
 CONFIG_DIRNAME = os.path.join("macintalk", "outspoken")
 
 #: Where every release up to 0.9.0 kept it.
@@ -144,7 +156,18 @@ def search_roots():
     except OSError:
         pass
     roots.append(os.path.join(addon, "rom"))
-    return roots
+    # **Deduplicated, because this list is shown to people.** The pointer file
+    # usually names the folder we would have looked in anyway, so the report in
+    # the Tools menu listed `macintalk\outspoken` twice and read like a bug.
+    # Order is preserved: the first mention of a folder is the one that decides
+    # which copy of a file wins.
+    seen, unique = set(), []
+    for r in roots:
+        key = os.path.normcase(os.path.abspath(r))
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    return unique
 
 
 def find():
@@ -188,8 +211,14 @@ def engines_present():
     found, _missing = find()
     if all(n in found for n in REQUIRED) and "RULZ_1129.bin" in found:
         out.append("MacinTalk 1")
-    for mod, label in (("macintalk2", "MacinTalk 2"),
-                       ("macintalkpro", "MacinTalk Pro")):
+    # **MacinTalk 3 was missing from here for the whole of 0.8.0 and 0.9.0**,
+    # having been added to the driver's catalogue and not to this list. Anyone
+    # with only MacinTalk 3 extracted was told on every start-up that they had
+    # no engine, while its nineteen voices worked perfectly -- which is the
+    # failure the docstring above warns about, recurring in the same function
+    # that warns about it. `ENGINE_MODULES` is now the one list, and a test
+    # holds it against what the driver actually offers.
+    for mod, label in ENGINE_MODULES:
         try:
             m = __import__(mod)
             if m.usable(search_roots()):
