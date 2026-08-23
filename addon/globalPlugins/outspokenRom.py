@@ -123,8 +123,20 @@ def _combined_message(missing):
                 "software. You supply that from your own Macintosh discs and "
                 "disk images. Each folder has a README naming the extractor to "
                 "run and what it needs.\n\n"
-                "All of these synthesizers are listed in NVDA either way, and "
-                "each says what is missing if you select it, and you can "
+                # **This sentence used to promise something for other people's
+                # add-ons, and one of them changed underneath it.**  Panthera
+                # 0.96 lists Tiger, Leopard and Lion only when each has an
+                # engine, and offers a single placeholder in their place when
+                # none of them does -- so "all of these are listed either way"
+                # became false the moment that shipped, in a dialog this
+                # add-on draws and does not own the contents of.
+                #
+                # The same mistake as the one `_MESSAGE` below carries a
+                # warning about, from the other direction: that one outlived
+                # the behaviour it described, and this one described behaviour
+                # that was never ours to describe.
+                "Whether one of these appears in NVDA's synthesizer list "
+                "before it has an engine is each add-on's own choice. You can "
                 "ask this question again whenever you like from NVDA's "
                 "Tools menu.\n\n")
         refuse = "No  -  do not ask again about any of them\n"
