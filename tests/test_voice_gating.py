@@ -4,7 +4,7 @@
 These build their own `rom/` tree out of a synthesised `ttvd`, so they need
 nothing extracted and run on any machine.
 
-The case is not hypothetical. `tools/extract_rom.py` pulls MacinTalk Pro's
+The case is not hypothetical. The extractor pulls MacinTalk Pro's
 Victoria, Bruce and Agnes out of any disk image that carries them -- about
 900 KB each -- independently of whether that image also had MacinTalk Pro
 itself. So holding three Pro voices and nothing able to speak them is a
@@ -198,8 +198,15 @@ def test_a_macintalk_2_voice_without_its_wave_data_is_not_offered(tmp_path,
 
 @pytest.fixture
 def extractor():
-    import extract_rom
-    return extract_rom
+    """The extraction logic, which is add-on code now rather than a script.
+
+    It moved out of `tools/extract_rom.py` so that NVDA could reach it and the
+    Tools menu could offer a dialog instead of a command line; the tool is a
+    thin wrapper over this. The judgement being tested here is the same one,
+    from the same function.
+    """
+    import ospextract
+    return ospextract
 
 
 def test_the_extractor_says_what_nvda_will_offer(tmp_path, extractor, capsys):

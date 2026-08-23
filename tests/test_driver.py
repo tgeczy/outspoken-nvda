@@ -470,6 +470,40 @@ def test_a_voice_change_needs_no_utterance_of_its_own(stubbed):
     assert [w for w, _ in built[0].calls].count("select") == 1
 
 
+#: Asked of a real wxPython, in a subprocess.  See the end of
+#: `test_every_wx_name_we_use_actually_exists_in_wxpython`.
+_WX_PROBE = (
+    "import sys" + chr(10) +
+    "try:" + chr(10) +
+    "    import wx" + chr(10) +
+    "except ImportError:" + chr(10) +
+    "    print('NOWX')" + chr(10) +
+    "else:" + chr(10) +
+    "    print(wx.version())" + chr(10) +
+    "    print(' '.join(n for n in sys.argv[1:] if not hasattr(wx, n)))"
+)
+
+
+def _wx_missing(names):
+    """-> (version, [names wxPython lacks]), or (None, []) when there is none.
+
+    A machine without wxPython is not a failure: the curated set above stands
+    on its own there, which is the arrangement this test was written under.
+    """
+    import subprocess
+    import sys as _sys
+    try:
+        done = subprocess.run([_sys.executable, "-c", _WX_PROBE]
+                              + sorted(names),
+                              capture_output=True, text=True, timeout=120)
+    except Exception:
+        return None, []
+    out = done.stdout.strip().split(chr(10))
+    if not out or out[0].strip() == "NOWX":
+        return None, []
+    return out[0].strip(), (out[1].split() if len(out) > 1 else [])
+
+
 def test_every_wx_name_we_use_actually_exists_in_wxpython():
     """A misspelt wx constant is invisible until a user sends in a log.
 
@@ -495,8 +529,16 @@ def test_every_wx_name_we_use_actually_exists_in_wxpython():
         "CENTRE", "CENTER",
         # scheduling
         "CallAfter", "CallLater",
-        # menus, if a future version grows one
+        # menus
         "ID_ANY", "EVT_MENU", "Menu", "MenuItem",
+        # the speech data manager: windows, layout and controls
+        "Dialog", "Panel", "BoxSizer", "StaticText", "ListBox", "Button",
+        "FileDialog",
+        # ... the flags and ids that go with them
+        "VERTICAL", "HORIZONTAL", "EXPAND", "ALL", "BOTTOM", "RIGHT",
+        "LB_SINGLE", "FD_OPEN", "FD_FILE_MUST_EXIST", "ID_OK", "ID_CLOSE",
+        # ... and its events
+        "EVT_BUTTON", "EVT_CLOSE",
     }
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -527,6 +569,24 @@ def test_every_wx_name_we_use_actually_exists_in_wxpython():
         "these wx names are not in the allowed set. Check they exist in "
         "wxPython -- YES_NO_CANCEL does not -- then add them here: %r"
         % unknown)
+
+    # **And where wxPython is actually installed, ask it rather than trust the
+    # list.**  The curated set is a hand-maintained claim, and a hand-
+    # maintained claim about an API is the thing that failed here in the first
+    # place.  Panthera's copy of this test grew the probe first; this is that
+    # improvement brought across, which is also why the two should be compared
+    # whenever either changes.
+    #
+    # In a subprocess, and not out of caution: this suite fakes `wx` so the
+    # driver can be imported without NVDA, so an in-process `import wx` finds
+    # the fake -- which has almost none of these names, and the check inverts
+    # into failing on every correct one.
+    version, missing = _wx_missing(used)
+    if version:
+        assert not missing, (
+            "wxPython %s does not have: %s -- used in %s"
+            % (version, ", ".join(sorted(missing)),
+               ", ".join(sorted({used[m] for m in missing}))))
 
 
 # --------------------------------------------------------- MacinTalk Pro ---

@@ -231,6 +231,12 @@ _MESSAGE = (
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     #: Shown in NVDA's Tools menu. Translators: an item in NVDA's Tools menu.
+    #: **A second Tools menu item, deliberately, beside Panthera's.**
+    #:
+    #: These are classic Mac OS engines from a different repository with a
+    #: different lineage, and one dialog trying to be both would serve
+    #: neither.  What the two share is their *shape*: open either and you see
+    #: the engines themselves, one row each, saying what is installed.
     MENU_LABEL = _("&MacinTalk engine (outSPOKEN)...")
     MENU_HELP = _("Check whether outSPOKEN can find its engine, and open the "
                   "folder it goes in.")
@@ -278,12 +284,27 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         super().terminate()
 
     def _onMenu(self, evt):
-        """Always ask, whatever the marker says and whoever else asked today.
+        """Open the speech data manager, or fall back to explaining.
 
-        Chosen on purpose: somebody who opens this from a menu is asking the
-        question right now, and answering "you said not to ask" would be
-        obtuse.
+        **It used to explain and nothing more**, because there was nothing to
+        offer: extraction needed Python, a terminal and a pip install, so the
+        most this could do was name a folder and a script.  The manager exists
+        now, so the menu item leads to the thing that fixes the problem rather
+        than to a description of it -- which is the lesson Panthera's own
+        start-up dialog learned first.
+
+        The old path stays as the fallback.  If the manager cannot be imported
+        or drawn, somebody who just asked a question should still get an
+        answer, not silence.
         """
+        try:
+            import ospmanager
+            ospmanager.SpeechDataDialog.show(gui.mainFrame)
+            log.info("outSPOKEN: opened the speech data manager")
+            return
+        except Exception:
+            log.error("outSPOKEN: could not open the speech data manager; "
+                      "falling back to the explanation", exc_info=True)
         ok, lines = rom.explain()
         log.info("outSPOKEN: engine %s (from the Tools menu)\n  %s"
                  % ("ready" if ok else "NOT ready", "\n  ".join(lines)))
