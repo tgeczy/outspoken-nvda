@@ -537,8 +537,10 @@ def test_every_wx_name_we_use_actually_exists_in_wxpython():
         # ... the flags and ids that go with them
         "VERTICAL", "HORIZONTAL", "EXPAND", "ALL", "BOTTOM", "RIGHT",
         "LB_SINGLE", "FD_OPEN", "FD_FILE_MUST_EXIST", "ID_OK", "ID_CLOSE",
+        # ... the read-only details box
+        "TextCtrl", "TE_MULTILINE", "TE_READONLY", "TE_DONTWRAP",
         # ... and its events
-        "EVT_BUTTON", "EVT_CLOSE",
+        "EVT_BUTTON", "EVT_CLOSE", "EVT_LISTBOX",
     }
 
     here = os.path.dirname(os.path.abspath(__file__))

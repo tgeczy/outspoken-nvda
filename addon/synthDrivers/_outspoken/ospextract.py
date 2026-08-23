@@ -46,6 +46,7 @@ same 'ttsc' type, same standard component entry -- so the host glue is shared.
 import mmap
 import os
 import sys
+import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rsrc                                                   # noqa: E402
@@ -330,12 +331,68 @@ def installed_engines(out):
 #: manager that lists only what you already have cannot tell you what you are
 #: missing -- which is the question somebody opens it to ask.  Panthera's lists
 #: Tiger, Leopard and Lion the same way and for the same reason.
+#: name, one line about it, the folder it is written to, and where it comes
+#: from.  The last is the one a user actually needs: "not installed" is only
+#: half an answer without "and here is what to point me at".
 ENGINES = (
-    ("MacinTalk 1", "1984, the original -- Male and Female"),
-    ("MacinTalk 2", "1993 -- ten voices"),
-    ("MacinTalk 3", "1994 -- nineteen, the singing ones among them"),
-    ("MacinTalk Pro", "1994 -- Agnes, Bruce and Victoria"),
+    ("MacinTalk 1", "1984, the original -- Male and Female", "macintalk1",
+     "outSPOKEN itself -- the control panel, creator 'BSDo'.  Also the "
+     "outSPOKEN.bin on Macintosh Repository, which is 148 KB and carries the "
+     "whole engine."),
+    ("MacinTalk 2", "1993 -- ten voices", "macintalk2",
+     "Extensions/MacinTalk 2, on a System 7 disk or disk image, with its "
+     "voices in Extensions/Voices."),
+    ("MacinTalk 3", "1994 -- nineteen, the singing ones among them",
+     "macintalk3",
+     "Extensions/MacinTalk 3, and Extensions/Voices for the nineteen.  The "
+     "engine's own code hides in resources named after composers."),
+    ("MacinTalk Pro", "1994 -- Agnes, Bruce and Victoria", "macintalkpro",
+     "Extensions/MacinTalk Pro, and Extensions/Voices.  Each Pro voice is "
+     "most of a megabyte of recorded units."),
 )
+
+
+def engine_details(out, name):
+    """Everything the manager can say about one engine. -> [line]
+
+    The same judgement `installed_engines` makes, spelled out for a reader:
+    where it goes, where it comes from, what is there and what is present but
+    not offered.  That last case is the one worth having -- a folder holding a
+    `ttvd` and nothing else looks installed from the outside and cannot speak.
+    """
+    row = next((e for e in ENGINES if e[0] == name), None)
+    if row is None:
+        return []
+    _n, about, sub, source = row
+    have, bad = installed_engines(out) if out else ({}, [])
+    voices = sorted(have.get(name, []))
+
+    lines = [about, ""]
+    if voices:
+        lines.append("Installed, %d voice%s:"
+                     % (len(voices), "" if len(voices) == 1 else "s"))
+        lines.append("    " + ", ".join(voices))
+    else:
+        lines.append("Not installed yet.")
+    lines += ["", "It goes in:", "    %s" % os.path.join(out or "?", sub),
+              "", "It comes from:"]
+    #: Wrapped here rather than by the control.  The box is TE_DONTWRAP, to
+    #: match Panthera's and because a folder path folded in the middle is
+    #: unreadable -- but that leaves a sentence scrolling sideways, which for
+    #: somebody arrowing through it line by line is worse.
+    lines += ["    " + ln for ln in textwrap.wrap(source, 62)]
+
+    #: Only this engine's rejects.  `voices.installed` reports them by folder,
+    #: and a folder under `voices/` does not say which engine it belongs to --
+    #: so match on the reason naming the engine, and fall back to showing them
+    #: all rather than silently dropping a warning the user needs.
+    mine = [(f, why) for f, why in bad if name.lower() in why.lower()]
+    for folder, why in (mine or ([] if voices else bad)):
+        if not lines[-1] == "":
+            lines.append("")
+        lines.append("Present but not offered:")
+        lines.append("    %s -- %s" % (os.path.basename(folder), why))
+    return lines
 
 
 def report_ready(out):

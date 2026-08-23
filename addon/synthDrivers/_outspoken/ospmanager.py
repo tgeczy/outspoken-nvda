@@ -117,8 +117,29 @@ class SpeechDataDialog(wx.Dialog):
         #: A read-only list rather than a grid: every row is one engine and one
         #: sentence about it, which is what a screen reader can say in one go.
         self._list = wx.ListBox(pad, style=wx.LB_SINGLE,
-                                size=(560, 130))
+                                size=(560, 110))
+        self._list.Bind(wx.EVT_LISTBOX, self.onSelect)
         inner.Add(self._list, flag=wx.EXPAND | wx.BOTTOM, border=8)
+
+        #: **A read-only box saying what is where, per engine.**
+        #:
+        #: Panthera's manager has one and this did not, which is a worse gap
+        #: than it sounds: a row reading "not installed" is half an answer
+        #: without "and here is what to point me at".  It also has room for
+        #: the case a one-line row cannot show at all -- a voice folder that
+        #: is present and still not offered, which looks installed from the
+        #: outside and cannot speak.
+        #:
+        #: Read-only rather than a label, so a screen reader can be arrowed
+        #: through it line by line and the text can be selected and copied
+        #: into a bug report.
+        # Translators: label for the box describing the selected engine.
+        inner.Add(wx.StaticText(pad, label=_("&Details:")),
+                  flag=wx.BOTTOM, border=4)
+        self._details = wx.TextCtrl(
+            pad, size=(560, 150),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
+        inner.Add(self._details, flag=wx.EXPAND | wx.BOTTOM, border=8)
 
         self._where = wx.StaticText(pad, label="")
         inner.Add(self._where, flag=wx.BOTTOM, border=8)
@@ -163,7 +184,7 @@ class SpeechDataDialog(wx.Dialog):
             have = {}
         sel = max(self._list.GetSelection(), 0)
         self._list.Clear()
-        for name, about in ospextract.ENGINES:
+        for name, about, _sub, _source in ospextract.ENGINES:
             voices = sorted(have.get(name, []))
             if voices:
                 # Translators: {n} voices are installed for an engine.
@@ -179,6 +200,25 @@ class SpeechDataDialog(wx.Dialog):
             # Translators: names the folder the engines are read from.
             _("They are read from: %s") % (where or _("NVDA's folder was not "
                                                       "found")))
+        self.showDetails()
+
+    def onSelect(self, evt):
+        self.showDetails()
+
+    def showDetails(self):
+        """Fill the details box for whichever engine is selected."""
+        index = self._list.GetSelection()
+        if index < 0 or index >= len(ospextract.ENGINES):
+            self._details.SetValue("")
+            return
+        try:
+            lines = ospextract.engine_details(self.folder(),
+                                              ospextract.ENGINES[index][0])
+        except Exception:
+            log.error("outSPOKEN: could not describe the engine",
+                      exc_info=True)
+            lines = []
+        self._details.SetValue("\n".join(lines))
 
     # -- installing -------------------------------------------------------
 

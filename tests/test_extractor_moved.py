@@ -115,11 +115,31 @@ def test_the_engines_it_lists_are_the_engines_it_can_install(ospextract):
     A manager that lists only what you already have cannot tell you what you
     are missing, which is the question somebody opens it to ask.
     """
-    listed = {name for name, _about in ospextract.ENGINES}
+    listed = {row[0] for row in ospextract.ENGINES}
     assert listed == {"MacinTalk 1", "MacinTalk 2", "MacinTalk 3",
                       "MacinTalk Pro"}
-    for _name, about in ospextract.ENGINES:
+    for name, about, sub, source in ospextract.ENGINES:
         assert about and about[0].isdigit(), about
+        #: The folder has to be one the extractor really writes, or the
+        #: details box points somewhere that will never fill up.
+        assert sub in ospextract.WANTED, (name, sub)
+        #: And "not installed" is half an answer without where to get it.
+        assert source and len(source) > 30, (name, source)
+
+
+def test_every_engine_can_describe_itself(ospextract, tmp_path):
+    """The details box must say something for an engine that is absent.
+
+    That is the case it exists for: a row reading "not installed" is where a
+    user most needs to be told what to point the tool at.
+    """
+    for name, _about, _sub, _source in ospextract.ENGINES:
+        lines = ospextract.engine_details(str(tmp_path), name)
+        text = "\n".join(lines)
+        assert "Not installed yet." in text, name
+        assert "It comes from:" in text, name
+        assert "It goes in:" in text, name
+    assert ospextract.engine_details(str(tmp_path), "MacinTalk 9") == []
 
 
 def test_extract_is_importable_without_a_disk_image(ospextract):
