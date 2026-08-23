@@ -82,6 +82,49 @@ def _register_missing(entry):
 def _missing_engines():
     return list(globalVars.__dict__.get(_REGISTRY, []))
 
+#: Which add-on this is, in the shared registry.
+_ADDON_ID = "outspoken"
+
+#: Who draws the combined dialog when more than one add-on is missing an
+#: engine.
+#:
+#: **It used to be whoever registered first, and that is a race.**  Every
+#: add-on fires the same 6.0 s timer, so the order is milliseconds of luck and
+#: changes with the order NVDA walks the add-ons folder -- which is
+#: alphabetical, so installing one under a different name could reverse it.
+#: The dialogs are not equivalent: Panthera's offers the speech data tool that
+#: installs the engine for you, and outSPOKEN's can only open the folder.  The
+#: better dialog should not lose a coin toss.
+#:
+#: Higher wins, ties go to whoever registered first, and an entry from an
+#: add-on too old to carry a rank counts as zero.
+_RANK = 10
+
+
+def _leads_the_dialog():
+    """-> True if this add-on should be the one to show the combined dialog.
+
+    Decided here rather than at registration, because registration is the race
+    and this runs after the rendezvous, when everyone who is going to register
+    already has.
+
+    **Exactly one add-on must answer True**, which is why this picks a winner
+    out of the whole list rather than each add-on deciding about itself.  A
+    rule of the shape "stand down if somebody better is here" ends with nobody
+    showing anything the moment the better one has also stood down.
+    """
+    entries = _missing_engines()
+    if not entries:
+        return False
+    #: An add-on from before ranks existed decides at registration time and
+    #: will show its dialog if it got there first, whatever is concluded here.
+    #: Arguing with it would put two dialogs on the screen.
+    if "rank" not in entries[0]:
+        return entries[0].get("addon") == _ADDON_ID
+    best = max(e.get("rank", 0) for e in entries)
+    leaders = [e for e in entries if e.get("rank", 0) == best]
+    return leaders[0].get("addon") == _ADDON_ID
+
 
 def _folder_to_open(missing):
     """The one folder that holds all of them, when there is one.
@@ -288,15 +331,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                          % (_MARKER, folder))
                 return
             os.makedirs(folder, exist_ok=True)
-            first = _register_missing({
+            _register_missing({
                 "label": "outSPOKEN -- MacinTalk 1, 2, 3 and Pro, 1984 to 1994",
                 "folder": folder,
                 "source": "a Macintosh disk image you own",
+                "addon": _ADDON_ID,
+                "rank": _RANK,
             })
-            if not first:
-                log.info("outSPOKEN: joined another add-on's dialog")
-                return
-            log.info("outSPOKEN: will show the combined engine-missing dialog")
+            #: Scheduled by everyone, drawn by one.  Which one is settled in
+            #: `_leads_the_dialog` after the rendezvous.  This add-on rates
+            #: itself below Panthera on purpose: its dialog can only open a
+            #: folder, and Panthera's installs the engine for you.
             wx.CallLater(_RENDEZVOUS_MS, self._askCombined)
         except Exception:
             log.error("outSPOKEN: ROM check failed", exc_info=True)
@@ -304,14 +349,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def _askCombined(self):
         """One dialog for every add-on that registered, however many that is.
 
-        Whoever got here first shows it and speaks for all of them, so this
-        code has to be identical in each add-on -- it is duplicated, not
-        shared, because they are separate add-ons in separate repositories and
-        cannot import one another.
+        Every add-on schedules this and exactly one of them draws, so this
+        code has to be identical in each -- it is duplicated, not shared,
+        because they are separate add-ons in separate repositories and cannot
+        import one another.
         """
         try:
             missing = _missing_engines()
             if not missing:
+                return
+            if not _leads_the_dialog():
+                log.info("outSPOKEN: another add-on is showing the dialog")
                 return
             log.info("outSPOKEN: combined dialog for %d add-on(s): %s"
                      % (len(missing),

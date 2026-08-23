@@ -38,8 +38,18 @@ CONTRACT = {
     "_RENDEZVOUS_MS": "1500",
 }
 
-#: Every key the dialog reads out of a registry entry.
-ENTRY_KEYS = {"label", "folder", "source"}
+#: Every key a registry entry carries.
+#:
+#: `label`, `folder` and `source` are read by the dialog.  `addon` and `rank`
+#: are read by `_leads_the_dialog`, which settles *which* add-on draws it --
+#: that used to be whoever registered first, which is a race between timers
+#: milliseconds apart, and the two dialogs are not equally useful.
+#:
+#: Both readers tolerate an entry from an add-on too old to carry the new
+#: pair.  This still insists that anything written *now* carries all five,
+#: because half a protocol in one add-on and half in another is exactly the
+#: failure this file exists to catch.
+ENTRY_KEYS = {"label", "folder", "source", "addon", "rank"}
 
 
 def _source(path):
@@ -61,7 +71,11 @@ def test_the_meeting_place_is_the_same_in_every_plugin(path, name, value):
 def test_every_plugin_registers_the_keys_the_dialog_reads(path):
     """A missing key is a KeyError inside a wx handler, which NVDA swallows
     into the log -- so it presents as no dialog at all, which is the failure
-    this whole mechanism exists to fix."""
+    this whole mechanism exists to fix.
+
+    A missing `rank` is quieter and worse: the entry simply loses every
+    comparison, so that add-on never draws the dialog and may be the only
+    one that could have."""
     src = _source(path)
     call = re.search(r"_register_missing\(\{(.+?)\}\)", src, re.S)
     assert call, "%s never registers" % os.path.basename(path)
