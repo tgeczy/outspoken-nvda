@@ -101,7 +101,11 @@ pre-fills the whole area with `$80`, so any slack that goes unwritten is silence
 
 ## Re-read `length` at every `bufferCmd` — do not hardcode 3870
 
-`SetBufLength` at +$4C36 rewrites the header:
+`SetBufLength` at +$4C36 rewrites the header. **`globals` here is
+`DRV_BASE + $4C16`** -- the routine says so itself, `lea.l $4c16(pc), a4` --
+and it is emphatically *not* `a5` or `dCtlStorage`. Reading these off the
+wrong base returns zero every time, which looks exactly like "the engine has
+already consumed it" and cost an evening:
 
 ```
 d7 = globals[$0C]        ; where the synthesiser actually stopped
@@ -198,10 +202,23 @@ final buffer, per tenth:  374  335   25    0    0    0    0    0    0    0
 trailing silence: 3037 samples = 136 ms
 ```
 
-So `SetBufLength` does **not** fire here — the driver pads the last buffer with
-`$80` instead of shortening it, and `short: 0` is correct rather than a dropped
-buffer. Read the header length anyway; the mechanism exists and other phrases
-may use it.
+So `SetBufLength` does **not** fire here, and `short: 0` is correct rather
+than a dropped buffer. Read the header length anyway; the mechanism exists and
+other phrases do use it.
+
+**This paragraph used to say the driver "pads the last buffer instead of
+shortening it", and that was wrong in a way that hid a real bug for months.**
+The driver does neither: at the end of speech it is normally part-way through
+a buffer, and it does not shorten it *and does not hand it over*. It leaves
+`globals[$0C]` pointing at where it stopped, and the **next** utterance's
+`SetupA3` reads that stale pointer and applies it to the new utterance's first
+buffer -- which is why every utterance after the first begins with a short
+buffer whose length is the previous one's missing tail.
+
+The example above is simply a phrase whose audio happened to finish inside a
+buffer that was handed over anyway, so nothing audible was lost and the shape
+of the fault was invisible. `Engine._last_buffer` harvests that tail now; see
+`tests/test_last_buffer.py`.
 
 **The hazard this creates for the NVDA driver.** `Prime` returns while the last
 buffer still holds real speech in its first fifth. A driver that treats *"the
