@@ -37,6 +37,12 @@ EXPORT_MACSTARTSOUND = 0x001E
 EXPORT_SET_CALLBACK = 0x0034
 BUF_BYTES = 22 + 3870
 
+#: The most `SetBufLength` will ever declare: it clamps to $F1E and
+#: flashes eight pixels at ScrnBase if it had to.  Used as a sanity
+#: bound on the stop pointer, so a wild value cannot make us read
+#: whatever is past the buffer.
+BUF_LIMIT = 0xF1E
+
 FLAG = WORK + 0x280            # our stop flag, polled by the hook
 HOOK = WORK + 0x200
 
@@ -325,6 +331,69 @@ class Engine(object):
         except Exception:
             pass
 
+    #: The driver's own globals, found from the disassembly of `SetBufLength`
+    #: rather than guessed:
+    #:
+    #:     +04C36  link.w  a6, #-4
+    #:     +04C3E  lea.l   $4c16(pc), a4     ; a4 = the globals
+    #:     +04C42  move.l  $c(a4), -$4(a6)   ; where the synthesiser stopped
+    #:     +04C4A  move.l  d0, $c(a4)        ; ...and consume it
+    #:     +04C50  cmp.w   $a(a6), d1        ; index == 1 ?
+    #:     +04C56  move.l  $14(a4), d1       ; yes: buffer A's header
+    #:     +04C5C  move.l  $18(a4), d1       ; no:  buffer B's header
+    #:     +04C62  lea.l   $16(a3), a0       ; the sample area
+    #:     +04C6A  sub.l   a0, d7            ; bytes actually written
+    #:     +04C82  move.l  d7, $4(a3)        ; SoundHeader.length
+    _GLOBALS = DRV_BASE + 0x4C16
+    _G_STOP = _GLOBALS + 0x0C            # where the synthesiser stopped
+    _G_BUFA = _GLOBALS + 0x14            # buffer A's SoundHeader
+    _G_BUFB = _GLOBALS + 0x18            # buffer B's SoundHeader
+
+    def _last_buffer(self):
+        """-> the samples the engine wrote and never handed over.
+
+        **The end of every utterance was being spoken one utterance late.**
+
+        The driver fills a buffer, hands it over with `bufferCmd` when it is
+        full, and switches to the other one.  At the end of speech it is
+        normally part-way through a buffer -- and it neither shortens that
+        buffer nor hands it over.  What it does instead is leave `globals[$0C]`
+        pointing at where it stopped, and the *next* utterance's `SetupA3`
+        calls `SetBufLength`, which reads that stale pointer and applies it to
+        the new utterance's first buffer.
+
+        Which is why every utterance after the first begins with a short
+        buffer, and why its length is always exactly the previous utterance's
+        missing tail -- measured across eight rates and two texts, sixteen for
+        sixteen.  The buffers are wiped before each utterance, so what actually
+        arrives at the front of the next one is silence of precisely the right
+        length: the fault has been paying for itself in dead air.
+
+        Whether it costs anything audible depends on where the word happens to
+        end relative to a 3870-sample boundary, which is why it took a
+        particular voice at a particular rate saying a particular number for
+        anybody to hear it. Reported by Tyler: the original voice, rate
+        65, the number 4.
+
+        Above about 686 wpm the whole word fits inside one buffer, nothing is
+        ever handed over, and the top of the rate slider was **completely
+        silent**. Same bug, all of it rather than the end of it.
+        """
+        h = self.h
+        stop = h.r32(self._G_STOP)
+        if not stop:
+            return b""
+        for base in (h.r32(self._G_BUFA), h.r32(self._G_BUFB)):
+            area = base + 0x16
+            if area <= stop <= area + BUF_LIMIT:
+                # Read the length from the pointer rather than scanning for
+                # where the silence starts: the engine pre-fills the whole
+                # area with $80 and its own trailing hiss is not $80, so a
+                # scan would keep up to 175 ms of quiet noise on every
+                # utterance -- exactly the padding `_tidy` exists to remove.
+                return bytes(h.read(area, stop - area))
+        return b""
+
     def speak(self, phonemes):
         """-> 8-bit unsigned PCM at NATIVE_RATE, leading silence trimmed."""
         if self._dead:
@@ -377,4 +446,4 @@ class Engine(object):
             # lands late cannot survive into the next utterance.
             self._speaking = False
             h.w8(FLAG, 0)
-        return _tidy(h.pcm)
+        return _tidy(h.pcm + self._last_buffer())
