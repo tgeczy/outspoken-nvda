@@ -26,7 +26,11 @@ times a day and needs to know what a given string will sound like, so there is
 no year heuristic and no attempt to guess that `1984` is a date rather than a
 count.  `read_year` exists for a caller that knows better.
 
-    py -3 tools/numwords.py "you owe me 1,234.50 on the 3rd"
+The scale names end at quadrillion.  From 10^18 up the whole part is said as
+"large number": nobody can verify "three quintillion" by ear, and admitting
+the size says more than a stack of scale words does.
+
+    py -3 addon/synthDrivers/_outspoken/numwords.py "you owe 1,234.50"
 """
 import re
 import sys
@@ -36,8 +40,15 @@ ONES = ("zero one two three four five six seven eight nine ten eleven twelve "
 TENS = ("_ _ twenty thirty forty fifty sixty seventy eighty ninety").split()
 
 #: Short scale, which is what English screen readers expect.
-SCALES = [(10 ** 12, "trillion"), (10 ** 9, "billion"),
-          (10 ** 6, "million"), (1000, "thousand")]
+SCALES = [(10 ** 15, "quadrillion"), (10 ** 12, "trillion"),
+          (10 ** 9, "billion"), (10 ** 6, "million"), (1000, "thousand")]
+
+#: Where the scale names stop.  From here up the whole part is said as
+#: `LARGE`: a listener cannot check a stack of scale words by ear, and
+#: Python itself refuses `int()` on digit runs past 4300 characters, so the
+#: decision has to be taken from the string before `int` ever runs.
+LIMIT = 10 ** 18
+LARGE = "large number"
 
 #: Irregular ordinals; the rest are formed by suffixing the cardinal.
 ORDINALS = {"one": "first", "two": "second", "three": "third",
@@ -57,6 +68,8 @@ def cardinal(n):
     """
     if n < 0:
         return MINUS + " " + cardinal(-n)
+    if n >= LIMIT:
+        return LARGE
     if n < 20:
         return ONES[n]
     if n < 100:
@@ -69,14 +82,15 @@ def cardinal(n):
         if n >= value:
             q, r = divmod(n, value)
             return cardinal(q) + " " + name + (" " + cardinal(r) if r else "")
-    # Unreachable: anything at or above 1000 matches the thousand scale. Past
-    # a trillion the recursion says "one thousand trillion" rather than
-    # inventing "quadrillion", which is the right call for a screen reader.
+    # Unreachable: negatives and LIMIT return above, and anything at or
+    # above 1000 matches the thousand scale.
     raise AssertionError("cardinal fell through for %d" % n)
 
 
 def ordinal(n):
     """1 -> 'first', 22 -> 'twenty second'."""
+    if n >= LIMIT:
+        return LARGE               # never "large numberth"
     words = cardinal(n).split()
     last = words[-1]
     if last in ORDINALS:
@@ -133,19 +147,31 @@ def normalise(text, spell_out=False):
     who prefers it -- that is the setting worth exposing in the driver, since
     long identifiers and phone numbers really are easier to follow that way.
     """
+    def big(s):
+        # 19 significant digits is LIMIT exactly.  Decided on the string,
+        # never after `int()`: Python refuses the conversion itself past
+        # 4300 digits, and a screen reader crashing on a long digit run is
+        # a far worse answer than "large number".
+        return len(s.lstrip("0")) > 18
+
     def sub(mo):
         # An ordinal always becomes a word.  Spelling `3rd` out character by
         # character says "three r d", which helps nobody, so `spell_out` is
         # about long numbers and does not reach here.
         if mo.group("ord"):
-            return ordinal(int(mo.group("ord")[:-2]))
+            head = mo.group("ord")[:-2]
+            return LARGE if big(head) else ordinal(int(head))
 
         raw = mo.group("num")
         neg = raw.startswith("-")
         raw = raw.lstrip("-").replace(",", "")
         whole, _, frac = raw.partition(".")
-        say = digits if spell_out else (lambda s: cardinal(int(s)))
-        out = say(whole or "0")
+        if spell_out:
+            out = digits(whole or "0")
+        elif big(whole):
+            out = LARGE
+        else:
+            out = cardinal(int(whole or "0"))
         if frac:
             # The fractional part is always digit by digit either way: nobody
             # reads .50 as "fifty".

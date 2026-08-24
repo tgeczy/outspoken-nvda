@@ -12,7 +12,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "tools"))
+    os.path.abspath(__file__))), "addon", "synthDrivers", "_outspoken"))
 import numwords                                               # noqa: E402
 
 
@@ -25,7 +25,11 @@ import numwords                                               # noqa: E402
     (1234, "one thousand two hundred thirty four"),
     (1000000, "one million"),
     (2000000000, "two billion"),
+    (10 ** 12, "one trillion"),
+    (10 ** 15, "one quadrillion"),
+    (10 ** 18, "large number"),
     (-5, "minus five"),
+    (-10 ** 18, "minus large number"),
 ])
 def test_cardinal(n, want):
     assert numwords.cardinal(n) == want
@@ -48,6 +52,7 @@ def test_ordinal(n, want):
     ("chapter 12", "chapter twelve"),
     # Grouping and decimals.
     ("1,234", "one thousand two hundred thirty four"),
+    ("1,000,000,000,000,000", "one quadrillion"),
     ("3.14", "three point one four"),
     ("1,234.50", "one thousand two hundred thirty four point five zero"),
     # A bare leading dot is not a number: "that is it. 5 items"
@@ -97,7 +102,28 @@ def test_read_year_is_never_automatic():
     assert numwords.read_year(1905) == "nineteen oh five"
 
 
-def test_large_numbers_do_not_invent_scale_names():
-    out = numwords.cardinal(10 ** 15)
-    assert "quadrillion" not in out
-    assert out == "one thousand trillion"
+def test_scale_names_end_at_quadrillion():
+    """One more digit past 100 trillion is a quadrillion, as Eloquence says
+    it; from 10^18 up it is "large number", because admitting the size says
+    more than a stack of scale words nobody can verify by ear.
+    """
+    assert numwords.cardinal(10 ** 15) == "one quadrillion"
+    assert numwords.cardinal(10 ** 18 - 1).startswith(
+        "nine hundred ninety nine quadrillion")
+    assert numwords.cardinal(10 ** 18) == "large number"
+    # The ordinal collapses whole, never to "large numberth".
+    assert numwords.ordinal(10 ** 18) == "large number"
+
+
+def test_a_five_thousand_digit_run_does_not_raise():
+    """Python refuses `int()` past 4300 digits, so the size decision is made
+    on the string.  Before it was, a long enough digit run in any text NVDA
+    read -- a log, a dump -- was a crashed utterance, not a number.
+    """
+    run = "9" * 5000
+    assert numwords.normalise(run) == "large number"
+    assert numwords.normalise(run + "th") == "large number"
+    # Spelling out is exempt on purpose: digit by digit never needed `int()`
+    # and a user who asked for digits should get all of them.
+    spelled = numwords.normalise(run, spell_out=True)
+    assert spelled.split().count("nine") == 5000
