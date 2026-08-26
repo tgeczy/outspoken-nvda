@@ -181,6 +181,18 @@ public:
             }
             ULONG wrote=0;if(FAILED(site->Write(audio.data(),bytes,&wrote))){ok=false;break;}
         }
+        if(ok&&status==0&&!aborted){
+            /* The engines end at the last phoneme with zero trailing
+             * frames -- measured, and the serve bridge is byte-identical
+             * to the NVDA driver -- yet the end of speech arrived clipped
+             * in real SAPI clients.  SAPI's playback path eats the tail
+             * of a stream that ends flush with its data, so the tail it
+             * eats is now silence: 150 ms of zeros after the real audio.
+             * NVDA's own player drains properly, which is why the add-on
+             * never needed this. */
+            BYTE pad[6676]={0};                    /* 150 ms at 22254 Hz */
+            ULONG wrote=0;site->Write(pad,sizeof pad,&wrote);
+        }
         if(!ok&&!aborted)host_drop();    /* a desynced pipe is never reused */
         LeaveCriticalSection(&g_hostLock);
         return aborted||(ok&&status==0)?S_OK:E_FAIL;
