@@ -30,16 +30,25 @@ Get-ChildItem -Recurse (Join-Path $drv "_outspoken") -Directory -Filter "__pycac
 # Embeddable Python, the portable lesson from day one.  The ._pth must name
 # the parent folder or "import outspoken" from the serve script fails --
 # the embeddable build locks sys.path to that file's entries.
+#
+# **3.8.10, deliberately, not current**: it is the last Windows build of
+# CPython that runs on Windows 7, and this community runs Windows 7.  The
+# driver code is 3.7-compatible by construction (minimumNVDAVersion 2023.1
+# shipped Python 3.7), an offline pipe bridge has no security surface that
+# an interpreter version changes, and one identical bundle everywhere beats
+# a newer interpreter that quietly excludes the machines these voices were
+# revived for.
 $py = Join-Path $stage "python"
-if (!(Test-Path (Join-Path $py "python.exe"))) {
-  $pyzip = Join-Path $env:TEMP "python-3.13.1-embed-amd64.zip"
+if (!(Test-Path (Join-Path $py "python38.dll"))) {
+  if (Test-Path $py) { Remove-Item -Recurse -Force $py }
+  $pyzip = Join-Path $env:TEMP "python-3.8.10-embed-amd64.zip"
   if (!(Test-Path $pyzip)) {
-    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.13.1/python-3.13.1-embed-amd64.zip" -OutFile $pyzip
+    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.8.10/python-3.8.10-embed-amd64.zip" -OutFile $pyzip
   }
   Expand-Archive $pyzip -DestinationPath $py -Force
 }
-Set-Content -Encoding ASCII (Join-Path $py "python313._pth") @'
-python313.zip
+Set-Content -Encoding ASCII (Join-Path $py "python38._pth") @'
+python38.zip
 .
 ..
 ..\synthDrivers
