@@ -32,6 +32,7 @@ import os
 import struct
 import sys
 import threading
+import time
 import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -153,8 +154,17 @@ class _StreamPlayer(object):
     forwarding from feed() streams the utterance -- first sound reaches
     SAPI while the rest is still rendering, the same benefit the Panthera
     host's streaming protocol has.
+
+    `last_feed` is load-bearing: the driver's done notification fires when
+    its WORKER queue drains, and the audio thread may still be feeding --
+    in NVDA that is mere bookkeeping, but here "done" used to mean "write
+    the terminator", and whenever the worker outran the audio thread the
+    stream was cut at whatever feed it had reached.  Measured in a live
+    session: no utterance ever exceeded 1.3 s, same text truncating at
+    different feed boundaries run to run.
     """
     out = None
+    last_feed = [0.0]
 
     def __init__(self, *a, **k):
         pass
@@ -163,6 +173,7 @@ class _StreamPlayer(object):
         if _StreamPlayer.out is not None and data:
             _StreamPlayer.out.write(struct.pack("<I", len(data) // 2) + data)
             _StreamPlayer.out.flush()
+            _StreamPlayer.last_feed[0] = time.monotonic()
 
     def stop(self):
         pass
@@ -294,21 +305,36 @@ def main():
             stdout.flush()
             if status:
                 continue
-            #: PCM flows from feed() while the driver renders; the done
-            #: notification says the last buffer has been fed, and a
-            #: cancel ends the wait early -- the driver's own cancel has
-            #: already cut the render, so the terminator follows fast.
+            #: PCM flows from feed() while the driver renders.  The done
+            #: notification alone is NOT the end of the audio -- it fires
+            #: when the driver's worker queue drains, and the audio thread
+            #: may still be feeding -- so the terminator waits for all
+            #: three: done fired, the driver's audio queue empty, and no
+            #: feed for a settle window.  A cancel ends the wait early;
+            #: the driver's own cancel has already cut the render.
             synthDriverHandler.synthDoneSpeaking.arm()
             _StreamPlayer.out = stdout
+            _StreamPlayer.last_feed[0] = time.monotonic()
             try:
                 driver.speak([text.decode("utf-8", "replace")])
-                waited = 0.0
-                while not synthDriverHandler.synthDoneSpeaking.wait(0.05):
-                    waited += 0.05
-                    if cancel_now.is_set() or eof.is_set():
-                        break
-                    if waited >= 120.0:
+                deadline = time.monotonic() + 120.0
+                done = False
+                while not (cancel_now.is_set() or eof.is_set()):
+                    if not done:
+                        done = synthDriverHandler.synthDoneSpeaking.wait(0.03)
+                    else:
+                        time.sleep(0.03)
+                    if time.monotonic() > deadline:
                         driver.cancel()
+                        break
+                    if not done:
+                        continue
+                    try:
+                        drained = driver._audioQueue.empty()
+                    except Exception:
+                        drained = True
+                    if drained and (time.monotonic()
+                                    - _StreamPlayer.last_feed[0]) > 0.12:
                         break
             finally:
                 _StreamPlayer.out = None
