@@ -72,9 +72,10 @@ space.
 > zero". It is a checkbox, because digit-by-digit is genuinely better for
 > phone numbers and identifiers.
 >
-> Not yet done: a user pronunciation dictionary, and the pitch sliders for
-> MacinTalk 2 and Pro, both deliberately inert until they can be made to
-> behave.
+> Not yet done: a user pronunciation dictionary. (The pitch sliders were
+> once listed here as deliberately inert; MacinTalk 2, 3 and Pro all
+> behave now — a probe-calibrated slider, twelve semitones either side of
+> each voice's own pitch.)
 
 ## You must supply the engine
 
