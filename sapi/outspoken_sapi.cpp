@@ -27,6 +27,8 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <cstdio>
+#include <cstdarg>
 
 static HMODULE g_module;
 static long g_objects;
@@ -42,6 +44,33 @@ static const GUID OutspokenWaveFormatEx = {0xc31adbae,0x527f,0x4ff5,{0xa2,0x30,0
  * ever measured is 22254 Hz, and resampling it would be somebody else's
  * opinion about a 1984 voice. */
 static const DWORD NATIVE_RATE = 22254;
+
+/* The black box: one line per utterance in %TEMP%\outspoken_sapi.log,
+ * because the live-client clip survived three fixes and every theory needs
+ * to die of measurement.  Cheap enough to leave on. */
+static void logline(const wchar_t *fmt, ...) {
+    wchar_t path[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"TEMP", path, MAX_PATH);
+    if (!n || n >= MAX_PATH - 24) return;
+    lstrcatW(path, L"\\outspoken_sapi.log");
+    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           0, OPEN_ALWAYS, 0, 0);
+    if (f == INVALID_HANDLE_VALUE) return;
+    wchar_t line[512];
+    va_list ap; va_start(ap, fmt);
+    int len = _vsnwprintf_s(line, 512, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    if (len < 0) len = 511;
+    char out[1100]; int m = WideCharToMultiByte(CP_UTF8, 0, line, len, out, 1060, 0, 0);
+    SYSTEMTIME st; GetLocalTime(&st);
+    char stamp[32];
+    int sn = sprintf_s(stamp, 32, "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    DWORD w;
+    WriteFile(f, stamp, sn, &w, 0);
+    WriteFile(f, out, m, &w, 0);
+    WriteFile(f, "\r\n", 2, &w, 0);
+    CloseHandle(f);
+}
 
 static bool exact(HANDLE h, void *p, DWORD n, bool write) {
     BYTE *b=(BYTE*)p; DWORD done=0, x;
@@ -239,6 +268,9 @@ public:
             }
         }
         if(!ok&&!aborted)host_drop();    /* a desynced pipe is never reused */
+        logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
+                (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
+                ok?1:0,status,aborted?1:0,text.c_str());
         LeaveCriticalSection(&g_hostLock);
         return aborted||(ok&&status==0)?S_OK:E_FAIL;
     }
