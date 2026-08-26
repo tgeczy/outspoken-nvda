@@ -156,6 +156,26 @@ def search_roots():
     except OSError:
         pass
     roots.append(os.path.join(addon, "rom"))
+    #: And the SAPI driver's world, the same courtesy Panthera's drivers pay
+    #: their SAPI sibling: the folder its register step remembered in HKCU,
+    #: read live because it can change while NVDA runs, then the standalone
+    #: default.  Someone who installed the SAPI engine first and extracted
+    #: into its root never keeps the ROMs twice.  The SAPI driver's own
+    #: world is defined by the machine's real APPDATA even under a portable
+    #: NVDA, which is why the environment variable is correct here and
+    #: nowhere else in this module.
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\outSPOKEN SAPI") as key:
+            value, kind = winreg.QueryValueEx(key, "DataPath")
+            if kind == winreg.REG_SZ and value:
+                roots.append(value)
+    except OSError:
+        pass
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(os.path.join(appdata, "outspoken-data"))
     # **Deduplicated, because this list is shown to people.** The pointer file
     # usually names the folder we would have looked in anyway, so the report in
     # the Tools menu listed `macintalk\outspoken` twice and read like a bug.

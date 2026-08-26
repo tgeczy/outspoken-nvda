@@ -21,6 +21,31 @@ This project models only the handful of Macintosh services the engines actually
 touch. Whichever of them you have extracted are the ones offered, so any one
 alone is enough.
 
+**What ships here is a machine with no tape in it.** The outSPOKEN engine and
+its voices are Berkeley Systems' work, and their rights did not evaporate with
+the software: they passed through ALVA to Vispero, who make the screen reader
+half this community runs today. So no release of this project contains a byte
+of engine data — not the add-on, not the SAPI installer — and the packaging
+script refuses to build one that does. What you get instead are the tools:
+point them at your own disk, `.bin` or disk image, and the extractor stages
+the engines where both drivers find them. If a download claims to be these
+voices ready-to-run, it is somebody redistributing property that is not theirs
+to share, and it did not come from here.
+
+## The SAPI 5 driver
+
+Beside the NVDA add-on there is a SAPI 5 engine, for JAWS, System Access,
+and anything else that speaks SAPI — and it is deliberately not a port.
+The engine DLL launches an embedded Python running `sapi/osp_serve.py`,
+which serves **the same driver modules NVDA loads**, so the SAPI voice is
+byte-identical to the NVDA voice by construction;
+`tests/test_sapi_serve.py` asserts exactly that, byte for byte. Measured on
+this machine: 22 ms from request to first sound with the host warm, 131 ms
+cold. The fragment handling carries the JAWS lessons learned in
+TGSpeechbox and Panthera: word-per-fragment feeding with bookmarks between
+never reads bookmark names aloud, and the seam between fragments keeps its
+space.
+
 > **Status: all three engines speak inside NVDA.** English text, fifteen
 > voices, rate, interruption, symbols and numbers. 111 tests:
 > `py -3 -m pytest tests -q`. Working log in
