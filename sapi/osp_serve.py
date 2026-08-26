@@ -33,6 +33,7 @@ RATE = 22254
 
 REQ = 0x4F535034            # 'OSP4'
 RSP = 0x4F535052            # 'OSPR'
+CANCEL = 0x4F535043         # 'OSPC' -- magic alone, no payload
 
 
 def _install_fakes(data_root, player_cls):
@@ -201,18 +202,54 @@ def main():
 
         stdin = sys.stdin.buffer
         stdout = sys.stdout.buffer
+
+        #: Requests and cancels arrive on a reader thread, so a cancel can
+        #: land WHILE an utterance renders -- the same shape as the NVDA
+        #: driver's own queue-plus-cancel, because it is the same driver.
+        #: A cancel frame is the 4-byte magic 'OSPC' and nothing else.
+        inbox = []
+        inbox_ready = threading.Event()
+        cancel_now = threading.Event()
+        eof = threading.Event()
+
+        def reader():
+            while True:
+                magic_bytes = _exact(stdin, 4)
+                if magic_bytes is None:
+                    break
+                magic = struct.unpack("<I", magic_bytes)[0]
+                if magic == CANCEL:
+                    cancel_now.set()
+                    try:
+                        driver.cancel()
+                    except Exception:
+                        pass
+                    continue
+                if magic != REQ:
+                    break
+                rest = _exact(stdin, 20)
+                if rest is None:
+                    break
+                rate, pitch, volume, nv, nt = struct.unpack("<iiiII", rest)
+                name = _exact(stdin, nv)
+                text = _exact(stdin, nt)
+                if name is None or text is None:
+                    break
+                inbox.append((rate, pitch, volume, name, text))
+                inbox_ready.set()
+            eof.set()
+            inbox_ready.set()
+
+        threading.Thread(target=reader, daemon=True).start()
+
         while True:
-            head = _exact(stdin, 24)
-            if head is None:
-                return 0
-            magic, rate, pitch, volume, nv, nt = struct.unpack("<IiiiII",
-                                                               head)
-            if magic != REQ:
-                return 2
-            name = _exact(stdin, nv)
-            text = _exact(stdin, nt)
-            if name is None or text is None:
-                return 0
+            while not inbox:
+                if eof.is_set():
+                    return 0
+                inbox_ready.wait(0.5)
+                inbox_ready.clear()
+            rate, pitch, volume, name, text = inbox.pop(0)
+            cancel_now.clear()
             status = 0
             try:
                 voice = name.decode("utf-8")
@@ -228,13 +265,21 @@ def main():
             if status:
                 continue
             #: PCM flows from feed() while the driver renders; the done
-            #: notification says the last buffer has been fed.
+            #: notification says the last buffer has been fed, and a
+            #: cancel ends the wait early -- the driver's own cancel has
+            #: already cut the render, so the terminator follows fast.
             synthDriverHandler.synthDoneSpeaking.arm()
             _StreamPlayer.out = stdout
             try:
                 driver.speak([text.decode("utf-8", "replace")])
-                if not synthDriverHandler.synthDoneSpeaking.wait(120.0):
-                    driver.cancel()
+                waited = 0.0
+                while not synthDriverHandler.synthDoneSpeaking.wait(0.05):
+                    waited += 0.05
+                    if cancel_now.is_set() or eof.is_set():
+                        break
+                    if waited >= 120.0:
+                        driver.cancel()
+                        break
             finally:
                 _StreamPlayer.out = None
             stdout.write(struct.pack("<I", 0))

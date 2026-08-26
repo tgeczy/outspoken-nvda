@@ -26,11 +26,12 @@
 #include <olectl.h>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 static HMODULE g_module;
 static long g_objects;
 static const CLSID CLSID_Outspoken = {0xa1f4055c,0xb6c2,0x4c27,{0xab,0x6a,0xaf,0x54,0xc4,0x09,0xa3,0x09}};
-static const unsigned REQ_MAGIC = 0x4F535034, RSP_MAGIC = 0x4F535052; /* OSP4 / OSPR */
+static const unsigned REQ_MAGIC = 0x4F535034, RSP_MAGIC = 0x4F535052, CANCEL_MAGIC = 0x4F535043; /* OSP4 / OSPR / OSPC */
 /* SPDFID_WaveFormatEx, by value: the ONE format GUID SAPI recognises as
  * "the WAVEFORMATEX that follows describes the audio".  A fresh GUID here
  * registers fine and then speaks silence -- SAPI cannot negotiate a format
@@ -131,7 +132,23 @@ public:
     STDMETHODIMP Speak(DWORD,REFGUID,const WAVEFORMATEX*,const SPVTEXTFRAG *frags,ISpTTSEngineSite *site){
         if(!token||!site)return E_UNEXPECTED;
         std::wstring text;
+        /* Bookmarks are the pacing contract, not decoration: NVDA's SAPI
+         * driver interleaves <Bookmark Mark="N"/> with the text and waits
+         * for the TTS_BOOKMARK events to advance -- an engine that stays
+         * silent about them is an engine whose indexes never arrive, and
+         * NVDA's scheduler eventually purges what it thinks is a stuck
+         * utterance.  That purge was heard as the end of speech clipping,
+         * and the cold restart after it as arrowing lag. */
+        struct Mark { std::wstring name; size_t chars; };
+        std::vector<Mark> marks;
         for(auto f=frags;f;f=f->pNext){
+            if(f->State.eAction==SPVA_Bookmark){
+                if(f->pTextStart&&f->ulTextLen){
+                    Mark m; m.name.assign(f->pTextStart,f->ulTextLen);
+                    m.chars=text.size(); marks.push_back(m);
+                }
+                continue;
+            }
             switch(f->State.eAction){
             case SPVA_Speak: case SPVA_SpellOut: case SPVA_Pronounce: break;
             default: continue;
@@ -141,7 +158,7 @@ public:
                 text.push_back(L' ');
             text.append(f->pTextStart,f->ulTextLen);
         }
-        if(text.empty())return S_OK;
+        if(text.empty()&&marks.empty())return S_OK;
         std::wstring root=token_string(token,L"DataPath"), voice=token_string(token,L"VoiceId");
         if(root.empty()){
             wchar_t buf[MAX_PATH]; DWORD n=GetEnvironmentVariableW(L"APPDATA",buf,MAX_PATH);
@@ -162,36 +179,64 @@ public:
         std::string v=utf8(voice), u=utf8(text);
         unsigned req=REQ_MAGIC,nv=(unsigned)v.size(),nt=(unsigned)u.size();
         EnterCriticalSection(&g_hostLock);
-        bool ok=host_ensure(root);
-        ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&(nt==0||exact(g_in,(void*)u.data(),nt,true));
-        unsigned magic=0;int status=-1;bool aborted=false;
-        ok=ok&&exact(g_out,&magic,4,false)&&exact(g_out,&status,4,false)&&magic==RSP_MAGIC;
-        std::vector<BYTE> audio;
-        while(ok&&status==0){
-            unsigned frames=0;
-            if(!exact(g_out,&frames,4,false)){ok=false;break;}
-            if(!frames)break;
-            unsigned bytes=frames*2; audio.resize(bytes);
-            if(!exact(g_out,audio.data(),bytes,false)){ok=false;break;}
-            if(site->GetActions()&SPVES_ABORT){
-                /* Instant cancel is worth a cold start: kill the host
-                 * mid-utterance rather than draining a render nobody
-                 * wants.  131 ms rebuilds it on the next Speak. */
-                aborted=true;host_drop();break;
+        bool ok=true;int status=0;bool aborted=false;
+        unsigned long long total=0;
+        if(!text.empty()){
+            ok=host_ensure(root);
+            ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
+            unsigned magic=0;status=-1;
+            ok=ok&&exact(g_out,&magic,4,false)&&exact(g_out,&status,4,false)&&magic==RSP_MAGIC;
+            std::vector<BYTE> audio;
+            while(ok&&status==0){
+                unsigned frames=0;
+                if(!exact(g_out,&frames,4,false)){ok=false;break;}
+                if(!frames)break;
+                unsigned bytes=frames*2; audio.resize(bytes);
+                if(!exact(g_out,audio.data(),bytes,false)){ok=false;break;}
+                if(!aborted&&(site->GetActions()&SPVES_ABORT)){
+                    /* Graceful cancel keeps the host warm: the serve side
+                     * runs the driver's own instant cancel when the OSPC
+                     * frame lands, so the terminator follows fast and the
+                     * next utterance costs 21 ms, not a cold start.  The
+                     * first build killed the process here, and every
+                     * arrow after a cancel paid 158 ms plus engine
+                     * warm-up -- the reported arrowing lag. */
+                    aborted=true;
+                    unsigned c=CANCEL_MAGIC;
+                    if(!exact(g_in,&c,4,true)){host_drop();break;}
+                    continue;                      /* drain to terminator */
+                }
+                if(aborted)continue;               /* draining, not speaking */
+                ULONG wrote=0;if(FAILED(site->Write(audio.data(),bytes,&wrote))){ok=false;break;}
+                total+=bytes;
             }
-            ULONG wrote=0;if(FAILED(site->Write(audio.data(),bytes,&wrote))){ok=false;break;}
         }
         if(ok&&status==0&&!aborted){
-            /* The engines end at the last phoneme with zero trailing
-             * frames -- measured, and the serve bridge is byte-identical
-             * to the NVDA driver -- yet the end of speech arrived clipped
-             * in real SAPI clients.  SAPI's playback path eats the tail
-             * of a stream that ends flush with its data, so the tail it
-             * eats is now silence: 150 ms of zeros after the real audio.
-             * NVDA's own player drains properly, which is why the add-on
-             * never needed this. */
-            BYTE pad[6676]={0};                    /* 150 ms at 22254 Hz */
-            ULONG wrote=0;site->Write(pad,sizeof pad,&wrote);
+            /* The pacing contract: one TTS_BOOKMARK event per bookmark
+             * fragment.  The audio streamed as one utterance, so the
+             * offsets are proportional estimates by character position --
+             * NVDA schedules the index at its own player position when
+             * the event arrives, so arrival is what unblocks it and the
+             * offset is bookkeeping. */
+            for(size_t i=0;i<marks.size();i++){
+                SPEVENT ev;memset(&ev,0,sizeof ev);
+                ev.eEventId=SPEI_TTS_BOOKMARK;
+                ev.elParamType=SPET_LPARAM_IS_STRING;
+                ev.ullAudioStreamOffset=text.empty()?0:
+                    (unsigned long long)((double)marks[i].chars/(double)text.size()*(double)total);
+                ev.wParam=(WPARAM)_wtol(marks[i].name.c_str());
+                ev.lParam=(LPARAM)marks[i].name.c_str();
+                site->AddEvents(&ev,1);
+            }
+            /* And the tail: the engines end at the last phoneme with zero
+             * trailing frames, and SAPI's playback path eats the tail of
+             * a stream that ends flush with its data.  150 ms of silence
+             * makes what it eats silent.  NVDA's own player drains
+             * properly, which is why the add-on never needed this. */
+            if(total){
+                BYTE pad[6676]={0};                /* 150 ms at 22254 Hz */
+                ULONG wrote=0;site->Write(pad,sizeof pad,&wrote);
+            }
         }
         if(!ok&&!aborted)host_drop();    /* a desynced pipe is never reused */
         LeaveCriticalSection(&g_hostLock);
