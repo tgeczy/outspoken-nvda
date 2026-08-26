@@ -41,7 +41,7 @@ def _via_serve(voice, text, rate, pitch, volume):
         stderr=subprocess.DEVNULL)
     try:
         v, t = voice.encode(), text.encode()
-        proc.stdin.write(struct.pack("<IiiiII", REQ, rate, pitch, volume,
+        proc.stdin.write(struct.pack("<IIiiiII", REQ, 1, rate, pitch, volume,
                                      len(v), len(t)) + v + t)
         proc.stdin.flush()
         magic, status = struct.unpack("<Ii", _exact(proc.stdout, 8))

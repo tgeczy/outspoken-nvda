@@ -108,6 +108,7 @@ static std::wstring token_string(ISpObjectToken *t, const wchar_t *name) {
 static CRITICAL_SECTION g_hostLock;
 static bool g_lockReady;
 static HANDLE g_proc, g_in, g_out;
+static unsigned g_seq;
 
 static void host_drop() {
     if(g_proc){TerminateProcess(g_proc,0);CloseHandle(g_proc);g_proc=0;}
@@ -210,9 +211,10 @@ public:
         EnterCriticalSection(&g_hostLock);
         bool ok=true;int status=0;bool aborted=false;
         unsigned long long total=0;
+        unsigned seq=++g_seq;
         if(!text.empty()){
             ok=host_ensure(root);
-            ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
+            ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
             unsigned magic=0;status=-1;
             ok=ok&&exact(g_out,&magic,4,false)&&exact(g_out,&status,4,false)&&magic==RSP_MAGIC;
             std::vector<BYTE> audio;
@@ -231,8 +233,14 @@ public:
                      * arrow after a cancel paid 158 ms plus engine
                      * warm-up -- the reported arrowing lag. */
                     aborted=true;
+                    /* The cancel names its target: pipes buffer, and an
+                     * untagged cancel arriving after this utterance
+                     * finished was cutting the NEXT one -- the black box
+                     * showed aborted=0 utterances ending at a fraction of
+                     * their audio, which is what the ear heard as tails
+                     * clipping on the slow engines. */
                     unsigned c=CANCEL_MAGIC;
-                    if(!exact(g_in,&c,4,true)){host_drop();break;}
+                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();break;}
                     continue;                      /* drain to terminator */
                 }
                 if(aborted)continue;               /* draining, not speaking */

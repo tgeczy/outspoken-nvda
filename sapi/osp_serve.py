@@ -10,7 +10,13 @@ whole design: there is no port to drift, because there is no port.
 
 Requests arrive on stdin, framed:
 
-    'OSP4' | rate | pitch | volume | namelen | textlen | name | text
+    'OSP4' | seq | rate | pitch | volume | namelen | textlen | name | text
+
+and a cancel is 'OSPC' | seq.  **The seq is the whole point of the cancel
+frame**: pipes buffer, so a cancel sent for one utterance can arrive after
+that utterance already finished and the next one started -- and an untagged
+cancel then cuts the wrong render, which is heard as the NEXT utterance
+losing its tail.  A cancel only acts when its seq is the one rendering.
 
 rate/pitch/volume are the driver's own 0-100 integers.  The response is
 
@@ -206,11 +212,19 @@ def main():
         #: Requests and cancels arrive on a reader thread, so a cancel can
         #: land WHILE an utterance renders -- the same shape as the NVDA
         #: driver's own queue-plus-cancel, because it is the same driver.
-        #: A cancel frame is the 4-byte magic 'OSPC' and nothing else.
+        #:
+        #: `current` holds the seq of the utterance being rendered, and a
+        #: cancel acts ONLY on a seq match.  The first build cancelled
+        #: unconditionally, and a stale cancel -- its target already
+        #: finished, the pipe having buffered it -- cut whatever rendered
+        #: next: heard as the following utterance losing its tail, worst
+        #: on the slow engines whose long renders widen the race.
         inbox = []
         inbox_ready = threading.Event()
         cancel_now = threading.Event()
         eof = threading.Event()
+        current = [0]
+        cancelled_seqs = set()
 
         def reader():
             while True:
@@ -219,23 +233,30 @@ def main():
                     break
                 magic = struct.unpack("<I", magic_bytes)[0]
                 if magic == CANCEL:
-                    cancel_now.set()
-                    try:
-                        driver.cancel()
-                    except Exception:
-                        pass
+                    seq_bytes = _exact(stdin, 4)
+                    if seq_bytes is None:
+                        break
+                    seq = struct.unpack("<I", seq_bytes)[0]
+                    cancelled_seqs.add(seq)
+                    if seq == current[0]:
+                        cancel_now.set()
+                        try:
+                            driver.cancel()
+                        except Exception:
+                            pass
                     continue
                 if magic != REQ:
                     break
-                rest = _exact(stdin, 20)
+                rest = _exact(stdin, 24)
                 if rest is None:
                     break
-                rate, pitch, volume, nv, nt = struct.unpack("<iiiII", rest)
+                seq, rate, pitch, volume, nv, nt = struct.unpack("<IiiiII",
+                                                                 rest)
                 name = _exact(stdin, nv)
                 text = _exact(stdin, nt)
                 if name is None or text is None:
                     break
-                inbox.append((rate, pitch, volume, name, text))
+                inbox.append((seq, rate, pitch, volume, name, text))
                 inbox_ready.set()
             eof.set()
             inbox_ready.set()
@@ -248,7 +269,16 @@ def main():
                     return 0
                 inbox_ready.wait(0.5)
                 inbox_ready.clear()
-            rate, pitch, volume, name, text = inbox.pop(0)
+            seq, rate, pitch, volume, name, text = inbox.pop(0)
+            if seq in cancelled_seqs:
+                #: Cancelled before it rendered: answer with an empty,
+                #: well-formed response so the protocol stays in step.
+                cancelled_seqs.discard(seq)
+                stdout.write(struct.pack("<Ii", RSP, 0))
+                stdout.write(struct.pack("<I", 0))
+                stdout.flush()
+                continue
+            current[0] = seq
             cancel_now.clear()
             status = 0
             try:
@@ -282,6 +312,8 @@ def main():
                         break
             finally:
                 _StreamPlayer.out = None
+            current[0] = 0
+            cancelled_seqs.discard(seq)
             stdout.write(struct.pack("<I", 0))
             stdout.flush()
     finally:
