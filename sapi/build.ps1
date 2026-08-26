@@ -16,10 +16,20 @@ foreach ($arch in "x86","x64") {
   & $cl /nologo /EHsc /O2 /MT /LD /DUNICODE /D_UNICODE "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "outspoken_sapi.cpp") "/Fe$out\outspoken_sapi.dll" "/Fo$out\" /link "/DEF:$PSScriptRoot\outspoken_sapi.def" "/LIBPATH:$($msvc.FullName)\lib\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$arch" sapi.lib ole32.lib advapi32.lib
   if ($LASTEXITCODE) { throw "$arch SAPI DLL build failed ($LASTEXITCODE)" }
 }
+# The console-free way into the settings dialog: a GUI-subsystem launcher,
+# so no console ever flashes and steals focus.  settings.cmd stays for
+# anyone at a command line.
+$launcherCl = Join-Path $msvc.FullName "bin\Hostx64\x64\cl.exe"
+& $launcherCl /nologo /O2 /MT /W3 "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\ucrt" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" (Join-Path $PSScriptRoot "settings_launcher.c") "/Fe$stage\outspoken_settings.exe" "/Fo$stage\" /link /SUBSYSTEM:WINDOWS "/LIBPATH:$($msvc.FullName)\lib\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\x64" user32.lib kernel32.lib
+if ($LASTEXITCODE) { throw "settings launcher build failed ($LASTEXITCODE)" }
+Set-Content -Encoding ASCII (Join-Path $stage "settings.cmd") '@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0settings.ps1"'
+
 # The serve bridge and the driver it serves.  This is the whole point: the
 # same modules NVDA runs, not a port -- see tests/test_sapi_serve.py.
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage
+Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
 $drv = Join-Path $stage "synthDrivers"
 New-Item -ItemType Directory -Force $drv,(Join-Path $drv "_outspoken") | Out-Null
 Copy-Item (Join-Path $repo "addon\synthDrivers\outspoken.py") $drv

@@ -37,13 +37,22 @@ Source: "{#StageDir}\x86\outspoken_sapi.dll"; DestDir: "{app}\x86"
 Source: "{#StageDir}\x64\outspoken_sapi.dll"; DestDir: "{app}\x64"; Check: Is64BitInstallMode
 Source: "{#StageDir}\osp_serve.py"; DestDir: "{app}"
 Source: "{#StageDir}\register.ps1"; DestDir: "{app}"
+Source: "{#StageDir}\settings.ps1"; DestDir: "{app}"
+Source: "{#StageDir}\settings.cmd"; DestDir: "{app}"
+Source: "{#StageDir}\outspoken_settings.exe"; DestDir: "{app}"
 Source: "{#StageDir}\synthDrivers\*"; DestDir: "{app}\synthDrivers"; Flags: recursesubdirs
 Source: "{#StageDir}\python\*"; DestDir: "{app}\python"; Flags: recursesubdirs
+
+[Icons]
+; The launcher rather than the batch file: a GUI-subsystem program creates
+; no console, so nothing flashes or steals focus before the dialog appears.
+Name: "{autoprograms}\outSPOKEN SAPI settings"; Filename: "{app}\outspoken_settings.exe"; WorkingDir: "{app}"
 
 [Run]
 ; Registering with no data present is a clean no-op: the serve bridge lists
 ; the voices the data root actually provides, and tokens follow the data.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -Register"; StatusMsg: "Registering outSPOKEN voices from your speech data..."; Flags: runhidden
+Filename: "{app}\outspoken_settings.exe"; Description: "Open outSPOKEN SAPI settings"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -Unregister"; RunOnceId: "UnregisterOutspoken"; Flags: runhidden

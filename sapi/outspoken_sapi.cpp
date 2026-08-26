@@ -31,7 +31,12 @@ static HMODULE g_module;
 static long g_objects;
 static const CLSID CLSID_Outspoken = {0xa1f4055c,0xb6c2,0x4c27,{0xab,0x6a,0xaf,0x54,0xc4,0x09,0xa3,0x09}};
 static const unsigned REQ_MAGIC = 0x4F535034, RSP_MAGIC = 0x4F535052; /* OSP4 / OSPR */
-static const GUID OutspokenWaveFormatEx = {0x54b2ca89,0x04d6,0x4aa7,{0x8a,0xc5,0x83,0x2c,0xc1,0x24,0x68,0x8c}};
+/* SPDFID_WaveFormatEx, by value: the ONE format GUID SAPI recognises as
+ * "the WAVEFORMATEX that follows describes the audio".  A fresh GUID here
+ * registers fine and then speaks silence -- SAPI cannot negotiate a format
+ * it has never heard of.  Found by Tomi's ear inside ten minutes of the
+ * first build reaching a real SAPI client. */
+static const GUID OutspokenWaveFormatEx = {0xc31adbae,0x527f,0x4ff5,{0xa2,0x30,0xf6,0x2b,0xb6,0x1f,0xf7,0x0c}};
 /* The engines' native rate: every Macintosh sound buffer this project has
  * ever measured is 22254 Hz, and resampling it would be somebody else's
  * opinion about a 1984 voice. */
