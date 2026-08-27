@@ -45,10 +45,66 @@ static const GUID OutspokenWaveFormatEx = {0xc31adbae,0x527f,0x4ff5,{0xa2,0x30,0
  * opinion about a 1984 voice. */
 static const DWORD NATIVE_RATE = 22254;
 
-/* The black box: one line per utterance in %TEMP%\outspoken_sapi.log,
- * because the live-client clip survived three fixes and every theory needs
- * to die of measurement.  Cheap enough to leave on. */
+/* The black box -- **off unless somebody asks for it.**
+ *
+ * The live-client clip survived three fixes and only this file killed it,
+ * which earned it a place here.  It did not earn the place it first took,
+ * which was on, always, for everyone: a line per utterance is a line per
+ * keystroke, appended forever to a file in %TEMP% that never rotates, and
+ * the line carried the first forty characters of the text.  For a screen
+ * reader that is a running transcript of somebody's mail, their messages
+ * and their bank, in a folder anything running as them can read.
+ *
+ * `Diagnostics` in HKCU, beside the DataPath the settings program already
+ * keeps there.  0, the default, writes nothing and creates no file.  1
+ * writes the measurements, which are what actually convicted.  2 adds a
+ * slice of the text, for the rare report that is about particular words --
+ * two deliberate steps to reach the thing with words in it.  Capped either
+ * way, because a diagnostic nobody turns off is a disk that fills. */
+static const DWORD LOG_CAP = 4u * 1024u * 1024u;
+
+static int diagLevel() {
+    HKEY k; DWORD v = 0, n = sizeof v, t;
+    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
+                       KEY_READ, &k)) {
+        if (RegQueryValueExW(k, L"Diagnostics", 0, &t, (BYTE*)&v, &n)
+            || t != REG_DWORD) v = 0;
+        RegCloseKey(k);
+    }
+    return (int)v;
+}
+/* And clear up after 1.1.0, which wrote without asking.
+ *
+ * Everyone who installed it has a log in %TEMP% still growing a line per
+ * utterance, with forty characters of each one in it, and turning the tap
+ * off does not empty the bucket.  Once per process, with diagnostics off,
+ * our own files go -- only the names this engine writes, only in the temp
+ * folder, and only when nothing is meant to be being collected. */
+static void sweep_logs() {
+    static LONG done;
+    if (InterlockedExchange(&done, 1) || diagLevel()) return;
+    wchar_t dir[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"TEMP", dir, MAX_PATH);
+    if (!n || n >= MAX_PATH - 48) return;
+    const wchar_t *globs[] = {L"\\outspoken_sapi.log",
+                              L"\\outspoken_sapi_serve-*.log"};
+    for (int g = 0; g < 2; g++) {
+        wchar_t pat[MAX_PATH]; lstrcpyW(pat, dir); lstrcatW(pat, globs[g]);
+        WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW(pat, &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            wchar_t victim[MAX_PATH];
+            lstrcpyW(victim, dir); lstrcatW(victim, L"\\");
+            lstrcatW(victim, fd.cFileName);
+            DeleteFileW(victim);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+}
+
 static void logline(const wchar_t *fmt, ...) {
+    if (!diagLevel()) return;
     wchar_t path[MAX_PATH];
     DWORD n = GetEnvironmentVariableW(L"TEMP", path, MAX_PATH);
     if (!n || n >= MAX_PATH - 24) return;
@@ -56,6 +112,16 @@ static void logline(const wchar_t *fmt, ...) {
     HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            0, OPEN_ALWAYS, 0, 0);
     if (f == INVALID_HANDLE_VALUE) return;
+    {   /* Start over rather than grow without end. */
+        LARGE_INTEGER sz;
+        if (GetFileSizeEx(f, &sz) && sz.QuadPart > (LONGLONG)LOG_CAP) {
+            CloseHandle(f);
+            f = CreateFileW(path, GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                            CREATE_ALWAYS, 0, 0);
+            if (f == INVALID_HANDLE_VALUE) return;
+        }
+    }
     wchar_t line[512];
     va_list ap; va_start(ap, fmt);
     int len = _vsnwprintf_s(line, 512, _TRUNCATE, fmt, ap);
@@ -122,6 +188,7 @@ static bool host_alive() {
     return true;
 }
 static bool host_ensure(const std::wstring &dataRoot) {
+    sweep_logs();
     if(host_alive())return true;
     std::wstring base=module_dir();
     std::wstring cmd=L"\""+base+L"\\python\\python.exe\" \""+base+
@@ -129,10 +196,30 @@ static bool host_ensure(const std::wstring &dataRoot) {
     SECURITY_ATTRIBUTES sa={sizeof(sa),0,TRUE}; HANDLE inR,inW,outR,outW;
     if(!CreatePipe(&inR,&inW,&sa,0)||!CreatePipe(&outR,&outW,&sa,0))return false;
     SetHandleInformation(inW,HANDLE_FLAG_INHERIT,0);SetHandleInformation(outR,HANDLE_FLAG_INHERIT,0);
-    STARTUPINFOW si={sizeof(si)};si.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;si.wShowWindow=SW_HIDE;si.hStdInput=inR;si.hStdOutput=outW;si.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    /* The serve process never gets a pipe for its stderr.  A resident child
+     * that writes a traceback into a pipe nobody drains stops dead when the
+     * buffer fills, and that would present as speech ending for good; NUL
+     * discards and cannot block.  With diagnostics on it goes to a file
+     * instead, which is where a Python traceback is worth having. */
+    HANDLE errH=INVALID_HANDLE_VALUE;
+    {
+        SECURITY_ATTRIBUTES esa={sizeof(esa),0,TRUE};
+        wchar_t epath[MAX_PATH]; DWORD en=GetEnvironmentVariableW(L"TEMP",epath,MAX_PATH);
+        if(diagLevel()&&en&&en<MAX_PATH-40){
+            wchar_t leaf[40];
+            swprintf_s(leaf,40,L"\\outspoken_sapi_serve-%u.log",(unsigned)GetCurrentProcessId());
+            lstrcatW(epath,leaf);
+            errH=CreateFileW(epath,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,&esa,OPEN_ALWAYS,0,0);
+        }
+        if(errH==INVALID_HANDLE_VALUE)
+            errH=CreateFileW(L"NUL",GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&esa,OPEN_EXISTING,0,0);
+    }
+    STARTUPINFOW si={sizeof(si)};si.dwFlags=STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;si.wShowWindow=SW_HIDE;si.hStdInput=inR;si.hStdOutput=outW;
+    si.hStdError=errH!=INVALID_HANDLE_VALUE?errH:GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION pi={}; std::vector<wchar_t> mutableCmd(cmd.begin(),cmd.end());mutableCmd.push_back(0);
     BOOL made=CreateProcessW(0,mutableCmd.data(),0,0,TRUE,CREATE_NO_WINDOW,0,base.c_str(),&si,&pi);
     CloseHandle(inR);CloseHandle(outW);
+    if(errH!=INVALID_HANDLE_VALUE)CloseHandle(errH);
     if(!made){CloseHandle(inW);CloseHandle(outR);return false;}
     CloseHandle(pi.hThread);
     g_proc=pi.hProcess;g_in=inW;g_out=outR;
@@ -276,9 +363,15 @@ public:
             }
         }
         if(!ok&&!aborted)host_drop();    /* a desynced pipe is never reused */
-        logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
-                (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
-                ok?1:0,status,aborted?1:0,text.c_str());
+        /* The measurements convicted all four bugs; the words never did. */
+        if(diagLevel()>=2)
+            logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
+                    (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
+                    ok?1:0,status,aborted?1:0,text.c_str());
+        else
+            logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d",
+                    (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
+                    ok?1:0,status,aborted?1:0);
         LeaveCriticalSection(&g_hostLock);
         return aborted||(ok&&status==0)?S_OK:E_FAIL;
     }

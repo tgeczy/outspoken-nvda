@@ -46,6 +46,26 @@ TGSpeechbox and Panthera: word-per-fragment feeding with bookmarks between
 never reads bookmark names aloud, and the seam between fragments keeps its
 space.
 
+**Nothing is logged unless you ask for it, since 1.1.1.** 1.1.0 wrote a
+line per utterance to `%TEMP%`, forever, with the first forty characters of
+the text in it — which for a screen reader is a transcript of whatever its
+owner reads, sitting in a folder anything running as them can open. That
+was a debugging measure that should never have shipped switched on. It is
+now off by default, and with it off no file is created at all: the engine
+writes nothing and the serve process's diagnostics go to `NUL`. **A 1.1.1
+engine deletes the logs 1.1.0 left behind**, so upgrading clears up. To
+turn it on for a bug report:
+
+```
+reg add "HKCU\Software\outSPOKEN SAPI" /v Diagnostics /t REG_DWORD /d 1 /f
+```
+
+`1` records the measurements — byte counts, flags, whether an utterance was
+abandoned — and those are what convicted all four of the COM-layer bugs
+this log was written for. `2` also records a slice of the spoken text, and
+is worth using only when the report is about particular words. Either way
+the file stops at 4 MB and starts over. `/d 0` turns it off again.
+
 > **Status: all three engines speak inside NVDA.** English text, fifteen
 > voices, rate, interruption, symbols and numbers. 111 tests:
 > `py -3 -m pytest tests -q`. Working log in
