@@ -279,14 +279,31 @@ static int      g_snap_n;
  * the run a record of playback rather than of what playback was handed. */
 static int      g_snap_halt;
 
+/* Set for the duration of a _NewPtr/_NewHandle that did NOT ask to clear.
+ *
+ * The real Memory Manager returns whatever bytes were there before, and only
+ * the *Clear variants zero.  Zeroing everything is a lie a working engine can
+ * lean on: MacinTalk Pro's Spanish front-end reads one word past a control
+ * buffer, expecting the next word to be nonzero the way real uninitialized
+ * heap is, and an all-zero block sends that scan off the end for tens of
+ * thousands of words until it shreds the heap.  So a non-cleared block gets a
+ * word pattern with a nonzero in every odd word -- enough for the scan to stop
+ * -- while every even word stays zero, so a buffer's own zero terminator still
+ * lands where the engine put it.  gala never depended on either and renders
+ * byte-for-byte the same; see the note by _X2Fix for the other half of this. */
+static int g_alloc_dirty = 0;
+
 static unsigned heap_alloc(unsigned size)
 {
-    unsigned p;
+    unsigned p, i;
     size = (size + 3u) & ~3u;
     if (g_heap_next + size > g_heap_end) return 0;
     p = g_heap_next;
     g_heap_next += size;
-    memset(g_ram + p, 0, size);
+    if (g_alloc_dirty)
+        for (i = 0; i < size; i++) g_ram[p + i] = (i & 2u) ? 0xA5 : 0x00;
+    else
+        memset(g_ram + p, 0, size);
     return p;
 }
 

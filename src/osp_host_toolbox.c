@@ -233,6 +233,20 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         tb_return(exc_sp, 8, val, 4);
         return 1;
     }
+    /* _X2Fix / _X2Frac take a pointer to an extended and return the scalar in
+     * place of that pointer -- every call site in every module (Fix2X's twin
+     * `Fix2X` reserves a result slot; these do not) is
+     *
+     *     pea     -$a(a6)        push the extended pointer   (4 bytes)
+     *     _X2Fix
+     *     move.l  (a7)+, dst     pop the result over the same slot
+     *
+     * so the result overwrites the argument and NOTHING is popped: param_bytes
+     * must be 0, not 4.  With 4 the result landed one slot high and SP came back
+     * four bytes light per call; two calls in the 'pbas' setter left a function's
+     * `movem` restore reading eight bytes into its own saved d6/d7.  gala never
+     * noticed -- its voice-select ignores those registers -- but Spanish Pro's
+     * reads d7 as a status and saw the pitch's low word as an error (20125). */
     case 0xA844: {                       /* _X2Fix(extended *) -> Fixed       */
         unsigned src = m68k_read_memory_32(csp);
         double v = src ? ext80_read(src) : 0.0;
@@ -241,7 +255,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         if (f > 2147483647.0) r = 2147483647;
         else if (f < -2147483648.0) r = -2147483648LL;
         else r = (long long)(f < 0 ? f - 0.5 : f + 0.5);
-        tb_return(exc_sp, 4, (unsigned)r, 4);
+        tb_return(exc_sp, 0, (unsigned)r, 4);
         return 1;
     }
     case 0xA846: {                       /* _X2Frac(extended *) -> Fract      */
@@ -252,7 +266,7 @@ static int serve_toolbox_trap(unsigned short word, unsigned exc_sp,
         if (f > 2147483647.0) r = 2147483647;
         else if (f < -2147483648.0) r = -2147483648LL;
         else r = (long long)(f < 0 ? f - 0.5 : f + 0.5);
-        tb_return(exc_sp, 4, (unsigned)r, 4);
+        tb_return(exc_sp, 0, (unsigned)r, 4);
         return 1;
     }
     case 0xA9EB:                         /* _Pack4 / FP68K                   */

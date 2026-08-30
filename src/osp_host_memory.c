@@ -78,7 +78,14 @@ static void note_fault(unsigned addr, int write, int size)
     g_fault_count++;
 }
 
-static int in_ram(unsigned a, unsigned n) { return (a + n) <= g_ram_size; }
+/* Overflow-safe. `(a + n) <= g_ram_size` looks right and is a trap: a wild 68k
+ * pointer near 0xFFFFFFFF makes `a + n` wrap to a small number, the check
+ * passes, and the host dereferences `g_ram + a` -- gigabytes past the block, an
+ * x64 access violation that takes NVDA down instead of the fault we record.
+ * MacinTalk Pro produces exactly such a pointer when a fast-typed utterance is
+ * cancelled mid-synthesis (`gala:Victoria`, one keystroke interrupting the
+ * next): the emulated -1 must land in note_fault, never in the OS. */
+static int in_ram(unsigned a, unsigned n) { return a < g_ram_size && n <= g_ram_size - a; }
 
 /* A write watchpoint.  When a value in emulated memory is wrong and static
  * reading has not found who sets it, ask the machine instead: record the PC of

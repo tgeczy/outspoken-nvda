@@ -371,13 +371,21 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
 
     switch (base) {
     case 0xA11E: {                     /* _NewPtr  -- size in D0, ptr in A0 */
-        unsigned p = heap_alloc(d0);
+        /* Bit 9 is the Clear flag: _NewPtr leaves the block uninitialized,
+         * _NewPtrClear zeros it.  See heap_alloc's g_alloc_dirty note. */
+        unsigned p;
+        g_alloc_dirty = !(word & 0x0200u);
+        p = heap_alloc(d0);
+        g_alloc_dirty = 0;
         *a0_out = p; *d0_out = p ? 0 : (unsigned)(-108) /* memFullErr */;
         m68k_write_memory_16(MEM_ERR_ADDR, p ? 0u : 0xFF94u);
         return 1;
     }
     case 0xA122: {                     /* _NewHandle -- size in D0, hdl A0 */
-        unsigned h = heap_new_handle(d0);
+        unsigned h;
+        g_alloc_dirty = !(word & 0x0200u);   /* _NewHandleClear zeros; this may not */
+        h = heap_new_handle(d0);
+        g_alloc_dirty = 0;
         *a0_out = h; *d0_out = h ? 0 : (unsigned)(-108);
         m68k_write_memory_16(MEM_ERR_ADDR, h ? 0u : 0xFF94u);
         return 1;

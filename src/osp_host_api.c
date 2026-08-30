@@ -153,8 +153,20 @@ OSP_API int osp_set_cpu(int proc)
 
 OSP_API void osp_heap_init(unsigned base, unsigned size)
 {
+    unsigned i;
     g_heap_base = g_heap_next = base;
     g_heap_end = base + size;
+    /* A real Mac heap starts as whatever was there before -- garbage, not
+     * zeros -- and code reads into free space at its peril.  MacinTalk Pro's
+     * Spanish front-end does exactly that: it scans one word past a control
+     * buffer that sits at the top of the used heap, into free space, expecting
+     * a nonzero word to stop it.  An all-zero free store sends that scan off
+     * for tens of thousands of words.  Prime the whole heap with the same
+     * nonzero-odd-word pattern heap_alloc uses, so free space reads like real
+     * uninitialized memory; _NewPtrClear and the host's own loads still zero
+     * what they carve out.  gala is unaffected (byte-identical render). */
+    for (i = 0; i < size; i++)
+        g_ram[base + i] = (i & 2u) ? 0xA5 : 0x00;
     /* Fill in the one zone (see MAGIC_ZONE).  Only the fields a client can
      * reasonably read are set; a caller that walks the free list would need
      * far more, and the trap log will say so if one ever does.  Written here
