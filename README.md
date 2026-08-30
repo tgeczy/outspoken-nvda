@@ -24,8 +24,11 @@ An NVDA synthesizer driver for five Macintosh speech engines, all run as real
   Spanish, too: *veinticinco*, not "twenty five".
 
 **As far as we can establish, none of these voices past 1984's had run
-outside a Macintosh before — Carlos and Catalina had not run anywhere at
-all.**
+outside a Macintosh before — and Carlos and Catalina had not run on
+anything since the 68K Macs themselves.** Apple never carried the Spanish
+Pro across the PowerPC transition: where Fred survived byte-identical all
+the way into Mac OS X, `cami` ended with the machines it was written for,
+until now.
 
 This project models only the handful of Macintosh services the engines actually
 touch. Whichever of them you have extracted are the ones offered, so any one
