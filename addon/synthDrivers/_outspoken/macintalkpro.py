@@ -130,10 +130,42 @@ def _unfixed(u):
     return u / 65536.0
 
 
-def engine_dir(roots):
+#: The two MacinTalk Pro synthesisers this one Engine drives, told apart by a
+#: voice's creator.  Both are `ttsc` components with the identical selector map
+#: and the same code here; they differ only in three things, and each of the
+#: three was measured:
+#:
+#: * **where they live** -- a folder each, never shared, so one engine's
+#:   `rsrcfork.bin` cannot stand in for the other's (see `voices.engine_dir`);
+#: * **their entry code** -- English Pro's is `gtse 1`, the Spanish engine's is
+#:   `gtse 99` (both named `*TTS`); it is loaded and run as the component;
+#: * **the component manufacturer** the descriptor carries -- `gala` or `cami`.
+#:
+#: The Spanish engine additionally has no data fork, which the fork-loading
+#: below already tolerates.  Everything else -- resource registration by name,
+#: the 68040, the auto-advancing clock, `cvox`/`rate`/`pbas`/`pmod` -- is one
+#: and the same, which is the whole reason it is one Engine and not two.
+VARIANTS = {
+    "gala": {"folder": "macintalkpro", "code": "gtse_1.bin",
+             "manufacturer": "gala"},
+    "cami": {"folder": "macintalkespanol", "code": "gtse_99.bin",
+             "manufacturer": "cami"},
+}
+
+
+def engine_dir(roots, creator="gala"):
+    """-> the folder holding `creator`'s Pro engine, or None.
+
+    Keyed by creator so English (`gala`) and Spanish (`cami`) resolve to their
+    own folders and their own entry-code file; a folder counts only if it holds
+    that engine's code.
+    """
+    v = VARIANTS.get(creator)
+    if not v:
+        return None
     for root in roots:
-        d = os.path.join(root, "macintalkpro")
-        if os.path.isdir(d) and os.path.isfile(os.path.join(d, "gtse_1.bin")):
+        d = os.path.join(root, v["folder"])
+        if os.path.isdir(d) and os.path.isfile(os.path.join(d, v["code"])):
             return d
     return None
 
@@ -175,16 +207,27 @@ def _split(name):
 
 
 def find(roots):
-    """-> (engine folder, [Voice]) for whatever of MacinTalk Pro is installed.
+    """-> (an engine folder, [Voice]) for whatever of MacinTalk Pro is present.
 
-    Empty rather than raising when it is absent: a user with only the older
-    engines must still get a working synthesizer.
+    Both synthesisers together -- English Pro's Agnes/Bruce/Victoria and the
+    Spanish engine's Carlos/Catalina -- because in NVDA's voice list they are
+    one "MacinTalk Pro", and `voices.installed(creator)` has already dropped any
+    whose own engine is not installed.  The folder returned is a present one,
+    used only as a "something is here" signal; the Engine resolves each voice's
+    own folder from its creator.
+
+    Empty rather than raising when absent: a user with only the older engines
+    must still get a working synthesizer.
     """
-    d = engine_dir(roots)
-    if not d:
-        return None, []
-    found, _bad = voicelib.installed("gala", roots=roots, speakable=True)
-    return d, found
+    folder, voices = None, []
+    for creator in VARIANTS:
+        d = engine_dir(roots, creator)
+        if not d:
+            continue
+        folder = folder or d
+        found, _bad = voicelib.installed(creator, roots=roots, speakable=True)
+        voices.extend(found)
+    return folder, voices
 
 
 def usable(roots):
@@ -242,7 +285,10 @@ class Engine(object):
         self._base_mod = None
 
         d = engine_folder
-        code = open(os.path.join(d, "gtse_1.bin"), "rb").read()
+        #: English (`gala`) or Spanish (`cami`); decides the entry code and the
+        #: component manufacturer, and nothing else. See VARIANTS.
+        variant = VARIANTS.get(self.voice.creator, VARIANTS["gala"])
+        code = open(os.path.join(d, variant["code"]), "rb").read()
 
         h = self.h = osp.Host()
         # Before anything is loaded: Open reads Gestalt('proc') and refuses a
@@ -318,8 +364,10 @@ class Engine(object):
         # Manager for the voice's FSSpec and then OPENS it.
         h.add_voice(self.voice.creator, self.voice.id, ttvd_id, where["voice"])
 
-        # thng 128: type 'ttsc', subtype 0, manufacturer 'gala'.
-        comp = h.add_component("ttsc", b"\0\0\0\0", "gala", CODE)
+        # thng 128: type 'ttsc', subtype 0, manufacturer 'gala' for English Pro
+        # or 'cami' for the Spanish engine -- the descriptor the component is
+        # opened against.
+        comp = h.add_component("ttsc", b"\0\0\0\0", variant["manufacturer"], CODE)
         self.chan = h.open_instance(comp)
 
         h.set_reg(osp.A7, STACK)

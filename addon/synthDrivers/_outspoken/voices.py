@@ -65,10 +65,18 @@ MTK3_NO_WAVE = 1
 GENDER = {0: "neuter", 1: "male", 2: "female"}
 
 #: VoiceSpec.creator -> what this project can do with it
+#:
+#: `cami` is a second MacinTalk Pro synthesiser -- the Mexican Spanish one,
+#: Carlos and Catalina -- with the same `ttsc`/`gtse` architecture as English
+#: Pro (`gala`) but its own engine folder, its own component manufacturer, and
+#: NO data fork.  It is named apart here so the extractor's data manager can
+#: point a user at the three Mexican TTS floppies it comes from; in NVDA's own
+#: voice list both sit together under "MacinTalk Pro" -- see `outspoken.py`.
 ENGINES = {
     "mtk2": "MacinTalk 2",
     "mtk3": "MacinTalk 3",
     "gala": "MacinTalk Pro",
+    "cami": "MacinTalk Pro (Spanish)",
 }
 
 #: What has to be in `rom/` before an engine's voices can be spoken at all.
@@ -99,6 +107,13 @@ ENGINE_FILES = {
     "mtk2": ("Cecy_1.bin", "Cecy_3.bin"),
     "gala": ("gtse_1.bin", "datafork.bin", "rsrcfork.bin"),
     "mtk3": ("ttvi_10.bin", "ttvi_8.bin", "ttvi_9.bin", "ttss_0.bin"),
+    # The Spanish Pro engine's code is `gtse 99` ('*TTS'), not gtse 1, and it
+    # has **no data fork**: everything English Pro keeps in its 573 KB lexicon
+    # data fork, this one keeps in the resource fork (the `gtst` rule tables).
+    # So `datafork.bin` is deliberately absent -- requiring it would gate a
+    # working engine off, and `gtse_99.bin` is what tells it apart from `gala`
+    # even in the same folder.
+    "cami": ("gtse_99.bin", "rsrcfork.bin"),
 }
 
 #: What a VOICE FOLDER itself must hold before that voice can speak, as
@@ -120,6 +135,12 @@ VOICE_PARTS = {
     # fork by walking the map, and looks its pieces up by name, so the fork
     # and the extractor's index both have to be there.
     "gala": (("rsrcfork.bin", "resources.tsv"), ("ttvd", "gtsv")),
+    # The Spanish Pro voices (Carlos, Catalina) are the same shape as `gala`'s:
+    # a `ttvd` describing the voice and a 128-byte `gtsv` record, with the unit
+    # database and per-voice code in `gtss` read out of the fork the engine
+    # walks itself. No data fork -- the voice, like its engine, keeps nothing
+    # there.
+    "cami": (("rsrcfork.bin", "resources.tsv"), ("ttvd", "gtsv")),
     # MacinTalk 2 registers each voice's three resources by id. Without the
     # wave data it would load and then say nothing.
     "mtk2": ((), ("ttvd", "ttvi", "ttvw")),

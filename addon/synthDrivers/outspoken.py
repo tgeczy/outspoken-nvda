@@ -124,8 +124,14 @@ def _catalogue():
         if macintalkpro.usable(rom.search_roots()):
             _d, pro = macintalkpro.find(rom.search_roots())
             for v in pro:
-                out.append(("gala:" + v.name, "%s (MacinTalk Pro)" % v.name,
-                            "gala", v))
+                # The id is prefixed with the voice's creator, so English Pro
+                # keeps `gala:Bruce` unchanged while the Spanish engine's Carlos
+                # and Catalina get `cami:Carlos` -- both labelled the same
+                # "MacinTalk Pro" and sitting together in the list. `kind` stays
+                # "gala": one Engine drives both and reads the variant off the
+                # voice's creator.
+                out.append(("%s:%s" % (v.creator, v.name),
+                            "%s (MacinTalk Pro)" % v.name, "gala", v))
     except Exception:
         log.debug("outSPOKEN: MacinTalk Pro unavailable", exc_info=True)
     return out
@@ -659,8 +665,12 @@ class SynthDriver(SynthDriver):
     def _get_availableVoices(self):
         from collections import OrderedDict
         out = OrderedDict()
-        for vid, label, _kind, _payload in self._catalogue():
-            out[vid] = VoiceInfo(vid, label, language="en")
+        for vid, label, _kind, payload in self._catalogue():
+            # The Spanish Pro voices carry a Spanish VoiceDescription; telling
+            # NVDA so lets its automatic language switching reach for them.
+            # Everything else here is US English.
+            lang = "es" if getattr(payload, "creator", None) == "cami" else "en"
+            out[vid] = VoiceInfo(vid, label, language=lang)
         return out
 
     def _catalogue(self):
@@ -836,7 +846,11 @@ class SynthDriver(SynthDriver):
                 self._engine = macintalk3.Engine(folder, allv, payload)
             elif kind == "gala":
                 import macintalkpro
-                folder, allv = macintalkpro.find(rom.search_roots())
+                _folder, allv = macintalkpro.find(rom.search_roots())
+                # The engine folder is the voice's own -- English and Spanish
+                # Pro live apart -- and `payload` is the voice being built.
+                folder = macintalkpro.engine_dir(rom.search_roots(),
+                                                 payload.creator)
                 self._engine = macintalkpro.Engine(folder, allv, payload)
             else:
                 found, _missing = rom.find()
