@@ -67,6 +67,20 @@ except ImportError:                                            # tests
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ospextract                                              # noqa: E402
 
+
+def _onSecureScreen():
+    """-> True on NVDA's secure screens, and True if it cannot be told.
+
+    Unknown counts as secure on purpose: everything gated on this is a
+    thing it is fine to go without, and the sign-in desktop is the one
+    place where being wrong has consequences.
+    """
+    try:
+        import globalVars
+        return bool(globalVars.appArgs.secure)
+    except Exception:
+        return True
+
 #: Announce progress every this many percent, not every file.
 #:
 #: A voice folder is a handful of resources and an image can hold thirty of
@@ -154,6 +168,18 @@ class SpeechDataDialog(wx.Dialog):
         self._open = wx.Button(pad, label=_("Open the &folder"))
         self._open.Bind(wx.EVT_BUTTON, self.onOpenFolder)
         row.Add(self._open, flag=wx.RIGHT, border=8)
+        # **Only where somebody could have asked for it.**  On a secure
+        # screen NVDA is SYSTEM, and a button that reaches onto the network
+        # from there is not one this add-on should offer; `updates` refuses
+        # independently, so the guard does not live only here.  (This dialog
+        # is itself desktop-only today, and the button does not rest on
+        # that staying true.)
+        self._update = None
+        if not _onSecureScreen():
+            # Translators: a button that asks whether a newer add-on exists.
+            self._update = wx.Button(pad, label=_("Check for &updates"))
+            self._update.Bind(wx.EVT_BUTTON, self.onCheckUpdates)
+            row.Add(self._update, flag=wx.RIGHT, border=8)
         # Translators: closes the dialog.
         close = wx.Button(pad, wx.ID_CLOSE, label=_("&Close"))
         close.Bind(wx.EVT_BUTTON, lambda evt: self.Close())
@@ -347,6 +373,63 @@ class SpeechDataDialog(wx.Dialog):
                 ui.message(message)
             except Exception:
                 pass
+
+    def onCheckUpdates(self, evt):
+        """Ask GitHub what the newest published release is.
+
+        Off the UI thread, because a blocking fetch is a frozen window and a
+        frozen window is what a screen reader reads as nothing at all.  The
+        button is disabled meanwhile so the question cannot be asked twice,
+        and `_say` announces what is happening for anyone who cannot see it
+        go grey.
+        """
+        import updates
+
+        if self._update is None:
+            return
+        self._update.Enable(False)
+        # Translators: announced while the add-on asks GitHub for versions.
+        self._say(_("Checking for updates..."))
+        installed = updates.installed_version()
+
+        def ask():
+            tag, detail = updates.latest_release()
+            wx.CallAfter(self._updateAnswer, installed, tag, detail)
+
+        threading.Thread(target=ask, daemon=True,
+                         name="outspoken-update-check").start()
+
+    def _updateAnswer(self, installed, tag, detail):
+        """Back on the UI thread with whatever the check found."""
+        import updates
+
+        if self._update is not None:
+            self._update.Enable(True)
+        title = _("Macintosh speech data")
+        if gui is None:
+            return
+        if tag is None:
+            # Translators: the update check could not reach GitHub.
+            gui.messageBox(_("Could not check for updates:\n\n%s") % detail,
+                           title, wx.OK | wx.ICON_WARNING)
+            return
+        if not updates.is_newer(tag, installed):
+            # Translators: the installed add-on is the newest one.
+            gui.messageBox(_("You have the newest version, %s.") % installed,
+                           title, wx.OK | wx.ICON_INFORMATION)
+            return
+        newest = ".".join(str(n) for n in updates.parse_version(tag))
+        # Translators: a newer add-on exists; the %s are version numbers.
+        answer = gui.messageBox(
+            _("Version %s is available. You have %s.\n\n"
+              "Open the download page?") % (newest, installed),
+            title, wx.YES_NO | wx.ICON_INFORMATION)
+        if answer == wx.YES:
+            try:
+                os.startfile(detail)
+            except OSError:
+                log.error("outSPOKEN: could not open %s" % detail,
+                          exc_info=True)
 
     def onClose(self, evt):
         if self._busy:

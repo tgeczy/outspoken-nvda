@@ -244,10 +244,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     def __init__(self):
         super().__init__()
         self._menuItem = None
-        if globalVars.appArgs.secure:
-            log.info("outSPOKEN: secure mode, not checking for the engine")
-            return
+        #: **Secure screens get the menu item and not the timer.**  The early
+        #: `return` here was the same line that hid Panthera's Tools item on
+        #: the sign-in screen while its synthesizers spoke there perfectly --
+        #: and this add-on's engines have always spoken there, because they
+        #: are DLLs loaded in-process and the `.exe` filter never applied.
+        #: Somebody selecting the menu item is asking a question right now,
+        #: wherever they are; the start-up timer and its dialog stay
+        #: desktop-only, because an unprompted dialog on the sign-in screen
+        #: is a dialog nobody can be logged in to have asked for.
+        secure = bool(globalVars.appArgs.secure)
         self._addMenuItem()
+        if secure:
+            log.info("outSPOKEN: secure mode, menu item only")
+            return
         log.info("outSPOKEN: ROM check armed")
         threading.Timer(6.0, self._check).start()
 
@@ -296,15 +306,23 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         The old path stays as the fallback.  If the manager cannot be imported
         or drawn, somebody who just asked a question should still get an
         answer, not silence.
+
+        **On a secure screen the fallback is the whole answer.**  The manager
+        carries an Open-folder button (`os.startfile` -- Explorer, as SYSTEM,
+        on the sign-in desktop) and a file picker, which is a file browser
+        with the same account behind it.  The explanation below is read-only
+        text in a message box, which is exactly as much capability as that
+        screen should offer.
         """
-        try:
-            import ospmanager
-            ospmanager.SpeechDataDialog.show(gui.mainFrame)
-            log.info("outSPOKEN: opened the speech data manager")
-            return
-        except Exception:
-            log.error("outSPOKEN: could not open the speech data manager; "
-                      "falling back to the explanation", exc_info=True)
+        if not globalVars.appArgs.secure:
+            try:
+                import ospmanager
+                ospmanager.SpeechDataDialog.show(gui.mainFrame)
+                log.info("outSPOKEN: opened the speech data manager")
+                return
+            except Exception:
+                log.error("outSPOKEN: could not open the speech data manager; "
+                          "falling back to the explanation", exc_info=True)
         ok, lines = rom.explain()
         log.info("outSPOKEN: engine %s (from the Tools menu)\n  %s"
                  % ("ready" if ok else "NOT ready", "\n  ".join(lines)))

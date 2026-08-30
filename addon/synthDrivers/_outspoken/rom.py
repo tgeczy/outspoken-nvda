@@ -173,8 +173,53 @@ def search_roots():
                 roots.append(value)
     except OSError:
         pass
+    #: The machine-wide DataPath, from **both registry views**, because
+    #: `HKLM\Software` is redirected under WOW64 while `HKCU\Software` is
+    #: not: this module runs inside 64-bit NVDA, inside NVDA's 32-bit
+    #: synth-driver host, and inside the SAPI bridge's 32- and 64-bit
+    #: clients, and an unqualified read would see a different half of the
+    #: registry in each.  A machine-wide folder set by one of them must be
+    #: visible to all of them, or it is perfectly present and entirely
+    #: invisible -- the shape Panthera shipped and caught the same week.
+    #: The flags are fetched by name so a stand-in winreg without them is a
+    #: registry with nothing in it rather than an AttributeError.
+    try:
+        import winreg
+        for view in (getattr(winreg, "KEY_WOW64_64KEY", 0),
+                     getattr(winreg, "KEY_WOW64_32KEY", 0)):
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                    r"Software\outSPOKEN SAPI", 0,
+                                    getattr(winreg, "KEY_READ", 0) | view
+                                    ) as key:
+                    value, kind = winreg.QueryValueEx(key, "DataPath")
+                    if kind == winreg.REG_SZ and value:
+                        roots.append(value)
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    #: The machine-wide twin of the shared folder itself:
+    #: `%ProgramData%\macintalk\outspoken`, NVDA's own folder name at the
+    #: root of the machine.  A tree there is read by SYSTEM on the sign-in
+    #: screen without NVDA copying its whole configuration directory into
+    #: `systemConfig` first, and Panthera's four generations look for their
+    #: data beside it -- one folder for the whole lineage, machine-wide,
+    #: exactly as `%APPDATA%\nvda\macintalk` is one folder per user.  Named
+    #: rather than hard-coded because a Windows install is not obliged to
+    #: put ProgramData on C:.
+    common = os.environ.get("ProgramData") or os.environ.get("ALLUSERSPROFILE")
+    if common:
+        roots.append(os.path.join(common, "macintalk", "outspoken"))
     appdata = os.environ.get("APPDATA")
     if appdata:
+        #: And bare `%APPDATA%\macintalk\outspoken`, with no `nvda` in the
+        #: path: a real arrangement -- people keep the shared folder beside a
+        #: SAPI install rather than inside NVDA's configuration directory --
+        #: and the one place neither this add-on nor Panthera used to look,
+        #: which made "searched everywhere" a lie on the one machine that
+        #: tested it.
+        roots.append(os.path.join(appdata, "macintalk", "outspoken"))
         roots.append(os.path.join(appdata, "outspoken-data"))
     # **Deduplicated, because this list is shown to people.** The pointer file
     # usually names the folder we would have looked in anyway, so the report in
