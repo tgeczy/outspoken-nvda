@@ -1,21 +1,31 @@
 # outspoken-nvda
 
-An NVDA synthesizer driver for three Macintosh speech engines, all run as real
+An NVDA synthesizer driver for five Macintosh speech engines, all run as real
 68000 code under an emulator:
 
 * **MacinTalk (1984)** — the engine that introduced the Macintosh, written by
   Joseph Katz and Mark Barton, who went on to found SoftVoice. Two voices.
 * **MacinTalk 2 (Apple, 1992)** — ten more: Ben, Boris, Brenda, Mariel, Marvin,
   Mr. Hughes, Otis, RoboVox, Votron and Xero.
+* **MacinTalk 3 (Apple)** — nineteen, Fred first among them: the classic
+  System 7 voices, singing novelties included, from the same lineage that
+  survived byte-identical into Mac OS X.
 * **MacinTalk Pro (Apple, 1993)** — Agnes, Bruce and Victoria. The first
   concatenative Macintosh voices, and the ones most people mean when they
   remember what a Mac sounded like. Pro needs a 68020, is addressed by resource
   *name* rather than id, and reads its 573 KB lexicon out of its own file as it
   speaks — asynchronously, which is why it needed a File Manager that answers
   completion routines.
+* **MacinTalk Pro, in Spanish (Apple, 1996)** — **Carlos** and **Catalina**,
+  the Mexican Spanish Pro (`cami`), a separate synthesiser that keeps its
+  whole lexicon in rule tables. Never sold: Apple gave it away as part of
+  PlainTalk 1.5, on three self-mounting floppies the extractor reads
+  directly — see [`docs/cami-engine.md`](docs/cami-engine.md). They count in
+  Spanish, too: *veinticinco*, not "twenty five".
 
-**As far as we can establish, neither MacinTalk 2's voices nor MacinTalk Pro's
-have run outside a Macintosh before.**
+**As far as we can establish, none of these voices past 1984's had run
+outside a Macintosh before — Carlos and Catalina had not run anywhere at
+all.**
 
 This project models only the handful of Macintosh services the engines actually
 touch. Whichever of them you have extracted are the ones offered, so any one
@@ -66,10 +76,15 @@ this log was written for. `2` also records a slice of the spoken text, and
 is worth using only when the report is about particular words. Either way
 the file stops at 4 MB and starts over. `/d 0` turns it off again.
 
-> **Status: all three engines speak inside NVDA.** English text, fifteen
-> voices, rate, interruption, symbols and numbers. 111 tests:
-> `py -3 -m pytest tests -q`. Working log in
+> **Status: all five engines speak inside NVDA.** Thirty-six voices —
+> thirty-four English and two Spanish — rate, pitch, interruption, symbols
+> and numbers. 354 tests: `py -3 -m pytest tests -q`. Working log in
 > [`outspoken-nvda-notes.md`](outspoken-nvda-notes.md).
+>
+> Carlos and Catalina arrived on 2026-08-30, tagged Mexican Spanish for
+> NVDA's automatic language switching and for SAPI's language filters, and
+> speaking Spanish numbers through a number parser that learned the language
+> the hour after somebody heard it hadn't.
 >
 > MacinTalk Pro's Agnes, Bruce and Victoria arrived on 2026-08-20. Two host
 > services stood between "it opens" and "it speaks", and neither was in the
@@ -87,10 +102,11 @@ the file stops at 4 MB and starts over. `/d 0` turns it off again.
 > is driven through the Component Manager, which the host implements —
 > see [`docs/macintalk2-components.md`](docs/macintalk2-components.md).
 >
-> **Numbers are read as words**, which neither engine can do: their rules hold
-> the ten digit names and nothing else, so `30` would otherwise be "three
-> zero". It is a checkbox, because digit-by-digit is genuinely better for
-> phone numbers and identifiers.
+> **Numbers are read as words**, which none of these engines can do: their
+> rules hold the ten digit names and nothing else, so `30` would otherwise be
+> "three zero". It is a checkbox, because digit-by-digit is genuinely better
+> for phone numbers and identifiers — and it answers in the voice's own
+> language, so Carlos says *treinta*, or *tres cero*, never "thirty".
 >
 > Not yet done: a user pronunciation dictionary. (The pitch sliders were
 > once listed here as deliberately inert; MacinTalk 2, 3 and Pro all
