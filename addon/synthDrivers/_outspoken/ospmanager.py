@@ -273,15 +273,31 @@ class SpeechDataDialog(wx.Dialog):
         #: overwrites file by file, so a half-finished second run leaves a
         #: folder holding pieces of two images -- which `installed_engines`
         #: would then report as an engine that cannot actually speak.
+        # **Only warn about what this source will actually replace.** An import
+        # is additive per engine -- the Spanish floppies add Carlos and Catalina
+        # and touch no English voice -- so the old blanket "there is already
+        # speech data installed, this will write over it" was false for every
+        # additive import, and read as a threat when a 34-to-36 success was all
+        # that was happening. Ask only when the source's OWN targets already
+        # hold data.
+        def _has_data(sub):
+            d = os.path.join(where, sub)
+            try:
+                return os.path.isdir(d) and any(
+                    f.endswith(".bin") for f in os.listdir(d))
+            except OSError:
+                return False
         try:
-            existing = bool(ospextract.installed_engines(where)[0])
+            conflicts = [name for sub, name in ospextract.plan_targets(source)
+                         if _has_data(sub)]
         except Exception:
-            existing = False
-        if existing:
+            conflicts = []
+        if conflicts:
             answer = gui.messageBox(
-                # Translators: asked before overwriting installed speech data.
-                _("There is already speech data installed.\n\n"
-                  "Installing from this image will write over it. Continue?"),
+                # Translators: asked before replacing voices already installed.
+                _("This will replace what you already have for: %s.\n\n"
+                  "Everything else is kept. Continue?")
+                % ", ".join(sorted(set(conflicts))),
                 _("Macintosh speech data"),
                 wx.YES | wx.NO | wx.NO_DEFAULT | wx.ICON_WARNING)
             if answer != wx.YES:

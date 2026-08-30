@@ -268,6 +268,34 @@ def _is_head(fork):
 
 # --------------------------------------------------------------- assembly --
 
+def catalog(floppies):
+    """-> [(name, type, creator)] for every file the floppies hold, read from
+    the tome section catalogs ALONE -- mounted, but nothing decompressed.
+
+    For previewing what an import would write before committing to the slow
+    decode: the dialog needs the voice names to say "this replaces Carlos", and
+    those are in the catalog, not behind the codec.
+    """
+    out, seen = [], set()
+    for blob in floppies:
+        vol = mount(blob)
+        for parts, obj in vol.iter_paths():
+            if isinstance(obj, machfs.Folder) or len(obj.data) < 36:
+                continue
+            try:
+                if struct.unpack_from(">I", obj.data, 0)[0] != _TOME_MAGIC:
+                    continue
+            except struct.error:
+                continue
+            for sec in tome_sections(obj.data):
+                key = (sec["name"], sec["creator"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((sec["name"], sec["type"], sec["creator"]))
+    return out
+
+
 def carve(floppies, say=None, progress=None):
     """Carve every `cami` speech file out of a set of self-mounting floppies.
 

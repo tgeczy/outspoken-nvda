@@ -752,6 +752,53 @@ def extract_smi(fset, out, say=_print, listing=False, progress=None):
     return total, []
 
 
+def plan_targets(source):
+    """-> [(subfolder, display name)] `source` would write into, WITHOUT reading
+    or decompressing its payload.
+
+    For an honest overwrite prompt.  An import is additive per engine -- the
+    Spanish floppies write `macintalkespanol` and their two voice folders and
+    touch nothing English -- so the only real overwrite is one of the source's
+    OWN targets that already exists.  A blanket "there is already speech data
+    installed, this will write over it" is false for every additive import, and
+    is exactly the alarm that made a 34-to-36 success read like a threat.
+
+    Cheap on purpose: a self-mounting set is mounted and its tome catalog read
+    (no codec), an HFS image is planned, a single file is classified.  Returns
+    [] when there is nothing to write -- an incomplete floppy set among it --
+    so the extraction itself can report why.
+    """
+    try:
+        fset = floppy_set(source)
+    except Exception:
+        fset = None
+    if fset is not None:
+        missing = [d for d in range(1, fset["count"] + 1)
+                   if d not in fset["found"]]
+        if missing:
+            return []
+        floppies = [fset["found"][d][1]
+                    for d in range(1, fset["count"] + 1)]
+        out = []
+        for name, ftype, creator in smi.catalog(floppies):
+            if creator != "cami":
+                continue
+            if ftype == "thng":
+                out.append((CAMI_ENGINE_SUB, "the Spanish engine"))
+            elif ftype == "ttvf":
+                out.append(("voices/" + _safe(name), name))
+        return out
+    files = open_image(source)
+    if files is None:
+        try:
+            files = {os.path.basename(source): (b"", open(source, "rb").read(),
+                                                "")}
+        except OSError:
+            return []
+    jobs, _skipped = plan(files)
+    return [(sub, sub.split("/")[-1]) for _p, _f, _s, sub, _d in jobs]
+
+
 def extract(source, out, say=_print, listing=False, progress=None):
     """Read `source` and fill `out`. -> (written, skipped), or None if nothing
     in it was recognised.
