@@ -341,9 +341,28 @@ class SpeechDataDialog(wx.Dialog):
                 _("Macintosh speech data"), wx.OK | wx.ICON_INFORMATION)
             self._pick.SetFocus()
             return
-        written, _skipped = got
+        written, skipped = got
         have = ospextract.installed_engines(self.folder())[0]
         voices = sum(len(v) for v in have.values())
+        if not written:
+            # **Recognised, but nothing installed -- and "0 resources" alone is
+            # a riddle.** The commonest cause is an incomplete floppy set: a
+            # disk missing from the folder, so the engine cannot be assembled.
+            # The extractor already explained why through `say`; those lines
+            # are the whole point, so show them rather than swallow them. Fall
+            # back to the terse skip reasons, then to a generic line.
+            why = "\n".join(ln for ln in lines if ln.strip()).strip()
+            if not why and skipped:
+                why = "\n".join("%s -- %s" % (os.path.basename(str(s)), r)
+                                for s, r in skipped)
+            gui.messageBox(
+                # Translators: shown when an image was read but installed nothing.
+                _("Nothing was installed.\n\n%s")
+                % (why or _("The image held nothing this add-on can use.")),
+                _("Macintosh speech data"), wx.OK | wx.ICON_WARNING)
+            self._say(_("Nothing installed."))
+            self._pick.SetFocus()
+            return
         # Translators: the result of installing from a disk image.
         message = _("%d resources installed.\n\n"
                     "NVDA will offer %d voice%s, from %d engine%s.\n\n"
