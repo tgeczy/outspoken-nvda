@@ -117,12 +117,15 @@ def test_the_engines_it_lists_are_the_engines_it_can_install(ospextract):
     """
     listed = {row[0] for row in ospextract.ENGINES}
     assert listed == {"MacinTalk 1", "MacinTalk 2", "MacinTalk 3",
-                      "MacinTalk Pro"}
+                      "MacinTalk Pro", "MacinTalk Pro (Spanish)"}
     for name, about, sub, source in ospextract.ENGINES:
         assert about and about[0].isdigit(), about
         #: The folder has to be one the extractor really writes, or the
-        #: details box points somewhere that will never fill up.
-        assert sub in ospextract.WANTED, (name, sub)
+        #: details box points somewhere that will never fill up. Most engines
+        #: come from a WANTED spec; the Spanish Pro engine is carved from the
+        #: Mexican tomes and written to its own folder by extract_smi.
+        assert sub in ospextract.WANTED or sub == ospextract.CAMI_ENGINE_SUB, \
+            (name, sub)
         #: And "not installed" is half an answer without where to get it.
         assert source and len(source) > 30, (name, source)
 

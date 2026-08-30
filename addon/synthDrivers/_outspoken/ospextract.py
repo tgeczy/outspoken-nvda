@@ -45,11 +45,13 @@ same 'ttsc' type, same standard component entry -- so the host glue is shared.
 """
 import mmap
 import os
+import re
 import sys
 import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rsrc                                                   # noqa: E402
+import smi                                                    # noqa: E402
 import voices as voicelib                                     # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -349,6 +351,14 @@ ENGINES = (
     ("MacinTalk Pro", "1994 -- Agnes, Bruce and Victoria", "macintalkpro",
      "Extensions/MacinTalk Pro, and Extensions/Voices.  Each Pro voice is "
      "most of a megabyte of recorded units."),
+    # A second MacinTalk Pro, the Mexican Spanish one.  It does not live on a
+    # System disk: Apple sold it as three self-mounting floppy images, and the
+    # extractor reads those `.smi.bin` files directly -- see `smi.py`.
+    ("MacinTalk Pro (Spanish)", "1996 -- Carlos and Catalina", "macintalkespanol",
+     "the three Mexican Spanish TTS floppies -- Mexican_TTS_1.5_1of3.smi.bin "
+     "with its 2of3 and 3of3, all three in one folder.  Apple shipped them "
+     "together and split Catalina's voice across two disks, so all three are "
+     "needed."),
 )
 
 
@@ -569,15 +579,195 @@ def run(jobs, out, say=_print, listing=False, progress=None):
     return total
 
 
+# ---- self-mounting images: the Mexican Spanish Pro floppies -------------
+#
+# The Spanish MacinTalk Pro does not sit on a System disk to be mounted: Apple
+# sold it as three self-mounting `.smi` floppy images, downloaded today as
+# MacBinary `.bin`.  `smi.py` reads one down to the speech files inside; this
+# is the part that belongs with extraction rather than decoding -- recognising
+# the whole SET, insisting all three are present, and writing the carved forks
+# into the rom layout the driver reads.
+
+#: Where the Spanish engine is written -- its OWN folder, never `macintalkpro`.
+#: Both engines carry a `rsrcfork.bin`, and `voices.engine_installed` checks a
+#: single folder for a whole engine's file list, so sharing one folder would
+#: let half of each engine satisfy the other's.  `gtse_99.bin` beside
+#: `gtse_1.bin` tells them apart even so, but separate folders keep the indexes
+#: apart too.
+CAMI_ENGINE_SUB = "macintalkespanol"
+
+#: "1of3", "2 of 3": which floppy of a set, and how many there are.
+_DISK_RE = re.compile(r"(\d+)\s*of\s*(\d+)", re.I)
+
+
+def _self_mounting(path):
+    """-> (bytes, smi.identify dict) if `path` is a self-mounting image, else
+    (None, None).
+
+    Peeks the 128-byte MacBinary header first, so pointing the extractor at a
+    folder full of large unrelated files does not read every one of them whole
+    just to reject it.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(128)
+            if (len(head) < 73 or head[65:69] != b"APPL"
+                    or head[69:73] != b"oneb"):
+                return None, None
+            fh.seek(0)
+            data = fh.read()
+    except OSError:
+        return None, None
+    info = smi.identify(data)
+    return (data, info) if info else (None, None)
+
+
+def _set_key(info):
+    """-> (set name, disk number, disk count), or None when the name carries no
+    "N of M".
+
+    Read from the image's OWN MacBinary name, which survives the download being
+    renamed -- so three files called a.bin/b.bin/c.bin are still recognised as
+    "Mexican TTS 1.5" disks 1, 2 and 3.
+    """
+    name = info.get("macbin_name") or info.get("volume") or ""
+    m = _DISK_RE.search(name)
+    if not m:
+        return None
+    key = name[:m.start()].strip().rstrip(".").strip()
+    return key, int(m.group(1)), int(m.group(2))
+
+
+def floppy_set(source):
+    """Gather every floppy of `source`'s set that sits in the same folder.
+
+    -> {"key", "count", "found": {disk: (path, data)}} for a self-mounting
+    image, or None when `source` is something else entirely.
+
+    Does NOT complain about a short set here: the caller reports that, because
+    the message wants to name what was found and what was not.
+    """
+    _data0, info0 = _self_mounting(source)
+    if info0 is None:
+        return None
+    key_disk = _set_key(info0)
+    folder = os.path.dirname(os.path.abspath(source))
+    found = {}
+    if key_disk is None:
+        # A lone self-mounting image, not one of a numbered set.
+        found[1] = (os.path.abspath(source), _data0)
+        return {"key": info0.get("volume") or "", "count": 1, "found": found}
+    key, _disk0, count = key_disk
+    for fn in sorted(os.listdir(folder)):
+        p = os.path.join(folder, fn)
+        if not os.path.isfile(p):
+            continue
+        data, info = _self_mounting(p)
+        if info is None:
+            continue
+        kd = _set_key(info)
+        if kd is None or kd[0] != key or kd[2] != count:
+            continue
+        found.setdefault(kd[1], (p, data))
+    return {"key": key, "count": count, "found": found}
+
+
+def _write_fork(fork, outdir):
+    """Write a decoded resource fork into a rom folder. -> resources written.
+
+    Every resource as `<type>_<id>.bin`, the whole fork as `rsrcfork.bin`, and
+    the names and map offsets as `resources.tsv` -- the same shape `take`
+    writes for English Pro, because the Spanish engine reads its file the same
+    way, by name and by map entry.  `datafork.bin` is deliberately never
+    written: this engine and its voices have none.
+    """
+    os.makedirs(outdir, exist_ok=True)
+    rs = rsrc.parse(fork)
+    names = []
+    for r in rs:
+        fn = "%s_%d.bin" % (_safe(r.type).strip() or "res", r.id)
+        open(os.path.join(outdir, fn), "wb").write(r.data)
+        names.append((r.type, r.id, r.map_entry, r.name))
+    with open(os.path.join(outdir, FORK_FILE), "wb") as fh:
+        fh.write(fork)
+    stale = os.path.join(outdir, OLD_INDEX_FILE)
+    if os.path.exists(stale):
+        os.remove(stale)
+    with open(os.path.join(outdir, INDEX_FILE), "w",
+              encoding="utf-8", newline="\n") as fh:
+        fh.write("# type\tid\tmapentry\tname\n")
+        for rtype, rid, entry, nm in sorted(names, key=lambda x: (x[0], x[1])):
+            fh.write("%s\t%d\t%d\t%s\n" % (rtype, rid, entry, nm))
+    return len(names) + 1
+
+
+def extract_smi(fset, out, say=_print, listing=False, progress=None):
+    """Carve the Spanish Pro engine and voices from a floppy set.
+    -> (written, skipped).
+
+    Insists on the whole set first: Apple shipped three floppies and split
+    Catalina's voice across two of them, so a missing disk is not a smaller
+    extraction, it is a broken one.  The message names which disks are present
+    and which are not.
+    """
+    have = fset["found"]
+    count = fset["count"]
+    missing = [d for d in range(1, count + 1) if d not in have]
+    if missing:
+        got = ", ".join(str(d) for d in sorted(have)) or "none"
+        gone = ", ".join(str(d) for d in missing)
+        say("This is one floppy of a %d-disk set, and all %d have to be in the "
+            "same folder." % (count, count))
+        say("Apple shipped them together and split Catalina's voice across two "
+            "disks, so a missing one leaves a voice that cannot be assembled.")
+        say("Found disk %s; missing disk %s." % (got, gone))
+        say("Put the missing floppy beside the others and run this again.")
+        return 0, [(fset["key"] or "floppy set",
+                    "incomplete floppy set: missing disk %s" % gone)]
+
+    floppies = [have[d][1] for d in range(1, count + 1)]
+    say("mounted %d floppies of %r\n" % (count, fset["key"]))
+    carved = smi.carve(floppies, say=say, progress=progress)
+
+    if listing:
+        for name, ftype, creator, fork in carved:
+            say("  %-40s %s/%s  %d bytes"
+                % (name[:40], ftype, creator, len(fork)))
+        return 0, []
+
+    total = 0
+    for name, ftype, creator, fork in carved:
+        if ftype == "thng":
+            sub = CAMI_ENGINE_SUB
+        elif ftype == "ttvf":
+            sub = "voices/" + _safe(name)
+        else:
+            say("  ! %s: unexpected file type %r, skipped" % (name, ftype))
+            continue
+        outdir = os.path.join(out, sub)
+        n = _write_fork(fork, outdir)
+        total += n
+        say("  %-40s %2d resources -> %s"
+            % (name[:40], n, os.path.relpath(outdir, ROOT)))
+    return total, []
+
+
 def extract(source, out, say=_print, listing=False, progress=None):
     """Read `source` and fill `out`. -> (written, skipped), or None if nothing
     in it was recognised.
 
     The one entry point worth calling from anywhere else.  `source` is an HFS
-    image or a single Mac file -- outSPOKEN itself, a MacBinary `.bin` off
-    Macintosh Repository, or a bare resource fork -- and which it is is settled
-    by trying to mount it rather than by looking at the extension.
+    image, a self-mounting `.smi.bin` floppy (one of a set), or a single Mac
+    file -- outSPOKEN itself, a MacBinary `.bin` off Macintosh Repository, or a
+    bare resource fork -- and which it is is settled by trying to read it rather
+    than by looking at the extension.
     """
+    # A self-mounting floppy is tried first: it is a MacBinary file, so the
+    # single-file path below would take it for a bare resource fork and find
+    # nothing.  This also gathers its sibling disks and enforces the whole set.
+    fset = floppy_set(source)
+    if fset is not None:
+        return extract_smi(fset, out, say, listing, progress)
     files = open_image(source)
     if files is None:
         raw = open(source, "rb").read()
