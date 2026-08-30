@@ -84,20 +84,62 @@ Two ways the Tools-menu extractor used to mislead, both fixed:
   source will actually write and asks only about genuine conflicts, naming them
   — a first Spanish import asks nothing at all.
 
-<!-- ─────────────────────────────────────────────────────────────────────────
-     HANDOVER: the sections below are the other lane's to write.
-     This release also carries the SAPI-5 lookups+port and the add-on's new
-     "check for updates" (ospmanager + updates.py + sapi/settings.ps1, commits
-     174f971 and d1f4bf8). Fill in the SAPI/updates story here; the voice
-     engineering above is complete. — the voice-side session
-────────────────────────────────────────────────────────────────────────── -->
+## Carlos and Catalina in SAPI 5 too
 
-## SAPI 5, and checking for updates
+The SAPI bridge runs the same driver, so the Spanish voices come along for
+free: register your voices and **Carlos** and **Catalina** appear in every
+SAPI application's list beside the English ones. They are tagged as **Mexican
+Spanish**, not US English, so applications that filter or group voices by
+language offer them to the people they were made for.
 
-_(To be written by the SAPI/bridge session.)_ This release also brings the
-matching SAPI-5 lookups and port that had been waiting on the Spanish voices,
-and a "check for updates" action in the speech-data manager that asks GitHub for
-the newest published release.
+The SAPI settings window also gained an **Extract from image** button. The
+extractor was aboard all along — the installer has always shipped the whole
+driver — but the only way in was a command line the installer never included.
+Point it at a disk image, or at one floppy of the self-mounting set, and it
+extracts with the bundled Python and offers to register what it found: from
+your own floppies to speaking SAPI voices with no NVDA, no Python install,
+and no execution-policy change.
+
+## One folder for every Macintosh voice on the machine
+
+The add-on and the SAPI driver now find the speech data in the places its
+sibling project Panthera learned to look this same week:
+`%ProgramData%\macintalk\outspoken` — the shared folder's name at the root of
+the machine, readable by every account and by the sign-in screen with no
+copying — and the bare `%APPDATA%\macintalk` arrangement kept outside NVDA's
+configuration folder. Everything that worked before still works;
+`outspoken-data` is searched forever.
+
+The SAPI settings window gained **Move engines for all users**, which carries
+the data to the machine-wide folder, elevated, and locks it so only
+administrators can write where every account reads. It moves **only
+outSPOKEN's own folder**: a shared `macintalk` holding Panthera's generations
+beside these ROMs is never swept along, exactly as Panthera 2.0.1's mover
+leaves `outspoken` standing. Two movers, each structurally incapable of
+touching the other's data.
+
+The tool is honest about trouble now, too: engines registered whose data has
+gone missing are named on opening, with an offer to find the folder or retire
+the voices; a cancelled elevation prompt no longer reports success; and
+Register refuses to register nothing rather than elevating for it.
+
+## Checking for updates
+
+The speech-data manager in NVDA's Tools menu and the SAPI settings window
+both gained a **Check for updates** button. Press it and the add-on asks
+GitHub for the newest published release, compares versions, and — on a yes —
+**downloads the update and hands it to the installer**: the `.nvda-addon` is
+fetched and opened so NVDA's own install dialog takes over, and the SAPI
+setup is fetched and run so its own installer asks. Nobody is sent to a web
+page to find the right file among a release's assets.
+
+It runs only when you press it — nothing checks on a timer or at start-up,
+because a screen reader that quietly contacts a server every launch is
+telling that server when its owner sits down at their machine. It never runs
+on secure screens. And on the sign-in screen, one more small thing: the
+Tools-menu item now appears there, answering with the read-only report — the
+engines themselves have always spoken there, being DLLs loaded in-process,
+and now the menu admits it.
 
 ## Under the hood
 

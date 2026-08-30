@@ -1,4 +1,4 @@
-param([string]$OutputRoot = "C:\outspoken")
+﻿param([string]$OutputRoot = "C:\outspoken")
 # Stage the outSPOKEN SAPI engine: both DLL bitnesses, the serve bridge, the
 # driver package it serves (our own code, MIT -- the ROMs are never here),
 # and the embeddable Python that runs it.  Template: panthera-speech's
@@ -30,6 +30,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0settings.ps1"
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage
 Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
+# The command-line extractor, staged at the root where its fallback import
+# path finds the driver tree at synthDrivers\_outspoken -- the settings
+# window's Extract button runs it with the bundled Python, so a standalone
+# SAPI user can go from disc image (or .smi.bin floppy set) to speaking
+# without NVDA, a Python install, or an execution-policy change.
+Copy-Item (Join-Path $repo "tools\extract_rom.py") $stage
 $drv = Join-Path $stage "synthDrivers"
 New-Item -ItemType Directory -Force $drv,(Join-Path $drv "_outspoken") | Out-Null
 Copy-Item (Join-Path $repo "addon\synthDrivers\outspoken.py") $drv

@@ -1,4 +1,4 @@
-param([switch]$Register,[switch]$Unregister,[string]$DataRoot,
+﻿param([switch]$Register,[switch]$Unregister,[string]$DataRoot,
       [switch]$Move,[string]$MoveFrom,[string]$MoveTo)
 # Voice tokens for the outSPOKEN SAPI engine: one per voice the serve
 # bridge enumerates from the data root, in both registry views.
@@ -141,7 +141,14 @@ if ($Register) {
             New-Item -Path $attrPath -Force | Out-Null
             Set-ItemProperty -Path $attrPath -Name 'Name' -Value $name
             Set-ItemProperty -Path $attrPath -Name 'Vendor' -Value 'outSPOKEN'
-            Set-ItemProperty -Path $attrPath -Name 'Language' -Value '409'
+            # Spanish voices say so: SAPI clients filter and group by this,
+            # and a Carlos advertised as US English is a voice Spanish
+            # speakers' tooling never offers them.  80A is Mexican Spanish,
+            # which is what the cami engine is -- sold on Mexican floppies,
+            # named for it.  Everything else stays US English as before.
+            $language = '409'
+            if ($id -like 'cami:*') { $language = '80A' }
+            Set-ItemProperty -Path $attrPath -Name 'Language' -Value $language
             Set-ItemProperty -Path $attrPath -Name 'Gender' -Value 'Neutral'
         }
     }

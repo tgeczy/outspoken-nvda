@@ -23,8 +23,18 @@ import argparse
 import os
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "addon", "synthDrivers", "_outspoken"))
+#: Two homes: the repository (tools/ beside addon/), and the SAPI install,
+#: where build.ps1 stages this file at the root with the driver tree at
+#: `synthDrivers\_outspoken` beside it -- the same layout the bundled
+#: Python's `._pth` names.  Tried in that order so the repository wins when
+#: both shapes are present.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(_HERE)
+for _private in (os.path.join(ROOT, "addon", "synthDrivers", "_outspoken"),
+                 os.path.join(_HERE, "synthDrivers", "_outspoken")):
+    if os.path.isdir(_private):
+        sys.path.insert(0, _private)
+        break
 
 import ospextract                                             # noqa: E402
 

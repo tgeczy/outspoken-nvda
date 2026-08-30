@@ -109,8 +109,8 @@ $script:data = Resolve-DataRoot
 
 #: Engine families in display order, as parallel arrays: 2.0 has no
 #: [ordered] and a plain hashtable shuffles.
-$FamilyKeys = @('mt1','mtk2','mtk3','gala')
-$FamilyNames = @('MacinTalk 1 (1984)','MacinTalk 2','MacinTalk 3','MacinTalk Pro')
+$FamilyKeys = @('mt1','mtk2','mtk3','gala','cami')
+$FamilyNames = @('MacinTalk 1 (1984)','MacinTalk 2','MacinTalk 3','MacinTalk Pro','MacinTalk Pro (Spanish)')
 
 function Get-BridgeVoiceIds {
     $py = Join-Path $stage 'python\python.exe'
@@ -285,9 +285,9 @@ function Refresh-Voices {
         if ($ids.Length -eq 1) { $s = '' }
         $status.Text = '{0} voice{1} found in {2}; {3}.' -f $ids.Length,$s,$script:data,$registered
     } elseif (Test-AnyTokens) {
-        $status.Text = 'Engines are registered with SAPI but no speech data was found in {0} - the voices will say nothing until it is back. Use Data location, or extract engines with the NVDA add-on''s Tools menu or tools\extract_rom.py.' -f $script:data
+        $status.Text = 'Engines are registered with SAPI but no speech data was found in {0} - the voices will say nothing until it is back. Use Data location, or Extract from image.' -f $script:data
     } else {
-        $status.Text = 'No speech data found in {0}. Extract engines with the NVDA add-on''s Tools menu or tools\extract_rom.py.' -f $script:data
+        $status.Text = 'No speech data found in {0}. Use Extract from image, or the NVDA add-on''s Tools menu.' -f $script:data
     }
 }
 
@@ -350,10 +350,68 @@ $move.Text = 'Move engines for &all users...'
 $move.AccessibleName = 'Move engines for all users'
 $move.AccessibleDescription = 'Move the speech data to a folder every Windows account on this machine can read'
 $move.Location = New-Object Drawing.Point(12,300); $move.AutoSize=$true
+$extract = New-Object Windows.Forms.Button
+$extract.Text = '&Extract from image...'
+$extract.AccessibleName = 'Extract from image'
+$extract.AccessibleDescription = 'Read speech engines out of your own Mac disk image or self-mounting floppy set'
+$extract.Location = New-Object Drawing.Point(200,300); $extract.AutoSize=$true
 $updates = New-Object Windows.Forms.Button
 $updates.Text = 'Check for SAPI &updates...'
 $updates.AccessibleName = 'Check for SAPI updates'
-$updates.Location = New-Object Drawing.Point(200,300); $updates.AutoSize=$true
+$updates.Location = New-Object Drawing.Point(340,300); $updates.AutoSize=$true
+
+# **The extraction door, for people with no NVDA.**  The extractor has been
+# aboard the whole time -- build.ps1 stages the entire driver tree, smi.py
+# and ospextract.py included -- but the only way in was a command line the
+# status text named and the installer never shipped.  This runs the staged
+# extract_rom.py under the bundled Python against the resolved data root, so
+# a standalone SAPI user goes from their own disc image, or one floppy of a
+# self-mounting set (the extractor finds its siblings, all three or none),
+# to registered speaking voices without NVDA, a Python install, or an
+# execution-policy change.
+$extract.Add_Click({
+    $py = Join-Path $stage 'python\python.exe'
+    $tool = Join-Path $stage 'extract_rom.py'
+    if ((-not (Test-Path -LiteralPath $py)) -or (-not (Test-Path -LiteralPath $tool))) {
+        [Windows.Forms.MessageBox]::Show($form,'The extractor is not part of this installation. Use the NVDA add-on''s Tools menu instead.','outSPOKEN SAPI','OK','Warning') | Out-Null
+        return
+    }
+    $picker = New-Object Windows.Forms.OpenFileDialog
+    $picker.Title = 'Choose a Mac disk image, or one floppy of a self-mounting set'
+    $picker.Filter = 'Mac images and files|*.smi.bin;*.bin;*.hfv;*.dsk;*.img;*.iso;*.dmg|All files|*.*'
+    if ($picker.ShowDialog($form) -ne 'OK') { return }
+    # The destination is the outspoken tree under the resolved root -- the
+    # same place every reader on this machine already looks.
+    $target = Get-OspTree $script:data
+    if (-not (Test-Path -LiteralPath $target)) {
+        try { New-Item -ItemType Directory -Force -Path $target | Out-Null } catch {}
+    }
+    $status.Text = 'Extracting... this can take a moment.'
+    $form.Refresh()
+    $log = Join-Path $env:TEMP 'outspoken-sapi-extract.log'
+    $ok = $false
+    try {
+        $proc = Start-Process -FilePath $py -ArgumentList @(('"{0}"' -f $tool),('"{0}"' -f $picker.FileName),'--out',('"{0}"' -f $target)) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $log
+        $ok = ($proc -and ($proc.ExitCode -eq 0))
+    } catch {}
+    $status.Text = ''
+    $tail = ''
+    try {
+        $lines = @(Get-Content -Path $log -ErrorAction SilentlyContinue)
+        if ($lines.Length) {
+            $from = [Math]::Max(0, $lines.Length - 12)
+            $tail = ($lines[$from..($lines.Length-1)] -join "`n")
+        }
+    } catch {}
+    if (-not $ok) {
+        [Windows.Forms.MessageBox]::Show($form,("Nothing was extracted.`n`n{0}" -f $tail),'outSPOKEN SAPI','OK','Warning') | Out-Null
+        return
+    }
+    [Windows.Forms.MessageBox]::Show($form,("Extraction finished into {0}:`n`n{1}" -f $target,$tail),'outSPOKEN SAPI','OK','Information') | Out-Null
+    Refresh-Voices
+    # New data now offers to register itself, exactly as it does on opening.
+    Offer-NewData
+})
 $close = New-Object Windows.Forms.Button; $close.Text = '&Close'; $close.Location = New-Object Drawing.Point(470,262); $close.AutoSize=$true
 
 # **Check for updates, the way the NVDA add-on's button does it**: fetch the
@@ -542,5 +600,5 @@ $unregister.Add_Click({
 })
 $close.Add_Click({ $form.Close() })
 $form.CancelButton = $close
-$form.Controls.AddRange(@($label,$list,$status,$chooseRoot,$open,$register,$unregister,$move,$updates,$close))
+$form.Controls.AddRange(@($label,$list,$status,$chooseRoot,$open,$register,$unregister,$move,$extract,$updates,$close))
 Refresh-Voices; $form.Add_Shown({ $list.Focus(); Offer-Rebind; Offer-NewData }); [void]$form.ShowDialog()

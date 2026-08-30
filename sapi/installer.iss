@@ -14,7 +14,7 @@
 #ifndef StageDir
 #define StageDir "C:\outspoken\sapi"
 #endif
-#define AppVer "1.1.1"
+#define AppVer "1.2.0"
 
 [Setup]
 AppId={{4D6071E1-B142-4F49-8C5C-97C661EA748B}
