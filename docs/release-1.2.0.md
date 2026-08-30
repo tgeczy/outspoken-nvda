@@ -11,12 +11,13 @@ sitting beside them.
 
 ## Carlos and Catalina
 
-Apple sold a Mexican Spanish MacinTalk Pro — component manufacturer `cami`, a
-separate synthesiser from the English `gala` — with two voices: **Carlos** (a
-man) and **Catalina** (a woman). They speak Mexican Spanish, tagged so NVDA's
-automatic language switching can reach for them, and they appear as **"Carlos
-(MacinTalk Pro)"** and **"Catalina (MacinTalk Pro)"** in your voice list, next
-to the English three.
+Apple made a Mexican Spanish MacinTalk Pro — component manufacturer `cami`,
+a separate synthesiser from the English `gala` — with two voices: **Carlos**
+(a man) and **Catalina** (a woman). It was never sold on its own; it came
+bundled on the installation media of some computers. The voices speak Mexican
+Spanish, tagged so NVDA's automatic language switching can reach for them,
+and they appear as **"Carlos (MacinTalk Pro)"** and **"Catalina (MacinTalk
+Pro)"** in your voice list, next to the English three.
 
 It is the same 1990s concatenative Pro architecture, so one driver runs both —
 they differ only in where they live, which resource is their entry code, and

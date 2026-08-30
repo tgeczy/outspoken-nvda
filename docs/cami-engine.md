@@ -15,7 +15,7 @@ this is the recipe for reading them out of your own copy.
 
 ## Where it comes from
 
-`cami` was not on a System disk to be mounted. Apple sold it as three
+`cami` was not on a System disk to be mounted. Apple bundled it, on some computers' installation media, as three
 **self-mounting floppy images** — `Mexican_TTS_1.5_1of3.smi.bin` and its `2of3`
 and `3of3` — and the extractor reads those `.smi.bin` files directly. All three
 are required and must sit in one folder: the engine is on disk 1, Carlos on disk
