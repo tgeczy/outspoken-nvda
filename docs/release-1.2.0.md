@@ -13,8 +13,13 @@ sitting beside them.
 
 Apple made a Mexican Spanish MacinTalk Pro — component manufacturer `cami`,
 a separate synthesiser from the English `gala` — with two voices: **Carlos**
-(a man) and **Catalina** (a woman). It was never sold on its own; it came
-bundled on the installation media of some computers. The voices speak Mexican
+(a man) and **Catalina** (a woman). It was never sold on its own: Apple
+posted it as a free download — one of the three named components of
+**PlainTalk 1.5**, November 1996, on its Software Updates site — and bundled
+it on some computers' installation media besides. The Internet Archive's
+[mirror of that site](https://archive.org/download/download.info.apple.com.2012.11_202205/download.info.apple.com.2012.11.zip/download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Speech/PlainTalk_1.5/)
+still holds Apple's own copies, in the folder Apple put them in;
+[`cami-engine.md`](cami-engine.md) links the three files. The voices speak Mexican
 Spanish, tagged so NVDA's automatic language switching can reach for them,
 and they appear as **"Carlos (MacinTalk Pro)"** and **"Catalina (MacinTalk
 Pro)"** in your voice list, next to the English three.

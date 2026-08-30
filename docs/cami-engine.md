@@ -15,9 +15,25 @@ this is the recipe for reading them out of your own copy.
 
 ## Where it comes from
 
-`cami` was not on a System disk to be mounted. Apple bundled it, on some computers' installation media, as three
-**self-mounting floppy images** — `Mexican_TTS_1.5_1of3.smi.bin` and its `2of3`
-and `3of3` — and the extractor reads those `.smi.bin` files directly. All three
+`cami` was not on a System disk to be mounted, and it was never sold on its
+own. Apple gave it away: in November 1996 it went up on Apple's Software
+Updates site as one of the three named components of **PlainTalk 1.5**, a
+free public download, and it was bundled on some computers' installation
+media besides. The download took the form of three **self-mounting floppy
+images** — `Mexican_TTS_1.5_1of3.smi.bin` and its `2of3` and `3of3` — and
+the extractor reads those `.smi.bin` files directly.
+
+Apple's Software Updates site is long gone, but the Internet Archive holds a
+mirror of it — Apple's own distributed copies, in the folder Apple put them
+in — and that is where these files live today:
+
+* [`Mexican_TTS_1.5_1of3.smi.bin`](https://archive.org/download/download.info.apple.com.2012.11_202205/download.info.apple.com.2012.11.zip/download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Speech/PlainTalk_1.5/Mexican_TTS_1.5_1of3.smi.bin)
+* [`Mexican_TTS_1.5_2of3.smi.bin`](https://archive.org/download/download.info.apple.com.2012.11_202205/download.info.apple.com.2012.11.zip/download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Speech/PlainTalk_1.5/Mexican_TTS_1.5_2of3.smi.bin)
+* [`Mexican_TTS_1.5_3of3.smi.bin`](https://archive.org/download/download.info.apple.com.2012.11_202205/download.info.apple.com.2012.11.zip/download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Speech/PlainTalk_1.5/Mexican_TTS_1.5_3of3.smi.bin)
+
+Linked as provenance, not distribution: these are archived copies of what
+Apple posted publicly and free of charge, the add-on still ships none of it,
+and the extractor still reads only what you download yourself. All three
 are required and must sit in one folder: the engine is on disk 1, Carlos on disk
 3, and **Catalina's voice is split across disks 1 and 2**, so a missing floppy
 is not a smaller extraction but a broken one. The four wrappers between the
