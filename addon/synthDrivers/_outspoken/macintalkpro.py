@@ -275,6 +275,13 @@ class Engine(object):
         self._dead = False
         self.voices = list(allvoices)
         self.voice = voice or self.voices[0]
+        #: What language the numbers should come out in.  The cami front end
+        #: is Spanish through and through, and 1.2.0 fed it English number
+        #: names anyway -- "25" reached Carlos as "twenty five" and came out
+        #: as English words forced through Spanish letter-to-sound.  Decided
+        #: by the voice's creator, which is what routes it to the engine.
+        self._numlang = ("es" if getattr(self.voice, "creator", None) == "cami"
+                         else "en")
         self._rate = None
         #: Tenths of a semitone from the voice's own pitch, and that pitch as
         #: the engine reports it. One voice per Engine here, so the second
@@ -551,7 +558,8 @@ class Engine(object):
         """Pro has its own front end, so this only prepares the text."""
         if self.number_mode in ("words", "digits"):
             text = numwords.normalise(
-                text, spell_out=(self.number_mode == "digits"))
+                text, spell_out=(self.number_mode == "digits"),
+                lang=self._numlang)
         for ch in self.SPOKEN_PUNCTUATION:
             if ch in text:
                 text = text.replace(ch, " ")

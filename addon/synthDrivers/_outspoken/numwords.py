@@ -58,14 +58,102 @@ ORDINALS = {"one": "first", "two": "second", "three": "third",
 MINUS = "minus"
 POINT = "point"
 
+# ---------------------------------------------------------------------------
+# Spanish, for the cami voices.  Carlos read "25" as "twenty five" in 1.2.0
+# because this module only knew English and the driver fed its output to a
+# Spanish front end all the same -- English number names pushed through
+# Spanish letter-to-sound rules.  Tomi heard it within the hour.
+#
+# Mexican Spanish throughout, because that is what the cami engine is: the
+# decimal mark is read "punto" (es-MX, like the US, points its decimals), and
+# the scale is the long one, where mil millones is 10^9 and billón is 10^12
+# -- a Spanish speaker hearing "billón" for 10^9 is hearing a number a
+# thousand times too small.
+#
+# The composition rules that differ from English, each carried below:
+# dieciséis through veintinueve are single fused words; tens join units with
+# "y" (treinta y dos); 100 exactly is "cien" and 101-199 "ciento";
+# five/seven/nine hundreds are irregular (quinientos, setecientos,
+# novecientos); 1000 is bare "mil", never "uno mil"; and a multiplier ending
+# in "uno" apocopates before a scale word -- veintiún mil, treinta y un
+# millones.  The accented vowels are ordinary MacRoman, which is the engine's
+# native encoding.
+# ---------------------------------------------------------------------------
 
-def cardinal(n):
+ONES_ES = ("cero uno dos tres cuatro cinco seis siete ocho nueve diez once "
+           "doce trece catorce quince dieciséis diecisiete dieciocho "
+           "diecinueve veinte veintiuno veintidós veintitrés veinticuatro "
+           "veinticinco veintiséis veintisiete veintiocho "
+           "veintinueve").split()
+TENS_ES = ("_ _ _ treinta cuarenta cincuenta sesenta setenta ochenta "
+           "noventa").split()
+HUNDREDS_ES = ("_ ciento doscientos trescientos cuatrocientos quinientos "
+               "seiscientos setecientos ochocientos novecientos").split()
+
+#: Long scale.  10^9 and 10^15 need no names of their own: the quotient a
+#: scale takes runs to 999999, so "dos mil quinientos millones" falls out of
+#: the same composition that makes "dos mil quinientos".
+SCALES_ES = [(10 ** 12, "billón", "billones"),
+             (10 ** 6, "millón", "millones")]
+
+MINUS_ES = "menos"
+POINT_ES = "punto"
+LARGE_ES = "número grande"
+
+
+def _apocope(words):
+    """'veintiuno' -> 'veintiún', 'treinta y uno' -> 'treinta y un'.
+
+    Only ever before a scale word, which is the only place this is called.
+    """
+    if words.endswith("veintiuno"):
+        return words[:-len("veintiuno")] + "veintiún"
+    if words.endswith("uno"):
+        return words[:-len("uno")] + "un"
+    return words
+
+
+def _cardinal_es(n):
+    if n < 0:
+        return MINUS_ES + " " + _cardinal_es(-n)
+    if n >= LIMIT:
+        return LARGE_ES
+    if n < 30:
+        return ONES_ES[n]
+    if n < 100:
+        t, r = divmod(n, 10)
+        return TENS_ES[t] + (" y " + ONES_ES[r] if r else "")
+    if n == 100:
+        return "cien"
+    if n < 1000:
+        h, r = divmod(n, 100)
+        return HUNDREDS_ES[h] + (" " + _cardinal_es(r) if r else "")
+    for value, one, many in SCALES_ES:
+        if n >= value:
+            q, r = divmod(n, value)
+            if q == 1:
+                head = "un " + one
+            else:
+                head = _apocope(_cardinal_es(q)) + " " + many
+            return head + (" " + _cardinal_es(r) if r else "")
+    # Thousands: bare "mil" for exactly one of them, never "uno mil".
+    q, r = divmod(n, 1000)
+    head = "mil" if q == 1 else _apocope(_cardinal_es(q)) + " mil"
+    return head + (" " + _cardinal_es(r) if r else "")
+
+
+def cardinal(n, lang="en"):
     """0 -> 'zero', 1234 -> 'one thousand two hundred thirty four'.
 
     No "and" before the tens: American convention, which is what the phoneme
     rules and the voices were built around.  No hyphens either -- the rules
     treat a hyphen as punctuation and it would become a pause.
+
+    `lang="es"` answers in Mexican Spanish for the cami voices; everything
+    the docstring above says about hyphens holds there too.
     """
+    if lang == "es":
+        return _cardinal_es(n)
     if n < 0:
         return MINUS + " " + cardinal(-n)
     if n >= LIMIT:
@@ -118,9 +206,10 @@ def read_year(n):
     return cardinal(hi) + " " + cardinal(lo)
 
 
-def digits(s):
+def digits(s, lang="en"):
     """'2024' -> 'two zero two four', for when spelling out is wanted."""
-    return " ".join(ONES[int(c)] if c.isdigit() else c for c in s)
+    names = ONES_ES if lang == "es" else ONES
+    return " ".join(names[int(c)] if c.isdigit() else c for c in s)
 
 
 #: A signed number with optional thousands separators and an optional
@@ -140,13 +229,23 @@ _NUMBER = re.compile(r"""
 """, re.VERBOSE | re.IGNORECASE)
 
 
-def normalise(text, spell_out=False):
+def normalise(text, spell_out=False, lang="en"):
     """Replace numbers in `text` with words.
 
     `spell_out` gives the engine's own behaviour, digit by digit, for a user
     who prefers it -- that is the setting worth exposing in the driver, since
     long identifiers and phone numbers really are easier to follow that way.
+
+    `lang="es"` speaks the numbers in Mexican Spanish, for the cami voices.
+    An English ordinal suffix (`3rd`) in Spanish text becomes the bare
+    cardinal: Spanish ordinals are their own morphology, an English suffix in
+    Spanish prose is already foreign, and "tres" is predictable where
+    "tercero" would be a guess about gender and position.
     """
+    minus = MINUS_ES if lang == "es" else MINUS
+    point = POINT_ES if lang == "es" else POINT
+    large = LARGE_ES if lang == "es" else LARGE
+
     def big(s):
         # 19 significant digits is LIMIT exactly.  Decided on the string,
         # never after `int()`: Python refuses the conversion itself past
@@ -160,23 +259,27 @@ def normalise(text, spell_out=False):
         # about long numbers and does not reach here.
         if mo.group("ord"):
             head = mo.group("ord")[:-2]
-            return LARGE if big(head) else ordinal(int(head))
+            if big(head):
+                return large
+            if lang == "es":
+                return cardinal(int(head), lang)
+            return ordinal(int(head))
 
         raw = mo.group("num")
         neg = raw.startswith("-")
         raw = raw.lstrip("-").replace(",", "")
         whole, _, frac = raw.partition(".")
         if spell_out:
-            out = digits(whole or "0")
+            out = digits(whole or "0", lang)
         elif big(whole):
-            out = LARGE
+            out = large
         else:
-            out = cardinal(int(whole or "0"))
+            out = cardinal(int(whole or "0"), lang)
         if frac:
             # The fractional part is always digit by digit either way: nobody
             # reads .50 as "fifty".
-            out += " " + POINT + " " + digits(frac)
-        return (MINUS + " " + out) if neg else out
+            out += " " + point + " " + digits(frac, lang)
+        return (minus + " " + out) if neg else out
 
     return _NUMBER.sub(sub, text)
 

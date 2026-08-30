@@ -127,3 +127,71 @@ def test_a_five_thousand_digit_run_does_not_raise():
     # and a user who asked for digits should get all of them.
     spelled = numwords.normalise(run, spell_out=True)
     assert spelled.split().count("nine") == 5000
+
+
+# ---------------------------------------------------------------------------
+# Spanish, because Carlos read "25" as "twenty five" in 1.2.0.
+#
+# The parser only knew English and the driver fed its output to the cami
+# front end all the same: English number names forced through Spanish
+# letter-to-sound.  Heard within the hour of release.  Each case below is a
+# composition rule English does not have, so a rewrite that quietly
+# anglicises the logic fails by name.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("n,want", [
+    (0, "cero"),
+    (16, "dieciséis"),              # fused, and accented -- plain MacRoman
+    (21, "veintiuno"),
+    (25, "veinticinco"),
+    (30, "treinta"),
+    (32, "treinta y dos"),          # tens join units with y
+    (100, "cien"),                  # exactly one hundred is its own word
+    (101, "ciento uno"),
+    (121, "ciento veintiuno"),
+    (500, "quinientos"),            # the irregular hundreds
+    (700, "setecientos"),
+    (900, "novecientos"),
+    (999, "novecientos noventa y nueve"),
+    (1000, "mil"),                  # never "uno mil"
+    (1001, "mil uno"),
+    (2016, "dos mil dieciséis"),
+    (21000, "veintiún mil"),        # apocope before a scale word
+    (31000, "treinta y un mil"),
+    (100000, "cien mil"),
+    (1000000, "un millón"),
+    (2000000, "dos millones"),
+    (21000000, "veintiún millones"),
+    (10 ** 9, "mil millones"),      # the long scale: 10^9 has no name
+    (2500000000, "dos mil quinientos millones"),
+    (10 ** 12, "un billón"),        # and billón is 10^12, not 10^9
+    (10 ** 15, "mil billones"),
+    (10 ** 18, "número grande"),
+    (-5, "menos cinco"),
+])
+def test_cardinal_es(n, want):
+    assert numwords.cardinal(n, lang="es") == want
+
+
+@pytest.mark.parametrize("text,want", [
+    ("tienes 25 mensajes", "tienes veinticinco mensajes"),
+    ("son -3.5 grados", "son menos tres punto cinco grados"),
+    ("página 1,234", "página mil doscientos treinta y cuatro"),
+    # An English ordinal suffix inside Spanish text: the bare cardinal,
+    # because "tercero" would be a guess about gender and position.
+    ("el 3rd intento", "el tres intento"),
+])
+def test_normalise_es(text, want):
+    assert numwords.normalise(text, lang="es") == want
+
+
+def test_spell_out_es_uses_spanish_digit_names():
+    assert numwords.normalise("2024", spell_out=True, lang="es") == \
+        "dos cero dos cuatro"
+
+
+def test_english_is_untouched_by_the_spanish_tables():
+    """The default answers exactly as it did before the lang parameter."""
+    assert numwords.cardinal(25) == "twenty five"
+    assert numwords.normalise("you owe 1,234.50") == \
+        "you owe one thousand two hundred thirty four point five zero"
