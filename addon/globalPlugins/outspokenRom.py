@@ -256,9 +256,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         secure = bool(globalVars.appArgs.secure)
         self._addMenuItem()
         if secure:
-            log.info("outSPOKEN: secure mode, menu item only")
+            log.debug("outSPOKEN: secure mode, menu item only")
             return
-        log.info("outSPOKEN: ROM check armed")
+        log.debug("outSPOKEN: ROM check armed")
         threading.Timer(6.0, self._check).start()
 
     def _addMenuItem(self):
@@ -274,7 +274,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self._menuItem = sysTrayIcon.toolsMenu.Append(
                 wx.ID_ANY, self.MENU_LABEL, self.MENU_HELP)
             sysTrayIcon.Bind(wx.EVT_MENU, self._onMenu, self._menuItem)
-            log.info("outSPOKEN: added the Tools menu item")
+            log.debug("outSPOKEN: added the Tools menu item")
         except Exception:
             # Never fatal: the add-on still speaks without a menu entry, and
             # global plugins load while the GUI is still assembling itself.
@@ -360,10 +360,20 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         """
         try:
             ok, lines = rom.explain()
-            log.info("outSPOKEN: engine %s\n  %s"
-                     % ("ready" if ok else "NOT ready", "\n  ".join(lines)))
+            #: One line at INFO when it works; the whole report only when it
+            #: does not.  A dozen lines of searched folders on every start, at
+            #: the level a stable NVDA shows by default, reads like debugging
+            #: left on -- the same complaint Panthera drew within a day of
+            #: 2.0.1.  The report stays at debug for a working engine and at
+            #: INFO for a missing one, which is the only time it is needed.
             if ok:
+                found = [ln.strip() for ln in lines
+                         if ln.strip().startswith("runnable engines:")]
+                log.info("outSPOKEN: engine ready%s"
+                         % ((" -- " + found[0]) if found else ""))
+                log.debug("outSPOKEN: engine report\n  %s" % "\n  ".join(lines))
                 return
+            log.info("outSPOKEN: engine NOT ready\n  %s" % "\n  ".join(lines))
             folder = rom.config_dir()
             if os.path.exists(os.path.join(folder, _MARKER)):
                 log.info("outSPOKEN: not asking, %s exists in %s"
