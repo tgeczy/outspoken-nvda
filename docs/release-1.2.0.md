@@ -19,7 +19,7 @@ posted it as a free download — one of the three named components of
 it on some computers' installation media besides. The Internet Archive's
 [mirror of that site](https://archive.org/download/download.info.apple.com.2012.11_202205/download.info.apple.com.2012.11.zip/download.info.apple.com/Apple_Support_Area/Apple_Software_Updates/English-North_American/Macintosh/System/Speech/PlainTalk_1.5/)
 still holds Apple's own copies, in the folder Apple put them in;
-[`cami-engine.md`](cami-engine.md) links the three files. The voices speak Mexican
+[`cami-engine.md`](https://github.com/tgeczy/outspoken-nvda/blob/v1.2.0/docs/cami-engine.md) links the three files. The voices speak Mexican
 Spanish, tagged so NVDA's automatic language switching can reach for them,
 and they appear as **"Carlos (MacinTalk Pro)"** and **"Catalina (MacinTalk
 Pro)"** in your voice list, next to the English three.
@@ -39,8 +39,8 @@ same "point it at your own copy" path as everything else. Four wrappers sit
 between the download and the speech, all peeled in pure Python with no emulator:
 a MacBinary header, an NDIF disk image, an Apple Installer tome, and the
 InstaCompOne codec. The whole recipe is in
-[`docs/self-mounting-images.md`](self-mounting-images.md) and
-[`docs/cami-engine.md`](cami-engine.md); as ever, the add-on ships none of it.
+[`docs/self-mounting-images.md`](https://github.com/tgeczy/outspoken-nvda/blob/v1.2.0/docs/self-mounting-images.md) and
+[`docs/cami-engine.md`](https://github.com/tgeczy/outspoken-nvda/blob/v1.2.0/docs/cami-engine.md); as ever, the add-on ships none of it.
 
 **All three floppies have to be in one folder**, because Apple split them that
 way — the engine is on disk 1, Carlos on disk 3, and **Catalina's voice is
