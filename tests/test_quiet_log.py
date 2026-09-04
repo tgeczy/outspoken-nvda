@@ -20,29 +20,38 @@ ADDON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 
 def _stub_nvda():
-    """Enough of NVDA for the plugin to import.  Nothing here is exercised."""
-    if "globalPluginHandler" in sys.modules:
-        return
-    gph = types.ModuleType("globalPluginHandler")
-    gph.GlobalPlugin = type("GlobalPlugin", (object,), {
-        "__init__": lambda self: None, "terminate": lambda self: None})
-    sys.modules["globalPluginHandler"] = gph
-    gv = types.ModuleType("globalVars")
-    gv.appArgs = types.SimpleNamespace(secure=False, configPath=None)
-    sys.modules["globalVars"] = gv
-    g = types.ModuleType("gui")
-    g.messageBox = lambda *a, **k: None
-    g.mainFrame = None
-    sys.modules["gui"] = g
-    wx = types.ModuleType("wx")
-    for n in ("OK", "CANCEL", "YES", "NO", "YES_NO", "ID_ANY", "EVT_MENU",
-              "ICON_INFORMATION", "ICON_WARNING"):
-        setattr(wx, n, len(n))
-    wx.CallAfter = wx.CallLater = lambda *a, **k: None
-    sys.modules["wx"] = wx
-    lh = types.ModuleType("logHandler")
-    lh.log = types.SimpleNamespace()
-    sys.modules["logHandler"] = lh
+    """Enough of NVDA for the plugin to import.  Nothing here is exercised.
+
+    Only what is MISSING is installed.  The first version replaced whatever
+    was there, and inside the full suite that clobbered the conftest's
+    richer fakes for every test that ran afterwards -- the SAPI serve tests
+    lost their configPath to this file's None and failed in a way that
+    passed standalone, which is the worst kind of failure to chase."""
+    if "globalPluginHandler" not in sys.modules:
+        gph = types.ModuleType("globalPluginHandler")
+        gph.GlobalPlugin = type("GlobalPlugin", (object,), {
+            "__init__": lambda self: None, "terminate": lambda self: None})
+        sys.modules["globalPluginHandler"] = gph
+    if "globalVars" not in sys.modules:
+        gv = types.ModuleType("globalVars")
+        gv.appArgs = types.SimpleNamespace(secure=False, configPath=None)
+        sys.modules["globalVars"] = gv
+    if "gui" not in sys.modules:
+        g = types.ModuleType("gui")
+        g.messageBox = lambda *a, **k: None
+        g.mainFrame = None
+        sys.modules["gui"] = g
+    if "wx" not in sys.modules:
+        wx = types.ModuleType("wx")
+        for n in ("OK", "CANCEL", "YES", "NO", "YES_NO", "ID_ANY", "EVT_MENU",
+                  "ICON_INFORMATION", "ICON_WARNING"):
+            setattr(wx, n, len(n))
+        wx.CallAfter = wx.CallLater = lambda *a, **k: None
+        sys.modules["wx"] = wx
+    if "logHandler" not in sys.modules:
+        lh = types.ModuleType("logHandler")
+        lh.log = types.SimpleNamespace()
+        sys.modules["logHandler"] = lh
 
 
 class _RecordingLog(object):

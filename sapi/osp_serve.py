@@ -198,6 +198,44 @@ def _exact(stream, n):
     return buf
 
 
+def _claim_stdout():
+    """The protocol keeps the pipe; stdout stops being it.
+
+    Every byte on stdout is protocol: a stray print() anywhere in the
+    driver, a vendored module, or a future contributor's debugging lands in
+    the audio stream, and the engine on the other side reads text as a
+    frame count.  Panthera's sibling host learned this from a game that
+    crashed, rarely, after hours -- ASCII in the stream became a
+    billion-frame allocation inside the client application.
+
+    So serve mode takes a private duplicate of the pipe before anything
+    else can write, and rebinds both fd 1 and sys.stdout to stderr --
+    which the SAPI engine already points somewhere harmless -- or to NUL
+    when there is no stderr to have.  A print() after this line goes where
+    chatter belongs, and the protocol cannot be corrupted from Python at
+    all.  `--list` never comes here: its stdout IS its output.
+    """
+    fd = os.dup(1)
+    try:
+        import msvcrt
+        msvcrt.setmode(fd, os.O_BINARY)
+    except ImportError:
+        pass
+    proto = os.fdopen(fd, "wb")
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        os.dup2(2, 1)
+    except OSError:
+        nul = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(nul, 1)
+        os.close(nul)
+    sys.stdout = sys.stderr
+    return proto
+
+
 def main():
     args = sys.argv[1:]
     listing = "--list" in args
@@ -218,7 +256,7 @@ def main():
             return 0
 
         stdin = sys.stdin.buffer
-        stdout = sys.stdout.buffer
+        stdout = _claim_stdout()
 
         #: Requests and cancels arrive on a reader thread, so a cancel can
         #: land WHILE an utterance renders -- the same shape as the NVDA

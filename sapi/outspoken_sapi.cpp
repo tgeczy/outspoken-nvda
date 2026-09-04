@@ -187,14 +187,86 @@ static bool host_alive() {
     if(!GetExitCodeProcess(g_proc,&code)||code!=STILL_ACTIVE){host_drop();return false;}
     return true;
 }
+
+/* The serve side sends one engine buffer per chunk, and no Macintosh sound
+ * buffer these engines fill comes anywhere near ten seconds of audio.  A
+ * count above this is not a large chunk, it is a desynced pipe being read
+ * as one -- and before this check, `audio.resize(frames*2)` on such a
+ * count threw bad_alloc straight through the COM boundary into the client
+ * application, which is how Panthera's sibling crashed a game.  The serve
+ * script now keeps stray prints off the stream entirely; this is armor for
+ * whatever corrupts it anyway, because a *small* misread is arithmetic
+ * this side cannot detect at all. */
+static const unsigned MAX_CHUNK_FRAMES = NATIVE_RATE * 10u;
+
+static DWORD read_timeout_ms() {
+    HKEY k; DWORD v = 30000, n = sizeof v, t;
+    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
+                       KEY_READ, &k)) {
+        DWORD got = 0; n = sizeof got;
+        if (!RegQueryValueExW(k, L"ReadTimeoutMs", 0, &t, (BYTE*)&got, &n)
+            && t == REG_DWORD) v = got;
+        RegCloseKey(k);
+    }
+    return v < 1000 ? 1000 : v;
+}
+
+/* Read exactly `n` response bytes without ever trusting the host to answer.
+ *
+ * The old reads blocked in ReadFile with no way out: a serve process that
+ * wedged mid-render -- alive, silent -- held the client's speech thread
+ * forever, lock in hand, and the session's SAPI speech died with it.  The
+ * wait now watches the abort flag, the host's death, and a no-progress
+ * deadline (ReadTimeoutMs, default thirty seconds).
+ *
+ * **The abort is only honoured before the first byte of an item.**  This
+ * engine's cancel is graceful -- the host stays warm and the response is
+ * drained to its terminator -- so returning mid-item would leave the pipe
+ * misaligned inside the very stream the drain exists to preserve.  Started
+ * items finish or fail; the deadline holds either way. */
+enum ReadWait { RW_OK, RW_FAIL, RW_ABORT };
+static ReadWait exact_wait(HANDLE h, void *p, DWORD n, ISpTTSEngineSite *site) {
+    BYTE *b=(BYTE*)p; DWORD done=0;
+    const DWORD budget=read_timeout_ms();
+    DWORD idle=GetTickCount();
+    while(done<n){
+        DWORD avail=0;
+        if(!PeekNamedPipe(h,0,0,0,&avail,0))return RW_FAIL;
+        if(avail){
+            DWORD want=n-done; if(want>avail)want=avail;
+            DWORD got=0;
+            if(!ReadFile(h,b+done,want,&got,0)||!got)return RW_FAIL;
+            done+=got; idle=GetTickCount();
+            continue;
+        }
+        if(!done&&site&&(site->GetActions()&SPVES_ABORT))return RW_ABORT;
+        if(!g_proc||WaitForSingleObject(g_proc,0)==WAIT_OBJECT_0)return RW_FAIL;
+        if(GetTickCount()-idle>=budget)return RW_FAIL;
+        Sleep(3);
+    }
+    return RW_OK;
+}
+
+/* Scoped, so an exception unwinding out of the speak path releases the lock
+ * instead of abandoning it -- an abandoned critical section turns the next
+ * utterance into a deadlock, heard as speech dying for good. */
+struct CsLock {
+    CRITICAL_SECTION *cs;
+    CsLock(CRITICAL_SECTION *c):cs(c){EnterCriticalSection(cs);}
+    ~CsLock(){LeaveCriticalSection(cs);}
+};
 static bool host_ensure(const std::wstring &dataRoot) {
     sweep_logs();
     if(host_alive())return true;
     std::wstring base=module_dir();
     std::wstring cmd=L"\""+base+L"\\python\\python.exe\" \""+base+
                      L"\\osp_serve.py\" \""+dataRoot+L"\"";
+    /* A megabyte of buffer each way against the four-kilobyte default: a
+     * request larger than the buffer would block the writer until the host
+     * read it, and the response side never has to stall the serve over a
+     * chunk the client has not collected yet. */
     SECURITY_ATTRIBUTES sa={sizeof(sa),0,TRUE}; HANDLE inR,inW,outR,outW;
-    if(!CreatePipe(&inR,&inW,&sa,0)||!CreatePipe(&outR,&outW,&sa,0))return false;
+    if(!CreatePipe(&inR,&inW,&sa,1<<20)||!CreatePipe(&outR,&outW,&sa,1<<20))return false;
     SetHandleInformation(inW,HANDLE_FLAG_INHERIT,0);SetHandleInformation(outR,HANDLE_FLAG_INHERIT,0);
     /* The serve process never gets a pipe for its stderr.  A resident child
      * that writes a traceback into a pipe nobody drains stops dead when the
@@ -247,6 +319,21 @@ public:
         *wf=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof f);if(!*wf)return E_OUTOFMEMORY;**wf=f;return S_OK;
     }
     STDMETHODIMP Speak(DWORD,REFGUID,const WAVEFORMATEX*,const SPVTEXTFRAG *frags,ISpTTSEngineSite *site){
+        /* A COM method must never let an exception out: SAPI has no
+         * handler for one and the client application dies of it.  The
+         * frame-count clamp below makes the known thrower unreachable,
+         * but the guarantee belongs at the boundary, whatever the cause. */
+        try {
+            return speakInner(frags,site);
+        } catch(...) {
+            if(g_lockReady){
+                CsLock lock(&g_hostLock);
+                host_drop();       /* mid-protocol unwind = desynced pipe */
+            }
+            return E_FAIL;
+        }
+    }
+    HRESULT speakInner(const SPVTEXTFRAG *frags,ISpTTSEngineSite *site){
         if(!token||!site)return E_UNEXPECTED;
         std::wstring text;
         /* Bookmarks are the pacing contract, not decoration: NVDA's SAPI
@@ -295,7 +382,7 @@ public:
         int volume=100;   /* SAPI applies the application's volume itself. */
         std::string v=utf8(voice), u=utf8(text);
         unsigned req=REQ_MAGIC,nv=(unsigned)v.size(),nt=(unsigned)u.size();
-        EnterCriticalSection(&g_hostLock);
+        CsLock lock(&g_hostLock);
         bool ok=true;int status=0;bool aborted=false;
         unsigned long long total=0;
         unsigned seq=++g_seq;
@@ -303,14 +390,46 @@ public:
             ok=host_ensure(root);
             ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
             unsigned magic=0;status=-1;
-            ok=ok&&exact(g_out,&magic,4,false)&&exact(g_out,&status,4,false)&&magic==RSP_MAGIC;
+            /* Response reads wait rather than block -- exact_wait watches
+             * the abort flag, the serve's death and a no-progress deadline,
+             * so a wedged serve costs one failed utterance, not the
+             * session.  An abort while waiting takes the same door as the
+             * mid-stream one below: the seq-tagged cancel frame, then a
+             * drain to the terminator with the host kept warm. */
+            if(ok){
+                ReadWait r=exact_wait(g_out,&magic,4,site);
+                if(r==RW_OK)r=exact_wait(g_out,&status,4,site);
+                if(r==RW_ABORT){
+                    aborted=true;
+                    unsigned c=CANCEL_MAGIC;
+                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();ok=false;}
+                    else{
+                        r=exact_wait(g_out,&magic,4,0);
+                        if(r==RW_OK)r=exact_wait(g_out,&status,4,0);
+                        if(r!=RW_OK||magic!=RSP_MAGIC)ok=false;
+                    }
+                }else if(r!=RW_OK||magic!=RSP_MAGIC)ok=false;
+            }
             std::vector<BYTE> audio;
             while(ok&&status==0){
                 unsigned frames=0;
-                if(!exact(g_out,&frames,4,false)){ok=false;break;}
+                ReadWait r=exact_wait(g_out,&frames,4,aborted?0:site);
+                if(r==RW_ABORT){
+                    aborted=true;
+                    unsigned c=CANCEL_MAGIC;
+                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();ok=false;break;}
+                    continue;                      /* drain to terminator */
+                }
+                if(r!=RW_OK){ok=false;break;}
                 if(!frames)break;
+                if(frames>MAX_CHUNK_FRAMES){
+                    /* Not a chunk, a desynced stream read as one; see the
+                     * constant.  The pipe is unusable from here. */
+                    logline(L"desync: frame count %u refused",frames);
+                    ok=false;break;
+                }
                 unsigned bytes=frames*2; audio.resize(bytes);
-                if(!exact(g_out,audio.data(),bytes,false)){ok=false;break;}
+                if(exact_wait(g_out,audio.data(),bytes,0)!=RW_OK){ok=false;break;}
                 if(!aborted&&(site->GetActions()&SPVES_ABORT)){
                     /* Graceful cancel keeps the host warm: the serve side
                      * runs the driver's own instant cancel when the OSPC
@@ -362,7 +481,11 @@ public:
                 ULONG wrote=0;site->Write(pad,sizeof pad,&wrote);
             }
         }
-        if(!ok&&!aborted)host_drop();    /* a desynced pipe is never reused */
+        /* A desynced pipe is never reused -- and that has to include a
+         * drain that failed after an abort: the old guard kept the host
+         * when `aborted` was set, so a read error mid-drain left a pipe
+         * full of leftovers for the next utterance to misread. */
+        if(!ok)host_drop();
         /* The measurements convicted all four bugs; the words never did. */
         if(diagLevel()>=2)
             logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
@@ -372,7 +495,6 @@ public:
             logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d",
                     (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
                     ok?1:0,status,aborted?1:0);
-        LeaveCriticalSection(&g_hostLock);
         return aborted||(ok&&status==0)?S_OK:E_FAIL;
     }
 };
