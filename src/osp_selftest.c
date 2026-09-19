@@ -180,6 +180,34 @@ static void t_cpu_choice(void)
           "a 68040 runs rtd and pops the eight-byte frame correctly", d);
 }
 
+static void t_dispose_gives_memory_back(void)
+{
+    /* move.l #4096,d0 ; _NewPtr ; movea.l a0,a2 ; move.l #64,d0 ; _NewHandle ;
+     * movea.l a0,a3 ; movea.l a3,a0 ; _DisposeHandle ; movea.l a2,a0 ;
+     * _DisposePtr ; move.l #4096,d0 ; _NewPtr ; rts
+     *
+     * The engines allocate per utterance and dispose afterwards; with dispose
+     * a no-op the heap filled in a hundred utterances and the engine spun.
+     * The second _NewPtr must land where the first did, and the heap must be
+     * back to one block. */
+    static const unsigned short code[] = {
+        0x203C, 0x0000, 0x1000, 0xA11E, 0x2448,
+        0x203C, 0x0000, 0x0040, 0xA122, 0x2648,
+        0x204B, 0xA023, 0x204A, 0xA01F,
+        0x203C, 0x0000, 0x1000, 0xA11E, 0x4E75
+    };
+    char d[128];
+    unsigned first, second;
+    int r;
+    fresh(OSP_CPU_68000);
+    r = run(code, (int)(sizeof code / sizeof code[0]), 100000);
+    first = osp_get_reg(OSP_REG_A2);
+    second = osp_get_reg(OSP_REG_A0);
+    sprintf(d, "stop %d, first 0x%X, second 0x%X, heap used %u", r, first, second, osp_heap_used());
+    check(r == OSP_STOP_SENTINEL && first && second == first && osp_heap_used() == 4096,
+          "_DisposePtr and _DisposeHandle give the heap back", d);
+}
+
 static void t_memory_bounds(void)
 {
     unsigned char b[4] = { 1, 2, 3, 4 };
@@ -198,6 +226,7 @@ int main(void)
     t_exception_is_named();
     t_budget_is_a_stop();
     t_cpu_choice();
+    t_dispose_gives_memory_back();
     t_memory_bounds();
     osp_shutdown();
     printf("%s: %d failed\n", g_failed ? "FAIL" : "ok", g_failed);

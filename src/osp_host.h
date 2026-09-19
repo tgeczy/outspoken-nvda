@@ -66,6 +66,7 @@ OSP_API int      osp_set_cpu(int proc);
 /* The one Memory Manager zone: a flat bump allocator over [base, base+size). */
 OSP_API void     osp_heap_init(unsigned base, unsigned size);
 OSP_API unsigned osp_heap_used(void);
+OSP_API int      osp_heap_blocks(void);      /* blocks tracked; diagnosis */
 /* Serve the Memory Manager traps (_NewHandle, _HLock, the zone queries...)
  * from that heap.  Off after osp_init, and off means an unanswered trap is a
  * stub that returns noErr and allocates nothing -- so every engine turns it

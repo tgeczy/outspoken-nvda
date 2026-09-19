@@ -203,10 +203,12 @@ Each phase ends green on the checks named, and each is a pull request against
   `osp_engine_mtk3.c`, `osp_engine_pro.c` (each Python module ported line
   for line; Pro covers `gala` and `cami`). The oracle: **all 36 voices,
   223 renders, byte-identical on the 32-bit pair**, each engine on its first
-  run. The 64-bit pair confirmed for `.sp` only so far -- the 1984 engine's
-  full grid was still holding the 64-bit DLL -- and the Linux box is next.
-  Full grids per engine and the Tab-hold test are still owed. `stop()` is
-  the no-op it was for MacinTalk 2, 3 and Pro; real cancel is Phase 6.
+  run. **The 64-bit pair confirmed for all four as well** once the heap fix
+  below let the 1984 engine's full grid finish: 763 renders on `.sp`
+  (the 223-render script plus the 540-render grid), zero disagreements.
+  Full grids for the other three engines and the Tab-hold test are still
+  owed. `stop()` is the no-op it was for MacinTalk 2, 3 and Pro; real
+  cancel is Phase 6.
   **Linux, same day:** all four engines through the `.so` on `coconut`,
   223 renders, byte-identical to the Python and to the frozen baseline.
 * **The catalogue is in C** (`src/osp_voices.c`): the ttvd as
@@ -226,6 +228,25 @@ Each phase ends green on the checks named, and each is a pull request against
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.
+
+## Found along the way
+
+* **The engines leaked their whole heap, and then went silent** (found
+  2026-09-19 by the render oracle's full grid, which wedged on its 133rd
+  render). The host's `_DisposePtr` and `_DisposeHandle` were no-ops on a
+  bump allocator. The 1984 driver allocates one block per utterance
+  (3,688 bytes for a forty-character sentence) and disposes of it; MacinTalk
+  Pro allocates and disposes about 57 KB per utterance. So the 512 KB heap
+  was full after 123 short utterances and Pro's 10 MB after about 140, at
+  which point `_NewPtr` answered memFullErr, the engine spun until its
+  instruction budget (seven seconds of nothing) and every utterance after it
+  was silent, until a voice switch rebuilt the engine. MacinTalk 2 and 3
+  allocate nothing per utterance and were never affected. Shipped in every
+  release so far; nobody reported it. **Fixed in the host core**: dispose is
+  real and the heap top rolls back over freed blocks, so no address changes
+  and every frozen baseline still holds to the byte. `osp_selftest` checks
+  the dispose; `tests/test_heap_reuse.py` speaks 200 utterances on the 1984
+  engine and 40 on Pro with a stable heap and identical output.
 
 ## Asked for along the way (Phase 6, the NVDA driver)
 
