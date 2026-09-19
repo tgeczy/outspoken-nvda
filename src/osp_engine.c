@@ -170,6 +170,92 @@ static int eng_slurp(const char *path, unsigned char **data, int *len)
     return 0;
 }
 
+#if defined(_WIN32)
+/* UTF-16 back to UTF-8, for the names a folder listing hands back. */
+static int eng_utf8_from_utf16(const wchar_t *s, char *out, size_t cap)
+{
+    size_t n = 0;
+    while (*s) {
+        unsigned cp = *s++;
+        if (cp >= 0xD800 && cp < 0xDC00 && *s >= 0xDC00 && *s < 0xE000)
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (*s++ - 0xDC00);
+        if (cp < 0x80) { if (n + 2 > cap) return -1; out[n++] = (char)cp; }
+        else if (cp < 0x800) { if (n + 3 > cap) return -1; out[n++] = (char)(0xC0 | (cp >> 6)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { if (n + 4 > cap) return -1; out[n++] = (char)(0xE0 | (cp >> 12)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else { if (n + 5 > cap) return -1; out[n++] = (char)(0xF0 | (cp >> 18)); out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
+    }
+    out[n] = 0;
+    return 0;
+}
+#endif
+
+/* A folder's entries, sorted as Python's sorted(os.listdir()) sorts them:
+ * by code point, which for UTF-8 is byte order.  `.` and `..` left out. */
+typedef struct { char **names; int n, cap; } EngDir;
+
+static int eng_dir_add(EngDir *d, const char *name)
+{
+    char *copy;
+    if (!strcmp(name, ".") || !strcmp(name, "..")) return 0;
+    if (d->n >= d->cap) {
+        int want = d->cap ? d->cap * 2 : 64;
+        char **q = (char **)realloc(d->names, sizeof(char *) * (size_t)want);
+        if (!q) return -1;
+        d->names = q; d->cap = want;
+    }
+    copy = (char *)malloc(strlen(name) + 1);
+    if (!copy) return -1;
+    strcpy(copy, name);
+    d->names[d->n++] = copy;
+    return 0;
+}
+static int eng_dir_cmp(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+static void eng_dir_free(EngDir *d)
+{
+    int i;
+    for (i = 0; i < d->n; i++) free(d->names[i]);
+    free(d->names);
+    memset(d, 0, sizeof *d);
+}
+static int eng_listdir(const char *path, EngDir *d)
+{
+    memset(d, 0, sizeof *d);
+#if defined(_WIN32)
+    {
+        wchar_t wide[ENG_PATH + 4];
+        struct _wfinddata_t f;
+        intptr_t h;
+        char name[ENG_PATH];
+        size_t n;
+        if (eng_utf16(path, wide, ENG_PATH) != 0) return -1;
+        n = wcslen(wide);
+        if (n + 3 >= ENG_PATH + 4) return -1;
+        wide[n] = L'\\'; wide[n + 1] = L'*'; wide[n + 2] = 0;
+        h = _wfindfirst(wide, &f);
+        if (h == -1) return -1;
+        do {
+            if (eng_utf8_from_utf16(f.name, name, sizeof name) == 0)
+                if (eng_dir_add(d, name)) { _findclose(h); eng_dir_free(d); return -1; }
+        } while (_wfindnext(h, &f) == 0);
+        _findclose(h);
+    }
+#else
+    {
+        DIR *dir = opendir(path);
+        struct dirent *e;
+        if (!dir) return -1;
+        while ((e = readdir(dir)) != NULL)
+            if (eng_dir_add(d, e->d_name)) { closedir(dir); eng_dir_free(d); return -1; }
+        closedir(dir);
+    }
+#endif
+    if (d->n > 1) qsort(d->names, (size_t)d->n, sizeof(char *), eng_dir_cmp);
+    return 0;
+}
+
 static const char *eng_file(const EngManifest *m, const char *name)
 {
     int i;
@@ -346,12 +432,14 @@ static void eng_translate_sm(const unsigned char *text, int len, int spanish, Nu
 
 #include "osp_engine_sp.c"
 #include "osp_engine_mtk2.c"
+#include "osp_engine_mtk3.c"
 
 static const EngOps *eng_ops_for(int kind)
 {
     switch (kind) {
         case ENG_KIND_SP:   return &ENG_SP_OPS;
         case ENG_KIND_MTK2: return &ENG_MTK2_OPS;
+        case ENG_KIND_MTK3: return &ENG_MTK3_OPS;
         default:            return NULL;
     }
 }

@@ -30,6 +30,11 @@
 #include <math.h>
 #include <stdlib.h>
 #include <wchar.h>
+#if defined(_WIN32)
+#  include <io.h>               /* _wfindfirst, for listing a folder */
+#else
+#  include <dirent.h>
+#endif
 
 #include "m68k.h"
 
