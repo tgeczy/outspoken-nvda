@@ -1,0 +1,49 @@
+# Build the host natively on Linux and run the check that carries its own
+# inputs.
+#
+# **No Apple or Berkeley data goes near this, and none ever can.**  The rule
+# across both repositories is ship the extractor, never the bits, and a build
+# server is exactly where that rule would be easiest to break by accident.
+# So the only test here is `osp_selftest`, which hand-assembles a few 68000
+# instructions and asks the host to run them; the render oracles that need a
+# real engine stay on the machines that legitimately have one.
+#
+# Two architectures, because the whole point of an interpreter in plain C is
+# that there is nothing to prefer: the same source, the same checks, on x86-64
+# and on 64-bit ARM.
+name: linux
+
+on:
+  push:
+    branches: [main, "tgeczy/**"]
+  pull_request:
+
+jobs:
+  build:
+    # Ubuntu 22.04 / glibc 2.35 is the runtime baseline the sibling project
+    # settled on; ubuntu-latest links newer glibc symbols that refuse to load
+    # on a 22.04 machine.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    name: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the host
+        run: sh build_linux.sh
+
+      - name: Self-test
+        run: build/linux/osp_selftest
+
+      - name: Show what was built
+        run: |
+          uname -m
+          ls -l build/linux
+          file build/linux/libosp_host.so build/linux/osp_selftest || true

@@ -27,12 +27,19 @@ ROOT = os.path.dirname(HERE)
 #: `OSError: [WinError 193] %1 is not a valid Win32 application`, which is
 #: exactly what several other synthesizers in this user's log are dying of.
 _BITS = 64 if sys.maxsize > 2 ** 32 else 32
-_NAME = "osp_host.dll" if _BITS == 64 else "osp_host_x86.dll"
+if os.name == "nt":
+    _NAME = "osp_host.dll" if _BITS == 64 else "osp_host_x86.dll"
+else:
+    # Off Windows there is one library and no width to choose: Musashi is an
+    # interpreter in plain C and the host around it is 64-bit clean, so
+    # build_linux.sh produces one .so for whatever the machine is.
+    _NAME = "libosp_host.so"
 
 # Deployed inside the add-on the DLL sits beside this file; in the repo it
 # lives under build/. Checking both lets one module serve both places.
 _CANDIDATES = [os.path.join(HERE, _NAME),
-               os.path.join(ROOT, "build", _NAME)]
+               os.path.join(ROOT, "build", _NAME),
+               os.path.join(ROOT, "build", "linux", _NAME)]
 DLL = next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
 
 # m68k_register_t, in declaration order

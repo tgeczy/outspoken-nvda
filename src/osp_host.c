@@ -32,11 +32,11 @@
 
 #include "m68k.h"
 
-#if defined(_WIN32)
-#  define OSP_API __declspec(dllexport)
-#else
-#  define OSP_API
-#endif
+/* The exported surface is declared once, in osp_host.h, and this file is the
+ * one that defines it -- so a definition below that disagrees with the header
+ * fails right here rather than in the first C caller. */
+#define OSP_HOST_BUILD
+#include "osp_host.h"
 
 
 #include "osp_host_memory.c"

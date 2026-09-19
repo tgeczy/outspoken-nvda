@@ -76,20 +76,16 @@ build_one() {
     echo "  -> build/osp_host$SUF.dll"
 }
 
-# --- fetch Musashi -------------------------------------------------------
-# Not vendored.  This repository contains only our own code; the emulator core
-# is Karl Stenerud's and is fetched at build time.  See THIRD_PARTY_LICENSES.md.
-MUSASHI_URL="https://github.com/kstenerud/Musashi"
-if [ ! -f "$MUS/m68kcpu.c" ]; then
-    echo "=== fetching Musashi ==="
-    mkdir -p "$ROOT/third_party"
-    git clone --depth 1 "$MUSASHI_URL" "$MUS"
-    # The host needs a per-instruction hook to catch A-line traps at their
-    # vector and to enforce a counted instruction budget.  Only change made.
-    sed -i 's/^#define M68K_INSTRUCTION_HOOK       M68K_OPT_OFF/#define M68K_INSTRUCTION_HOOK       M68K_OPT_ON/' "$MUS/m68kconf.h"
-    grep -q 'M68K_INSTRUCTION_HOOK       M68K_OPT_ON' "$MUS/m68kconf.h" \
-        || { echo "failed to enable M68K_INSTRUCTION_HOOK"; exit 1; }
-fi
+# --- Musashi ---------------------------------------------------------------
+# Vendored at a pinned commit under third_party/musashi (MIT; the notice and
+# the commit are in THIRD_PARTY_LICENSES.md).  The one change to upstream is
+# committed with it: m68kconf.h turns M68K_INSTRUCTION_HOOK on, because the
+# host catches A-line traps at their vector and enforces a counted instruction
+# budget from that hook.  A checkout without it is not a build problem to
+# paper over with a fetch; it is a broken checkout.
+[ -f "$MUS/m68kcpu.c" ] || { echo "third_party/musashi is missing"; exit 1; }
+grep -q 'M68K_INSTRUCTION_HOOK       M68K_OPT_ON' "$MUS/m68kconf.h" \
+    || { echo "third_party/musashi/m68kconf.h lost the instruction hook"; exit 1; }
 
 # --- generate Musashi's opcode tables ------------------------------------
 if [ ! -f "$MUS/m68kops.c" ]; then
@@ -103,5 +99,27 @@ if [ ! -f "$MUS/m68kops.c" ]; then
     echo "  -> $(ls -1 "$MUS"/m68kops.* | tr '\n' ' ')"
 fi
 
-if [ -n "$1" ]; then build_one "$1"; else build_one x64; build_one x86; fi
+# The self-test links against the 64-bit import library and runs beside the
+# DLL.  It carries its own inputs -- see src/osp_selftest.c -- so it says the
+# binary just linked runs 68000 code, which "it linked" does not.
+build_selftest() {
+    CL="$MSVC/bin/Hostx64/x64/cl.exe"
+    LIB="-LIBPATH:\"$MSVC/lib/x64\" -LIBPATH:\"$SDK/lib/$SDKV/ucrt/x64\" -LIBPATH:\"$SDK/lib/$SDKV/um/x64\""
+    echo "=== selftest ==="
+    eval "\"$CL\" -nologo -O2 -MT $INC -I\"$ROOT/src\" \"$ROOT/src/osp_selftest.c\" \
+        -Fo\"$OUT/obj-x64/\" -Fe\"$OUT/osp_selftest.exe\" \
+        -link $LIB \"$OUT/osp_host.lib\"" > "$OUT/obj-x64/selftest.log" 2>&1 || {
+            echo "selftest build failed; tail of log:"; tail -30 "$OUT/obj-x64/selftest.log"; exit 1; }
+    "$OUT/osp_selftest.exe" || { echo "selftest FAILED"; exit 1; }
+}
+
+#   sh build.sh selftest     rebuild and run only the self-test, against the
+#                            DLL already in build/ -- the DLL cannot be
+#                            relinked while NVDA or a test run holds it open
+case "$1" in
+    "")        build_one x64; build_one x86; build_selftest ;;
+    x64)       build_one x64; build_selftest ;;
+    selftest)  build_selftest ;;
+    *)         build_one "$1" ;;
+esac
 echo "done."
