@@ -5,8 +5,13 @@
 rom/
 addon/synthDrivers/outspoken_rom/
 
-# Vendored third-party source.  build.sh fetches Musashi; the repo stays ours.
-third_party/
+# Musashi is vendored at a pinned commit (see THIRD_PARTY_LICENSES.md).  Only
+# the parts we compile are tracked: m68kmake generates m68kops.* at build time,
+# and upstream's example and test trees are not ours to carry.
+third_party/musashi/m68kops.c
+third_party/musashi/m68kops.h
+third_party/musashi/example/
+third_party/musashi/test/
 
 # Build output
 build/

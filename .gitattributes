@@ -1,0 +1,5 @@
+# The Musashi sources and every shell script stay LF whatever core.autocrlf
+# says: m68kmake parses m68k_in.c line by line, and sh chokes on a CRLF
+# `set -e`.  Everything else follows the usual text rules.
+third_party/musashi/** text eol=lf
+*.sh text eol=lf

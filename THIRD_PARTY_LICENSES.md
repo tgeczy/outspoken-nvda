@@ -4,7 +4,18 @@
 
 A portable Motorola M680x0 emulation engine by Karl Stenerud, version 4.60.
 This is the 68000 core MAME uses. Vendored from
-<https://github.com/kstenerud/Musashi>.
+<https://github.com/kstenerud/Musashi> at commit
+`313ebf1bd9f4d0d93341eb5ce21fd8a119e9dbdd` (2026-03-08). Only the files the
+host compiles are carried; upstream's `example/` and `test/` trees are not,
+and `m68kops.c`/`m68kops.h` are generated at build time by upstream's own
+`m68kmake`.
+
+One line differs from upstream: `m68kconf.h` sets `M68K_INSTRUCTION_HOOK` to
+`M68K_OPT_ON`, because the host catches A-line traps at their vector and
+enforces a counted instruction budget from that hook.
+
+Musashi is compiled into the host library -- `osp_host.dll`, `libosp_host.so`
+-- rather than linked as a separate copy, which the licence permits.
 
 MIT licence — the notice below must travel with any distribution of this
 project, source or binary.
