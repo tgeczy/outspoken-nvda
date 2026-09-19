@@ -30,6 +30,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include <sys/stat.h>
 #if defined(_WIN32)
 #  include <io.h>               /* _wfindfirst, for listing a folder */
 #else
@@ -62,3 +63,5 @@
 /* The engines themselves, driven from C: one file per engine behind one
  * surface, mirroring the Python modules they were ported from. */
 #include "osp_engine.c"
+/* The catalogue: what the user has extracted, and the manifests to open it. */
+#include "osp_voices.c"

@@ -31,3 +31,6 @@ __pycache__/
 *.pyc
 .venv/
 *.nvda-addon
+
+# Another session's git worktrees, when it works beside this checkout.
+.claude/worktrees/

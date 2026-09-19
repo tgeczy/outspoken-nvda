@@ -145,6 +145,21 @@ OSP_API int         osp_engine_pcm(unsigned char *out, int cap);
 /* Ask the utterance in flight to stop, where the engine allows it. */
 OSP_API void        osp_engine_stop(void);
 
+/* ---- the catalogue: what the user has (see osp_voices.c) ------------------ */
+/* Scan the search roots, one per line, and build the list of voices that can
+ * actually speak: the 1984 pair when its three files are present, and every
+ * voice folder whose engine and whose own parts are.  -> entries, or -1. */
+OSP_API int         osp_catalogue_scan(const char *roots);
+OSP_API int         osp_catalogue_count(void);
+/* Entry `i`, tab-separated UTF-8: id, label, kind, creator, voice id, name,
+ * language, gender, folder.  Size-needed contract; -2 for no such entry. */
+OSP_API int         osp_catalogue_entry(int i, char *out, int cap);
+/* The manifest that opens entry `i`'s engine with that voice selected. */
+OSP_API int         osp_catalogue_manifest(int i, char *out, int cap);
+/* Voice folders that were passed over, and why: "folder\treason". */
+OSP_API int         osp_catalogue_skipped_count(void);
+OSP_API int         osp_catalogue_skipped(int i, char *out, int cap);
+
 /* ---- the text front end ------------------------------------------------- */
 /* Numbers as words, ported from numwords.py (see osp_numbers.c).  MacRoman
  * in, MacRoman out.  `spell_out` is digit by digit; `spanish` is the cami

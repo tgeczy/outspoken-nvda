@@ -207,7 +207,15 @@ Each phase ends green on the checks named, and each is a pull request against
   full grid was still holding the 64-bit DLL -- and the Linux box is next.
   Full grids per engine and the Tab-hold test are still owed. `stop()` is
   the no-op it was for MacinTalk 2, 3 and Pro; real cancel is Phase 6.
-  Next: the catalogue (`voices.py` → C), then Phase 4.
+  **Linux, same day:** all four engines through the `.so` on `coconut`,
+  223 renders, byte-identical to the Python and to the frozen baseline.
+* **The catalogue is in C** (`src/osp_voices.c`): the ttvd as
+  VoiceDescription, the engine and voice-part gating, the ids NVDA persists
+  and the labels it shows, and the manifest that opens each entry.
+  `tools/catalogue_oracle.py` diffs entries, manifests and the skipped list
+  against the Python: 36 entries, zero disagreements, first run;
+  `tests/test_catalogue_c.py` wraps it. Search roots stay the caller's.
+  Next: Phase 4.
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.
