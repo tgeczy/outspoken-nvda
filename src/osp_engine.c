@@ -345,11 +345,13 @@ static void eng_translate_sm(const unsigned char *text, int len, int spanish, Nu
 /* ---- the engines --------------------------------------------------------------- */
 
 #include "osp_engine_sp.c"
+#include "osp_engine_mtk2.c"
 
 static const EngOps *eng_ops_for(int kind)
 {
     switch (kind) {
         case ENG_KIND_SP:   return &ENG_SP_OPS;
+        case ENG_KIND_MTK2: return &ENG_MTK2_OPS;
         default:            return NULL;
     }
 }
