@@ -145,6 +145,29 @@ OSP_API int         osp_engine_pcm(unsigned char *out, int cap);
 /* Ask the utterance in flight to stop, where the engine allows it. */
 OSP_API void        osp_engine_stop(void);
 
+/* ---- the driver's settings, 0-100 (see osp_settings.c) -------------------- */
+/* Rate, pitch, volume and inflection on the sliders' own 0-100 scales;
+ * osp_apply_settings pushes them at the open engine before an utterance,
+ * with the RateCommand and PitchCommand offsets in force (0 = none), and
+ * osp_engine_pcm16 widens the last utterance to signed 16-bit with the
+ * volume, plus any VolumeCommand offset, folded in.  Pure arithmetic apart
+ * from the two that reach the engine; osp_settings_preview shows what the
+ * mapping would apply, for the oracle. */
+OSP_API void        osp_set_rate(int percent);
+OSP_API void        osp_set_pitch(int percent);
+OSP_API void        osp_set_volume(int percent);
+OSP_API void        osp_set_volume_offset(int adj);
+OSP_API void        osp_set_inflection(int percent);
+OSP_API int         osp_get_rate(void);
+OSP_API int         osp_get_pitch(void);
+OSP_API int         osp_get_volume(void);
+OSP_API int         osp_get_inflection(void);
+OSP_API void        osp_apply_settings(int radj, int padj);
+OSP_API int         osp_pcm_widen(const unsigned char *pcm8, int n, short *out, int cap);
+OSP_API int         osp_engine_pcm16(short *out, int cap);
+OSP_API void        osp_settings_preview(int rate, int radj, int pitch, int padj, double base_hz,
+                                         int *engine_rate, int *tenths, double *hz);
+
 /* ---- the catalogue: what the user has (see osp_voices.c) ------------------ */
 /* Scan the search roots, one per line, and build the list of voices that can
  * actually speak: the 1984 pair when its three files are present, and every

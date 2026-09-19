@@ -92,6 +92,7 @@ static struct {
     int kind;
     const EngOps *ops;
     int numbers;                    /* ENG_NUM_*; the Python's number_mode */
+    double sp_hz;                   /* the 1984 voice's base pitch, by its id */
     char error[256];
     NumBuf pcm;                     /* the last utterance */
 } g_eng;
@@ -533,6 +534,9 @@ OSP_API int osp_engine_open(const char *manifest)
     if (osp_init(0x01000000u) != 0) { free(m); eng_fail("osp_init failed"); return ENG_ERR_OPEN; }
     r = ops->open(m);
     g_eng.kind = m->kind;
+    /* The 1984 driver's two voices are named by their pitch, 110 and 250 Hz,
+     * and that number is their id; the settings layer offsets from it. */
+    g_eng.sp_hz = m->kind == ENG_KIND_SP ? (double)m->sel_id : 0.0;
     free(m);
     if (r != 0) {
         osp_shutdown();
@@ -547,6 +551,12 @@ OSP_API int osp_engine_open(const char *manifest)
 OSP_API int osp_engine_select(const char *creator, int id)
 {
     if (!g_eng.ops) return 0;
+    if (g_eng.kind == ENG_KIND_SP) {
+        /* Selecting a 1984 voice is choosing its base pitch. */
+        g_eng.sp_hz = (double)id;
+        osp_engine_set_voice_hz(g_eng.sp_hz);
+        return 1;
+    }
     return g_eng.ops->select ? g_eng.ops->select(creator, id) : 1;
 }
 OSP_API void osp_engine_set_rate(int wpm)
@@ -611,3 +621,6 @@ OSP_API void osp_engine_stop(void)
 {
     if (g_eng.ops && g_eng.ops->stop) g_eng.ops->stop();
 }
+
+/* The driver's 0-100 scales on top of the engines' own. */
+#include "osp_settings.c"

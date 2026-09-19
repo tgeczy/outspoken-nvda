@@ -215,7 +215,14 @@ Each phase ends green on the checks named, and each is a pull request against
   `tools/catalogue_oracle.py` diffs entries, manifests and the skipped list
   against the Python: 36 entries, zero disagreements, first run;
   `tests/test_catalogue_c.py` wraps it. Search roots stay the caller's.
-  Next: Phase 4.
+* **Phase 4 host side DONE 2026-09-19** (`src/osp_settings.c`): the rate
+  curve, the pitch scale, the 1984 driver's hertz, `osp_apply_settings`
+  with the RateCommand/PitchCommand offsets, and the 8-to-16 widening with
+  volume and VolumeCommand folded in. `tools/settings_oracle.py` runs the
+  driver's own methods against it over every slider value and offset: 3989
+  cases, zero disagreements, first run; data-free, so it runs in CI.
+  `tests/test_settings_c.py` wraps it. The NVDA driver still does its own
+  arithmetic until Phase 6 moves it onto these calls. Next: Phase 5.
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.

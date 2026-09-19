@@ -48,6 +48,14 @@ jobs:
       - name: Number rules agree with the Python reference
         run: python3 tools/numbers_oracle.py build/linux/libosp_host.so
 
+      # The settings arithmetic -- rate curve, pitch scale, the widening with
+      # volume folded in -- against the driver's own methods.  Needs pytest
+      # only for the NVDA stand-ins the driver imports.
+      - name: Settings arithmetic agrees with the driver
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 tools/settings_oracle.py build/linux/libosp_host.so
+
       - name: Show what was built
         run: |
           uname -m
