@@ -1,5 +1,5 @@
 ﻿param([switch]$Register,[switch]$Unregister,[string]$DataRoot,
-      [switch]$Move,[string]$MoveFrom,[string]$MoveTo)
+      [switch]$Move,[string]$MoveFrom,[string]$MoveTo,[string]$MirrorSettings)
 # Voice tokens for the outSPOKEN SAPI engine: one per voice the serve
 # bridge enumerates from the data root, in both registry views.
 #
@@ -13,6 +13,10 @@ $ErrorActionPreference = 'Stop'
 $stage = Split-Path -Parent $MyInvocation.MyCommand.Path
 $clsid = '{a1f4055c-b6c2-4c27-ab6a-af54c409a309}'
 $prefKey = 'HKCU:\Software\outSPOKEN SAPI'
+# The settings files: every elevated trip grants the machine folder and
+# carries this person's settings into the machine file, so the sign-in
+# screen speaks with them.  See settings_common.ps1.
+. (Join-Path $stage 'settings_common.ps1')
 
 # The Panthera resolution order, mirrored: an explicit choice, then the
 # remembered one, then NVDA's own config (an NVDA-first user's ROMs are
@@ -74,6 +78,8 @@ if ($Move) {
     # it, locks it, and re-registers.
     if ((-not $MoveFrom) -or (-not $MoveTo)) { exit 2 }
     if (-not (Test-Path -LiteralPath $MoveFrom)) { exit 3 }
+    Grant-SettingsFolder
+    Set-MachineSettings $MirrorSettings
     # Belt and suspenders on the caller's own rule: never a folder that also
     # holds Panthera's generations -- that data belongs to another add-on.
     foreach ($name in @('tiger','leopard','snowleopard','lion')) {
@@ -114,6 +120,8 @@ if ($Move) {
 }
 
 if ($Register) {
+    Grant-SettingsFolder
+    Set-MachineSettings $MirrorSettings
     & $reg32 /s (Join-Path $stage 'x86\outspoken_sapi.dll')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
     if ($wow) {

@@ -62,6 +62,24 @@ TGSpeechbox and Panthera: word-per-fragment feeding with bookmarks between
 never reads bookmark names aloud, and the seam between fragments keeps its
 space.
 
+**Settings live in two files, and the registry is what they fall back to,
+since 2.0.0** — Panthera's model, carried over. Each is flat TOML, and the
+engine reads one typed value at a time in this order: `%APPDATA%\outSPOKEN
+SAPI\settings.toml` (this user's), `%ProgramData%\outSPOKEN SAPI\settings.toml`
+(the machine's), then `HKCU` and `HKLM\Software\outSPOKEN SAPI` for a machine
+upgraded from 1.2.x, then the engine's default. The settings program writes
+both files on every save, so the Windows sign-in screen — a service account
+whose `%APPDATA%` nobody chose anything in — speaks with the settings its
+owner saved last. The installer grants every standard account write access
+to the machine folder, and the tool's elevated trips grant it on a machine
+upgraded from an older installer. The settings are **Inflection** (0–100,
+50 is the voice as recorded), **Numbers** (in words, or digit by digit, in
+English or Spanish as the voice speaks) and the diagnostic log; rate, pitch
+and volume stay SAPI's own. Inflection and numbers reach the engine by
+restarting the resident host, so a change takes effect on the next thing
+spoken in every SAPI application at once. The data folder is not a setting
+and stays in the registry: every voice token carries its own `DataPath`.
+
 **Nothing is logged unless you ask for it, since 1.1.1.** 1.1.0 wrote a
 line per utterance to `%TEMP%`, forever, with the first forty characters of
 the text in it — which for a screen reader is a transcript of whatever its

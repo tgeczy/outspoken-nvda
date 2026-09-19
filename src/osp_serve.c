@@ -59,6 +59,23 @@ static struct {
     char cur_kind[8];
 } g_serve;
 
+/* The settings a request does not carry: the SAPI bridge reads them from
+ * its settings files and passes them on the command line, and replaces the
+ * serve when they change -- Panthera's rule that a settings change respawns
+ * the host rather than being quietly ignored by one that read its
+ * arguments at startup.  The driver's own defaults until told otherwise. */
+static int g_serve_inflection = 50;
+static int g_serve_numbers = ENG_NUM_WORDS;
+
+OSP_API void osp_serve_set_defaults(int inflection, int numbers)
+{
+    if (inflection < 0) inflection = 0;
+    if (inflection > 100) inflection = 100;
+    g_serve_inflection = inflection;
+    g_serve_numbers = numbers == ENG_NUM_DIGITS ? ENG_NUM_DIGITS
+                    : numbers == ENG_NUM_OFF ? ENG_NUM_OFF : ENG_NUM_WORDS;
+}
+
 static unsigned serve_u32(const unsigned char *p)
 {
     return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
@@ -175,10 +192,10 @@ static int serve_ensure_voice(const char *id)
         free(manifest);
         g_serve.cur_entry = i;
         strcpy(g_serve.cur_kind, kind);
-        /* The driver's defaults when nothing configured them: numbers as
-         * words, inflection at the middle. */
-        osp_engine_set_numbers(ENG_NUM_WORDS);
-        osp_set_inflection(50);
+        /* The bridge's settings, or the driver's defaults when nothing
+         * configured them: numbers as words, inflection at the middle. */
+        osp_engine_set_numbers(g_serve_numbers);
+        osp_set_inflection(g_serve_inflection);
     }
     return 0;
 }

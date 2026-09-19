@@ -27,6 +27,7 @@
 #include <sapi.h>
 #include <sapiddk.h>
 #include <olectl.h>
+#include "settings.h"
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -66,15 +67,12 @@ static const DWORD NATIVE_RATE = 22254;
  * way, because a diagnostic nobody turns off is a disk that fills. */
 static const DWORD LOG_CAP = 4u * 1024u * 1024u;
 
+/* Since 2.0 every setting comes through settings.cpp: this user's
+ * settings.toml, the machine's, then HKCU and HKLM as before, one typed
+ * value at a time -- Panthera's model, so the sign-in screen speaks with
+ * the settings its owner saved. */
 static int diagLevel() {
-    HKEY k; DWORD v = 0, n = sizeof v, t;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
-                       KEY_READ, &k)) {
-        if (RegQueryValueExW(k, L"Diagnostics", 0, &t, (BYTE*)&v, &n)
-            || t != REG_DWORD) v = 0;
-        RegCloseKey(k);
-    }
-    return (int)v;
+    return (int)outspoken_sapi::setting_dword(L"Diagnostics", 0);
 }
 /* And clear up after 1.1.0, which wrote without asking.
  *
@@ -178,6 +176,12 @@ static CRITICAL_SECTION g_hostLock;
 static bool g_lockReady;
 static HANDLE g_proc, g_in, g_out;
 static unsigned g_seq;
+/* The command line the resident host was started with.  The settings it
+ * carries -- inflection, how numbers are read -- are read fresh per Speak,
+ * and a host started under other values is replaced rather than kept:
+ * Panthera's rule, that a settings change must respawn the host and never
+ * be quietly ignored by one that read its arguments at startup. */
+static std::wstring g_hostCmd;
 
 static void host_drop() {
     if(g_proc){TerminateProcess(g_proc,0);CloseHandle(g_proc);g_proc=0;}
@@ -203,14 +207,7 @@ static bool host_alive() {
 static const unsigned MAX_CHUNK_FRAMES = NATIVE_RATE * 10u;
 
 static DWORD read_timeout_ms() {
-    HKEY k; DWORD v = 30000, n = sizeof v, t;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
-                       KEY_READ, &k)) {
-        DWORD got = 0; n = sizeof got;
-        if (!RegQueryValueExW(k, L"ReadTimeoutMs", 0, &t, (BYTE*)&got, &n)
-            && t == REG_DWORD) v = got;
-        RegCloseKey(k);
-    }
+    DWORD v = outspoken_sapi::setting_dword(L"ReadTimeoutMs", 30000);
     return v < 1000 ? 1000 : v;
 }
 
@@ -258,9 +255,8 @@ struct CsLock {
     CsLock(CRITICAL_SECTION *c):cs(c){EnterCriticalSection(cs);}
     ~CsLock(){LeaveCriticalSection(cs);}
 };
-static bool host_ensure(const std::wstring &dataRoot) {
+static bool host_ensure(const std::wstring &dataRoot, DWORD inflection, const std::wstring &numbers) {
     sweep_logs();
-    if(host_alive())return true;
     std::wstring base=module_dir();
     /* The 64-bit host where the installer put one, else the 32-bit one:
      * a 32-bit Windows gets only the latter, and either serves both DLL
@@ -268,7 +264,10 @@ static bool host_ensure(const std::wstring &dataRoot) {
     std::wstring host=base+L"\\osp_host.exe";
     if(GetFileAttributesW(host.c_str())==INVALID_FILE_ATTRIBUTES)
         host=base+L"\\osp_host_x86.exe";
-    std::wstring cmd=L"\""+host+L"\" --serve \""+dataRoot+L"\"";
+    wchar_t infl[16]; swprintf_s(infl,L"%u",(unsigned)inflection);
+    std::wstring cmd=L"\""+host+L"\" --serve \""+dataRoot+L"\" --inflection "+infl+L" --numbers "+numbers;
+    if(host_alive()&&cmd==g_hostCmd)return true;
+    host_drop();
     /* A megabyte of buffer each way against the four-kilobyte default: a
      * request larger than the buffer would block the writer until the host
      * read it, and the response side never has to stall the serve over a
@@ -302,7 +301,7 @@ static bool host_ensure(const std::wstring &dataRoot) {
     if(errH!=INVALID_HANDLE_VALUE)CloseHandle(errH);
     if(!made){CloseHandle(inW);CloseHandle(outR);return false;}
     CloseHandle(pi.hThread);
-    g_proc=pi.hProcess;g_in=inW;g_out=outR;
+    g_proc=pi.hProcess;g_in=inW;g_out=outR;g_hostCmd=cmd;
     return true;
 }
 
@@ -395,7 +394,15 @@ public:
         unsigned long long total=0;
         unsigned seq=++g_seq;
         if(!text.empty()){
-            ok=host_ensure(root);
+            /* The two engine settings the NVDA driver has and SAPI's own
+             * request cannot carry, read fresh so a change in the settings
+             * program reaches the next thing spoken.  The number style is
+             * matched against its vocabulary here, before it reaches a
+             * command line: the machine file is one any account can write. */
+            DWORD infl=outspoken_sapi::setting_dword(L"Inflection",50); if(infl>100)infl=100;
+            std::wstring numbers=outspoken_sapi::setting_string(L"NumberStyle",L"words");
+            if(numbers!=L"digits")numbers=L"words";
+            ok=host_ensure(root,infl,numbers);
             ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
             unsigned magic=0;status=-1;
             /* Response reads wait rather than block -- exact_wait watches

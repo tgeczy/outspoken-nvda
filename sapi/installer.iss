@@ -42,10 +42,22 @@ Source: "{#StageDir}\osp_host_x86.exe"; DestDir: "{app}"
 Source: "{#StageDir}\osp_serve.py"; DestDir: "{app}"
 Source: "{#StageDir}\register.ps1"; DestDir: "{app}"
 Source: "{#StageDir}\settings.ps1"; DestDir: "{app}"
+Source: "{#StageDir}\settings_common.ps1"; DestDir: "{app}"
 Source: "{#StageDir}\settings.cmd"; DestDir: "{app}"
 Source: "{#StageDir}\outspoken_settings.exe"; DestDir: "{app}"
 Source: "{#StageDir}\synthDrivers\*"; DestDir: "{app}\synthDrivers"; Flags: recursesubdirs
 Source: "{#StageDir}\python\*"; DestDir: "{app}\python"; Flags: recursesubdirs
+
+[Dirs]
+; The machine-wide settings file lives here, and every standard account
+; writes it: the settings tool keeps this copy current on every save, so the
+; sign-in screen speaks with the settings its owner chose last rather than
+; whatever an elevated trip mirrored months ago.  Modify and not full
+; control: the file is what SYSTEM reads there, and its permissions are not
+; something a standard account should be able to change.  The tool's own
+; elevated trips grant the same on a machine upgraded from an installer
+; without this entry.  Panthera's model, carried over.
+Name: "{commonappdata}\outSPOKEN SAPI"; Permissions: users-modify
 
 [Icons]
 ; The launcher rather than the batch file: a GUI-subsystem program creates

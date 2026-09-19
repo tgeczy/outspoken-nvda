@@ -21,7 +21,14 @@ plain C, with the 68000 interpreter (Karl Stenerud's Musashi) compiled in.
 * **SAPI 5** launches `osp_host.exe` in place of the Python helper. It is the
   same code the add-on loads, so the SAPI voice is still identical to the NVDA
   voice — the tests that assert that byte for byte are still green, and a new
-  one holds the native host to the Python bridge it replaced.
+  one holds the native host to the Python bridge it replaced. The settings
+  window gains **Inflection** and **Numbers** (in words or digit by digit),
+  the two engine settings the NVDA driver had and SAPI users were living
+  without, and its settings now live in files the way Panthera's do: one per
+  user and one for the machine, so the Windows sign-in screen speaks with the
+  settings you saved. The move of your voice data into a folder every account
+  can read, and the warning when the voices point at a folder that has gone,
+  were already there and are unchanged.
 * **Linux**, for the first time: `osp_host` renders any voice to a WAV file,
   lists what you have extracted, or serves speech over a pipe for whatever
   front end you build on it; `libosp_host.so` is the same engine as a

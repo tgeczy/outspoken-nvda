@@ -348,6 +348,25 @@ Each phase ends green on the checks named, and each is a pull request against
   release signing (`signing.properties`, the same convention as
   Panthera's) and the APK on the draft as `outspoken-2.0.0.apk`; the watch
   untried.
+* **SAPI aligned to Panthera 3.2.0's settings model, 2026-09-19 afternoon**
+  (Tomi: "better to get things right for 2.0 than to rush it"). What was
+  already there, since 1.2.x: tokens and the machine-wide DataPath in HKLM
+  through both views, "Move engines for all users" with Panthera's plan
+  classifier and dialogs, the shared-root ACL, `Offer-Rebind`. What was
+  added: `sapi/settings.cpp/.h` (Panthera's reader, namespace and names
+  changed; `OUTSPOKEN_SAPI_SETTINGS_USER/_MACHINE` overrides),
+  `settings_test.cpp` (34 checks, run by `build.ps1`), the DLL reading
+  Diagnostics and ReadTimeoutMs through it plus two new settings,
+  **Inflection** and **NumberStyle** (`words`|`digits`), carried to the
+  host as `osp_host --serve <root> --inflection N --numbers MODE`
+  (`osp_serve_set_defaults`; `osp_serve.py` takes the same flags) with the
+  resident host respawned when the launch line changes; the tool's three
+  controls, `settings_common.ps1` (the file helpers in PowerShell 2.0's
+  dialect, dot-sourced by both scripts), `Move-SettingsOutOfRegistry`,
+  `Confirm-SharedLogging`, the elevated trips granting the ProgramData
+  folder and mirroring this person's settings into the machine file,
+  `installer.iss` `[Dirs]` users-modify. `tests/test_serve_hosts.py` holds
+  both hosts to the flags. The sign-in screen itself is untested from here.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync

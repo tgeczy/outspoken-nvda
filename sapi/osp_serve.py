@@ -241,6 +241,18 @@ def main():
     listing = "--list" in args
     if listing:
         args.remove("--list")
+    #: The bridge's settings, which no request carries: the driver's
+    #: inflection (0-100) and whether numbers are read as words or digit
+    #: by digit, as `osp_host --serve` takes them.  The bridge replaces the
+    #: serve when they change.
+    inflection, number_words = 50, True
+    while len(args) >= 2 and args[-2] in ("--inflection", "--numbers"):
+        flag, value = args[-2], args[-1]
+        del args[-2:]
+        if flag == "--inflection":
+            inflection = max(0, min(100, int(value)))
+        else:
+            number_words = value != "digits"
     data_root = args[0] if args else os.path.join(
         os.environ.get("APPDATA", ""), "nvda")
 
@@ -249,6 +261,8 @@ def main():
     import outspoken
 
     driver = outspoken.SynthDriver()
+    driver._set_inflection(inflection)
+    driver._set_numberWords(number_words)
     try:
         if listing:
             for vid, info in driver._get_availableVoices().items():

@@ -113,6 +113,35 @@ def test_both_hosts_render_the_same_bytes(voice):
         c.close()
 
 
+def test_the_launch_settings_reach_both_hosts_alike():
+    """Inflection and the number style are the bridge's settings, not the
+    request's: they travel on the command line and the bridge replaces the
+    serve when they change.  Both hosts must take them the same way, and
+    they must make a difference."""
+    cfg = _config()
+    if not os.path.isfile(HOST_EXE):
+        pytest.skip("no C host built; run build.sh")
+    flags = ["--inflection", "80", "--numbers", "digits"]
+    py = Host([sys.executable, SERVE_PY, cfg] + flags)
+    c = Host([HOST_EXE, "--serve", cfg] + flags)
+    plain = Host([HOST_EXE, "--serve", cfg])
+    try:
+        for host in (py, c, plain):
+            host.request(1, "mtk3:Fred", TEXT)
+        sp, pp = py.response()
+        sc, pc = c.response()
+        s0, p0 = plain.response()
+        if sp == 1 and sc == 1:
+            pytest.skip("Fred is not installed here")
+        assert sp == 0 and sc == 0 and s0 == 0
+        assert pp == pc, "the two hosts took the launch settings differently"
+        assert pp != p0, "the launch settings changed nothing"
+    finally:
+        py.close()
+        c.close()
+        plain.close()
+
+
 def test_a_cancel_by_seq_keeps_the_stream_in_step():
     cfg = _config()
     _py, c = _hosts(cfg)

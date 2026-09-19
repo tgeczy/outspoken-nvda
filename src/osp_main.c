@@ -24,7 +24,8 @@ static void usage(void)
 {
     fprintf(stdout,
         "Usage:\n"
-        "  osp_host --serve <config>            serve the SAPI bridge's protocol on stdin/stdout\n"
+        "  osp_host --serve <config> [--inflection 0-100] [--numbers words|digits|off]\n"
+        "                                       serve the SAPI bridge's protocol on stdin/stdout\n"
         "  osp_host --list <config>             one voice per line, id<TAB>label\n"
         "  osp_host --render --voice ID [--text T | --input F] [--output F.wav]\n"
         "                   [--rate 0-100] [--pitch 0-100] [--volume 0-100]\n"
@@ -185,8 +186,16 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "--list") || !strcmp(argv[1], "--serve")) {
         const char *config = argc > 2 ? argv[2] : "";
         char *roots = roots_for(config, NULL, 0);
-        int rc;
+        int rc, i, inflection = 50, numbers = 1;
         if (!roots) return 1;
+        /* The bridge's settings, which no request carries: see
+         * osp_serve_set_defaults. */
+        for (i = 3; i + 1 < argc; i += 2) {
+            if (!strcmp(argv[i], "--inflection")) inflection = atoi(argv[i + 1]);
+            else if (!strcmp(argv[i], "--numbers"))
+                numbers = !strcmp(argv[i + 1], "digits") ? 2 : !strcmp(argv[i + 1], "off") ? 0 : 1;
+        }
+        osp_serve_set_defaults(inflection, numbers);
         if (!strcmp(argv[1], "--list")) {
             osp_plat_stdio_binary();
             rc = osp_serve_list(roots, 1);

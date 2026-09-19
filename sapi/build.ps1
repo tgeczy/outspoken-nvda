@@ -14,9 +14,23 @@ New-Item -ItemType Directory -Force $stage,(Join-Path $stage "x86"),(Join-Path $
 foreach ($arch in "x86","x64") {
   $cl = Join-Path $msvc.FullName "bin\Hostx64\$arch\cl.exe"
   $out = Join-Path $stage $arch
-  & $cl /nologo /EHsc /O2 /MT /LD /DUNICODE /D_UNICODE "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "outspoken_sapi.cpp") "/Fe$out\outspoken_sapi.dll" "/Fo$out\" /link "/DEF:$PSScriptRoot\outspoken_sapi.def" "/LIBPATH:$($msvc.FullName)\lib\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$arch" sapi.lib ole32.lib advapi32.lib
+  # settings.cpp beside the COM adapter: the two settings files and their
+  # registry fallback, Panthera's reader carried over.  shell32 for the
+  # known-folder lookup.
+  & $cl /nologo /EHsc /O2 /MT /LD /DUNICODE /D_UNICODE "/I$PSScriptRoot" "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "outspoken_sapi.cpp") (Join-Path $PSScriptRoot "settings.cpp") "/Fe$out\outspoken_sapi.dll" "/Fo$out\" /link "/DEF:$PSScriptRoot\outspoken_sapi.def" "/LIBPATH:$($msvc.FullName)\lib\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$arch" sapi.lib ole32.lib advapi32.lib shell32.lib
   if ($LASTEXITCODE) { throw "$arch SAPI DLL build failed ($LASTEXITCODE)" }
 }
+# The settings reader ships in the DLL, so its test links the same file:
+# the format, the order of the sources, the typed fall-through, a rewrite
+# reaching the next lookup -- against scratch files and a redirected
+# registry, so nobody's settings are touched.
+$testCl = Join-Path $msvc.FullName "bin\Hostx64\x64\cl.exe"
+$settingsDir = Join-Path $stage "settings_test"
+New-Item -ItemType Directory -Force $settingsDir | Out-Null
+& $testCl /nologo /EHsc /O2 /MT /DUNICODE /D_UNICODE "/I$PSScriptRoot" "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "settings_test.cpp") (Join-Path $PSScriptRoot "settings.cpp") "/Fe$settingsDir\settings_test.exe" "/Fo$settingsDir\" /link "/LIBPATH:$($msvc.FullName)\lib\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\x64" ole32.lib advapi32.lib shell32.lib
+if ($LASTEXITCODE) { throw "settings test build failed ($LASTEXITCODE)" }
+& "$settingsDir\settings_test.exe"
+if ($LASTEXITCODE) { throw "the SAPI settings reader misbehaves" }
 # The console-free way into the settings dialog: a GUI-subsystem launcher,
 # so no console ever flashes and steals focus.  settings.cmd stays for
 # anyone at a command line.
@@ -39,6 +53,7 @@ foreach ($exe in "osp_host.exe","osp_host_x86.exe") {
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage
 Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
+Copy-Item (Join-Path $PSScriptRoot "settings_common.ps1") $stage
 # The command-line extractor, staged at the root where its fallback import
 # path finds the driver tree at synthDrivers\_outspoken -- the settings
 # window's Extract button runs it with the bundled Python, so a standalone

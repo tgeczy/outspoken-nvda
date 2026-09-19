@@ -29,6 +29,84 @@ function Save-Pref([string]$name, $value) {
     Set-ItemProperty -Path $prefKey -Name $name -Value $value
 }
 
+# **The engine's settings live in two files, and the registry is what they
+# fall back to** -- Panthera's model, see settings_common.ps1.  Tool state
+# (the data folder, the declined offer) stays in HKCU through Load-Pref and
+# Save-Pref above; an engine setting goes to the files, this person's and
+# the machine's.  The machine write fails quietly on a machine no elevated
+# trip has granted the folder on yet, and the next such trip carries the
+# value across.
+. (Join-Path $stage 'settings_common.ps1')
+
+function Save-Setting([string]$name, $value) {
+    Set-SettingsFileValue $userSettingsFile $name $value | Out-Null
+    Set-SettingsFileValue $machineSettingsFile $name $value | Out-Null
+}
+# This person's own choice and nothing inherited.
+function Load-Setting([string]$name, $default) {
+    $value = Get-SettingsFileValue $userSettingsFile $name (Get-SettingKind $name)
+    if ($null -ne $value) { return $value }
+    return $default
+}
+# What the engine will actually use: the DLL's per-value, typed lookup --
+# this user's file, the machine's, HKCU, HKLM, the default.
+function Load-EngineSetting([string]$name, $default) {
+    $kind = Get-SettingKind $name
+    foreach ($file in @($userSettingsFile, $machineSettingsFile)) {
+        $value = Get-SettingsFileValue $file $name $kind
+        if ($null -ne $value) { return $value }
+    }
+    foreach ($path in @($prefKey, 'HKLM:\SOFTWARE\outSPOKEN SAPI', 'HKLM:\SOFTWARE\Wow6432Node\outSPOKEN SAPI')) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $key = $null
+        try {
+            $key = Get-Item -LiteralPath $path -ErrorAction Stop
+            if (($key.GetValueNames() -contains $name) -and ($key.GetValueKind($name).ToString() -eq $kind)) {
+                return $key.GetValue($name)
+            }
+        } catch {} finally { if ($key) { $key.Close() } }
+    }
+    return $default
+}
+# This person's settings, packed for the elevated process to write into the
+# machine's file.  Only the ones actually set travel: a value nobody chose
+# has no business becoming the default every other account inherits.
+function Get-SettingsArgument {
+    $pairs = @()
+    foreach ($name in $SettingNames) {
+        $value = Load-Setting $name $null
+        if ($null -ne $value) { $pairs += ('{0}={1}' -f $name, $value) }
+    }
+    $pairs -join ';'
+}
+# Once, quietly: the values this person's HKCU held before the files --
+# 1.2.x kept Diagnostics and ReadTimeoutMs there -- move into their file and
+# leave the registry.  Only right-typed values, and a value the file already
+# has is not overridden.  The key itself stays; DataPath and the tool's own
+# state live in it.
+function Move-SettingsOutOfRegistry {
+    if (-not $userSettingsFile) { return }
+    if (-not (Test-Path -LiteralPath $prefKey)) { return }
+    $key = $null
+    try { $key = Get-Item -LiteralPath $prefKey -ErrorAction Stop } catch { return }
+    $moved = @()
+    try {
+        $held = @($key.GetValueNames())
+        $table = Read-SettingsFile $userSettingsFile
+        $present = @{}; foreach ($entry in $table) { $present[$entry.Name] = $true }
+        foreach ($name in $SettingNames) {
+            if (-not ($held -contains $name)) { continue }
+            if ($key.GetValueKind($name).ToString() -ne (Get-SettingKind $name)) { continue }
+            if ((Get-SettingKind $name) -eq 'DWord') { $value = [int]$key.GetValue($name) } else { $value = [string]$key.GetValue($name) }
+            if (-not $present[$name]) { [void]$table.Add(@{ Name = $name; Value = $value }); $present[$name] = $true }
+            $moved += $name
+        }
+    } finally { $key.Close() }
+    if (-not $moved.Length) { return }
+    if (-not (Write-SettingsFile $userSettingsFile $table)) { return }
+    foreach ($name in $moved) { Remove-ItemProperty -Path $prefKey -Name $name -ErrorAction SilentlyContinue }
+}
+
 # The machine-wide DataPath, both registry views, read the PowerShell 2.0
 # way: on a 64-bit OS the Wow6432Node path IS the 32-bit view, written
 # directly.  `HKLM\Software` is redirected under WOW64 and `HKCU\Software`
@@ -144,7 +222,10 @@ function Test-AnyTokens {
 }
 
 function Invoke-Registration([string]$verb) {
-    Invoke-Elevated ('-{0} -DataRoot "{1}"' -f $verb,$script:data)
+    # This person's settings ride along, so the elevated trip seeds the
+    # machine's file: the elevated process's own files belong to whoever
+    # answered the prompt, which need not be this person.
+    Invoke-Elevated ('-{0} -DataRoot "{1}" -MirrorSettings "{2}"' -f $verb,$script:data,(Get-SettingsArgument))
 }
 
 # **A cancelled elevation prompt is not a yes.**  `-Verb RunAs` throws a
@@ -251,7 +332,7 @@ if ($Plan) {
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'outSPOKEN SAPI settings'; $form.Size = New-Object Drawing.Size(640,460)
+$form.Text = 'outSPOKEN SAPI settings'; $form.Size = New-Object Drawing.Size(640,540)
 $form.StartPosition = 'CenterScreen'
 $label = New-Object Windows.Forms.Label
 $label.Text = 'Macintosh speech engines:'; $label.AutoSize = $true; $label.Location = New-Object Drawing.Point(12,14)
@@ -416,6 +497,66 @@ $extract.Add_Click({
 })
 $close = New-Object Windows.Forms.Button; $close.Text = '&Close'; $close.Location = New-Object Drawing.Point(470,262); $close.AutoSize=$true
 
+# **The two NVDA driver settings SAPI users were living without**, and the
+# diagnostic switch, read by the engine DLL on every utterance from the
+# settings files.  A change takes effect on the next thing spoken, in every
+# SAPI application at once; inflection and numbers reach the engine by
+# replacing the resident host, which is Panthera's rule too.  Rate, pitch
+# and volume stay SAPI's own.
+$inflLabel = New-Object Windows.Forms.Label
+$inflLabel.Text = '&Inflection:'; $inflLabel.AutoSize = $true
+$inflLabel.Location = New-Object Drawing.Point(12,344)
+$inflection = New-Object Windows.Forms.NumericUpDown
+$inflection.Minimum = 0; $inflection.Maximum = 100
+$inflection.AccessibleName = 'Inflection'
+$inflection.AccessibleDescription = '0 to 100; 50 is the voice exactly as recorded. The 1984 driver has no inflection to change.'
+$inflection.Location = New-Object Drawing.Point(84,342); $inflection.Size = New-Object Drawing.Size(56,24)
+$numLabel = New-Object Windows.Forms.Label
+$numLabel.Text = '&Numbers:'; $numLabel.AutoSize = $true
+$numLabel.Location = New-Object Drawing.Point(160,344)
+$numberStyle = New-Object Windows.Forms.ComboBox
+$numberStyle.DropDownStyle = 'DropDownList'; $numberStyle.AccessibleName = 'Numbers'
+$numberStyle.AccessibleDescription = 'How a number is read, in English or in Spanish as the voice speaks: in words, or digit by digit.'
+$numberStyle.Location = New-Object Drawing.Point(228,342); $numberStyle.Size = New-Object Drawing.Size(150,24)
+$numberValues = @('words','digits')
+foreach ($item in @('In words','Digit by digit')) { [void]$numberStyle.Items.Add($item) }
+# Diagnostics: off, and off means no file is created at all.  It offers
+# level 1 only -- the measurements.  Level 2 adds the spoken text and stays
+# a deliberate edit of the file, because a transcript of everything the
+# machine says should take more than one click.
+$diagnostics = New-Object Windows.Forms.CheckBox
+$diagnostics.Text = 'Write a &diagnostic log'
+$diagnostics.AccessibleName = 'Write a diagnostic log'
+$diagnostics.AccessibleDescription = 'Off by default. Records what the engine did, not what was spoken, to a file in the temp folder of whoever is speaking, on every account of this machine and at the sign-in screen. Turn it on only if a bug report asks for it, and off again afterwards.'
+$diagnostics.Location = New-Object Drawing.Point(400,344); $diagnostics.AutoSize = $true
+
+Move-SettingsOutOfRegistry
+$inflection.Value = [Math]::Max(0, [Math]::Min(100, [int](Load-EngineSetting 'Inflection' 50)))
+$numberStyle.SelectedIndex = [Math]::Max(0, [Array]::IndexOf($numberValues, [string](Load-EngineSetting 'NumberStyle' 'words')))
+$diagnostics.Checked = [bool](Load-EngineSetting 'Diagnostics' 0)
+$inflection.Add_ValueChanged({ Save-Setting 'Inflection' ([int]$inflection.Value) })
+$numberStyle.Add_SelectedIndexChanged({ if ($numberStyle.SelectedIndex -ge 0) { Save-Setting 'NumberStyle' $numberValues[$numberStyle.SelectedIndex] } })
+$diagnostics.Add_CheckedChanged({ Save-Setting 'Diagnostics' ([int]$diagnostics.Checked) })
+
+# **Logging that reaches every account is said out loud.**  The machine file
+# is what every other account and the sign-in screen read, so a Diagnostics
+# value in it means their sessions are being logged too.  Fair is saying so
+# every time the program opens while it is on, and offering the way out in
+# the same breath.  Off is the default answer.
+function Confirm-SharedLogging {
+    $level = Get-SettingsFileValue $machineSettingsFile 'Diagnostics' 'DWord'
+    if ((-not $level) -or ($level -le 0)) { return }
+    $text = "outSPOKEN's diagnostic log is turned on for everyone who uses this machine, not only for you.`r`n`r`n" +
+            "outSPOKEN speaks for every account here, including the Windows sign-in screen, and while the log is on it " +
+            "records what the engine did for each of them, and at the transcript level the words themselves, which at " +
+            "the sign-in screen include user names.`r`n`r`nTurn the log off?"
+    $answer = [Windows.Forms.MessageBox]::Show($form, $text, 'outSPOKEN SAPI', 'YesNo', 'Warning')
+    if ($answer -eq 'Yes') {
+        $diagnostics.Checked = $false
+        Save-Setting 'Diagnostics' 0
+    }
+}
+
 # **Check for updates, the way the NVDA add-on's button does it**: fetch the
 # installer itself and run it, rather than sending somebody to a web page to
 # find the right file among a release's assets.  The installer's own UI --
@@ -534,7 +675,7 @@ $move.Add_Click({
     $message = "Move the outSPOKEN speech data so every account on this machine can use it?`n`nFrom: {0}`nTo: {1}`n`nOnly outSPOKEN's own folder moves; anything else kept beside it stays where it is. This needs administrator permission." -f $p.from,$p.to
     $answer = [Windows.Forms.MessageBox]::Show($form,$message,'outSPOKEN SAPI','YesNo','Question')
     if ($answer -ne 'Yes') { return }
-    $code = Invoke-Elevated ('-Move -MoveFrom "{0}" -MoveTo "{1}"' -f $p.from,$p.to)
+    $code = Invoke-Elevated ('-Move -MoveFrom "{0}" -MoveTo "{1}" -MirrorSettings "{2}"' -f $p.from,$p.to,(Get-SettingsArgument))
     if ($code -eq -1) { return }
     if ($code -eq 5) {
         $script:data = $env:ProgramData
@@ -602,5 +743,6 @@ $unregister.Add_Click({
 })
 $close.Add_Click({ $form.Close() })
 $form.CancelButton = $close
-$form.Controls.AddRange(@($label,$list,$status,$chooseRoot,$open,$register,$unregister,$move,$extract,$updates,$close))
-Refresh-Voices; $form.Add_Shown({ $list.Focus(); Offer-Rebind; Offer-NewData }); [void]$form.ShowDialog()
+$form.Controls.AddRange(@($label,$list,$status,$chooseRoot,$open,$register,$unregister,$move,$extract,$updates,$close,
+                          $inflLabel,$inflection,$numLabel,$numberStyle,$diagnostics))
+Refresh-Voices; $form.Add_Shown({ $list.Focus(); Confirm-SharedLogging; Offer-Rebind; Offer-NewData }); [void]$form.ShowDialog()

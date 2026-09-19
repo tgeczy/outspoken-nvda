@@ -235,6 +235,11 @@ OSP_API int      osp_serve_list(const char *roots, int out_fd);
 /* The SAPI bridge's protocol: requests on `in_fd`, responses on `out_fd`,
  * until the input closes. -> exit status */
 OSP_API int      osp_serve_run(const char *roots, int in_fd, int out_fd);
+/* What a request does not carry and the bridge's settings do: inflection
+ * on the driver's 0-100 and the number style (0 off, 1 words, 2 digits),
+ * applied to every engine the serve opens.  Before osp_serve_run; the
+ * driver's own defaults, 50 and words, when never called. */
+OSP_API void     osp_serve_set_defaults(int inflection, int numbers);
 
 #ifdef __cplusplus
 }
