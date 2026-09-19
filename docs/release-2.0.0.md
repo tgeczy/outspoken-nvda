@@ -197,10 +197,17 @@ Each phase ends green on the checks named, and each is a pull request against
   same. `cami` and every other engine agree. Suspect the C runtime's
   transcendental functions behind the SANE traps; not measured. Each width
   is held to its own baseline meanwhile.
-* **Phase 3, `.sp` DONE 2026-09-19.** `src/osp_engine.c` (the manifest,
-  file reading, one surface for all engines) and `src/osp_engine_sp.c`
-  (engine.py ported). The oracle: byte-identical on the whole script, both
-  voices, 64-bit and 32-bit, first run. Full grid pending. Next: mtk2.
+* **Phase 3, all four engines in C, 2026-09-19.** `src/osp_engine.c` (the
+  manifest, file reading, folder listing, MacRoman names, one surface for
+  all engines) and `osp_engine_sp.c`, `osp_engine_mtk2.c`,
+  `osp_engine_mtk3.c`, `osp_engine_pro.c` (each Python module ported line
+  for line; Pro covers `gala` and `cami`). The oracle: **all 36 voices,
+  223 renders, byte-identical on the 32-bit pair**, each engine on its first
+  run. The 64-bit pair confirmed for `.sp` only so far -- the 1984 engine's
+  full grid was still holding the 64-bit DLL -- and the Linux box is next.
+  Full grids per engine and the Tab-hold test are still owed. `stop()` is
+  the no-op it was for MacinTalk 2, 3 and Pro; real cancel is Phase 6.
+  Next: the catalogue (`voices.py` → C), then Phase 4.
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.
