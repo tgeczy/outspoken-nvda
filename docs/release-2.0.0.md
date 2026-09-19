@@ -168,19 +168,28 @@ Each phase ends green on the checks named, and each is a pull request against
   rebuilt from the vendored tree renders **all 36 voices byte-identical** to
   the 1.2.0-era binary of 2026-08-30, itself built after the last host
   source change (scratch check, one fixed utterance per voice, default
-  settings). Not yet done: a render on the Linux box through the `.so`.
+  settings). **Linux, verified 2026-09-19:** on `coconut` (Ubuntu 22.04,
+  GCC 11, x86-64) the `.so` built first time, the self-test passed, and the
+  Python engines driving it rendered **all 36 voices byte-identical to
+  Windows**, Carlos and Catalina included. Phase 1 is complete.
 * **A trap, found the hard way:** `osp.py` prefers a DLL beside the module,
   and the repository had a three-week-old copy there from a deploy, so a
   day's checks ran against it while `build/` held the binary under test.
   `OSP_HOST_DLL` now names the library outright; `tests/conftest.py` sets it
   to `build/`, and the tools honour it. Set it when running anything by hand.
-* **Phase 2, numbers: written 2026-09-19.** `src/osp_numbers.c` ports
+* **Phase 2 complete 2026-09-19.** `src/osp_numbers.c` ports
   `numwords.normalise` for both languages and both styles;
   `tools/numbers_oracle.py` diffs it over 6140 generated cases (exit code =
-  disagreements) and runs in `linux.yml`; `tests/test_numbers_c.py` wraps it
-  for the Windows suite. NRL not started.
-* Not started: the render oracle harness (`tools/render_oracle.py`), NRL,
-  and everything from Phase 3 on.
+  disagreements), zero, on the 64-bit and 32-bit pairs and on the Linux
+  `.so`; it runs in `linux.yml`. `src/osp_nrl.c` ports `nrl.py` (rules,
+  respelling, letter names); `tools/nrl_oracle.py` diffs it over 16544
+  cases, zero on the first run; needs `RULZ`, so local only.
+  `tests/test_numbers_c.py` and `tests/test_nrl_c.py` wrap both for the
+  suite: 367 passed, 2 skipped.
+* Not started: the render oracle harness (`tools/render_oracle.py`) and
+  everything from Phase 3 on. The text calls take MacRoman bytes and return
+  the size needed (`> cap` means retry); the NRL calls answer -2 when their
+  table is not loaded.
 * **NVDA stays in-process.** Tomi, 2026-09-19: the DLL-and-Python route is
   what keeps secure screens working, and it always has; the separate host
   process is for SAPI, Linux and Android only.

@@ -35,18 +35,29 @@ else:
     # build_linux.sh produces one .so for whatever the machine is.
     _NAME = "libosp_host.so"
 
-# Deployed inside the add-on the DLL sits beside this file; in the repo it
-# lives under build/. Checking both lets one module serve both places.
+# Deployed inside the add-on the DLL sits beside this file; in the repository
+# it lives under build/, three levels up from here.  Checking both lets one
+# module serve both places -- and lets tools/osp.py be a re-export of this
+# one rather than a second copy that drifts.
+_REPO = os.path.dirname(os.path.dirname(ROOT))
 _CANDIDATES = [os.path.join(HERE, _NAME),
-               os.path.join(ROOT, "build", _NAME),
-               os.path.join(ROOT, "build", "linux", _NAME)]
+               os.path.join(_REPO, "build", _NAME),
+               os.path.join(_REPO, "build", "linux", _NAME)]
+# In the repository -- recognised by build.sh sitting where the repository
+# root would be -- the build output comes FIRST, so a probe run after
+# `sh build.sh` sees what was just built and not a copy deployed beside the
+# module weeks ago.  Inside NVDA there is no build.sh and the copy beside
+# the module is the only one that counts.
+if os.path.isfile(os.path.join(_REPO, "build.sh")):
+    _CANDIDATES = _CANDIDATES[1:] + _CANDIDATES[:1]
 #: `OSP_HOST_DLL` names the library outright and wins over the search.  The
 #: search prefers a copy beside this module, which is right inside NVDA and
 #: wrong in the repository, where such a copy is whatever somebody deployed
 #: last -- the tests once ran a whole day against a three-week-old binary
 #: that way while build/ held the one under test.  conftest points this at
 #: build/; the tools honour it too.
-DLL = os.environ.get("OSP_HOST_DLL") or     next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
+DLL = os.environ.get("OSP_HOST_DLL") or \
+    next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
 
 # m68k_register_t, in declaration order
 (D0, D1, D2, D3, D4, D5, D6, D7,
