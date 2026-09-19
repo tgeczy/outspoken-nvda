@@ -27,6 +27,16 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADDON = os.path.join(ROOT, "addon")
 
+# Test the host that was just built, not a copy somebody deployed beside the
+# module weeks ago.  osp.py searches the module's own folder first -- right
+# inside NVDA, wrong here -- and honours this override; build.sh writes to
+# build/, and package.py ships from build/, so build/ is what the suite must
+# exercise.  Left alone when already set, so a caller can point it elsewhere.
+_HOST = os.path.join(ROOT, "build",
+                     "osp_host.dll" if sys.maxsize > 2 ** 32 else "osp_host_x86.dll")
+if os.path.isfile(_HOST):
+    os.environ.setdefault("OSP_HOST_DLL", _HOST)
+
 #: What a real output stream costs to start after being stopped.
 STREAM_START = 0.12
 

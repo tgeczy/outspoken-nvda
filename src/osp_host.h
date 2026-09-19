@@ -105,6 +105,15 @@ OSP_API int      osp_stop_vector(void);
 OSP_API unsigned osp_stop_pc(void);
 OSP_API long long osp_instr_count(void);
 
+/* ---- the text front end ------------------------------------------------- */
+/* Numbers as words, ported from numwords.py (see osp_numbers.c).  MacRoman
+ * in, MacRoman out.  `spell_out` is digit by digit; `spanish` is the cami
+ * voices' language.  Writes at most `cap` bytes to `out` and returns how
+ * many the whole result needs; more than `cap` means come back with a
+ * bigger buffer.  -1 means no memory. */
+OSP_API int      osp_numbers(const unsigned char *text, int len, int spell_out,
+                             int spanish, unsigned char *out, int cap);
+
 #ifdef __cplusplus
 }
 #endif

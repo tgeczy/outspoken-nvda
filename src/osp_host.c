@@ -49,3 +49,6 @@
 #include "osp_host_toolbox.c"
 #include "osp_host_runtime.c"
 #include "osp_host_api.c"
+/* The text front end: no CPU, no memory of its own, but every front end
+ * reaches it through the same library. */
+#include "osp_numbers.c"

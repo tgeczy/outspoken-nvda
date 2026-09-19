@@ -40,7 +40,13 @@ else:
 _CANDIDATES = [os.path.join(HERE, _NAME),
                os.path.join(ROOT, "build", _NAME),
                os.path.join(ROOT, "build", "linux", _NAME)]
-DLL = next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
+#: `OSP_HOST_DLL` names the library outright and wins over the search.  The
+#: search prefers a copy beside this module, which is right inside NVDA and
+#: wrong in the repository, where such a copy is whatever somebody deployed
+#: last -- the tests once ran a whole day against a three-week-old binary
+#: that way while build/ held the one under test.  conftest points this at
+#: build/; the tools honour it too.
+DLL = os.environ.get("OSP_HOST_DLL") or     next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
 
 # m68k_register_t, in declaration order
 (D0, D1, D2, D3, D4, D5, D6, D7,

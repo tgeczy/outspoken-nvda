@@ -163,14 +163,26 @@ Each phase ends green on the checks named, and each is a pull request against
 * **Phase 1, Windows half done 2026-09-19.** Musashi vendored at
   `313ebf1` with the hook change committed; `build.sh` no longer fetches or
   `sed`s. `src/osp_host.h` declares the C API and the host includes it.
-  `src/osp_selftest.c` passes 12/12 on Windows through `build.sh selftest`.
-  Both DLLs rebuilt from the vendored tree render **all 36 voices
-  byte-identical** to the binaries they replaced (scratch check, one fixed
-  utterance per voice, default settings). `build_linux.sh` and
-  `.github/workflows/linux.yml` are written and **unverified**: no compiler
-  on this Windows box outside MSVC (Cygwin here has no gcc) and the VM was
-  down. First proof will be CI on push, then a render on the VM.
-* Not started: the render oracle harness (`tools/render_oracle.py`), and
-  everything from Phase 2 on.
+  `src/osp_selftest.c` passes 12/12 on Windows through `build.sh selftest`
+  and in CI on x86-64 and ARM64 Linux (run 35447036401, first push). The DLL
+  rebuilt from the vendored tree renders **all 36 voices byte-identical** to
+  the 1.2.0-era binary of 2026-08-30, itself built after the last host
+  source change (scratch check, one fixed utterance per voice, default
+  settings). Not yet done: a render on the Linux box through the `.so`.
+* **A trap, found the hard way:** `osp.py` prefers a DLL beside the module,
+  and the repository had a three-week-old copy there from a deploy, so a
+  day's checks ran against it while `build/` held the binary under test.
+  `OSP_HOST_DLL` now names the library outright; `tests/conftest.py` sets it
+  to `build/`, and the tools honour it. Set it when running anything by hand.
+* **Phase 2, numbers: written 2026-09-19.** `src/osp_numbers.c` ports
+  `numwords.normalise` for both languages and both styles;
+  `tools/numbers_oracle.py` diffs it over 6140 generated cases (exit code =
+  disagreements) and runs in `linux.yml`; `tests/test_numbers_c.py` wraps it
+  for the Windows suite. NRL not started.
+* Not started: the render oracle harness (`tools/render_oracle.py`), NRL,
+  and everything from Phase 3 on.
+* **NVDA stays in-process.** Tomi, 2026-09-19: the DLL-and-Python route is
+  what keeps secure screens working, and it always has; the separate host
+  process is for SAPI, Linux and Android only.
 * Engine data on this machine: `rom/` in the repository (ignored) and
   `%APPDATA%\nvda\macintalk\outspoken`. The Linux box is `coconut`.
