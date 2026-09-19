@@ -302,6 +302,14 @@ Each phase ends green on the checks named, and each is a pull request against
   source archive, `docs/linux.md` as its README) and attaches it to a
   release on publish or on `gh workflow run linux.yml -f release_tag=v2.0.0`.
   User-facing notes: `docs/release-2.0.0-notes.md`.
+* **Out for Tomi's ear, 2026-09-19 evening.** PR #4 (`tgeczy/native-host`
+  → `main`). Draft release `v2.0.0`, target the branch head, carrying
+  `outspoken-2.0.0.nvda-addon`, `outspoken-sapi-2.0.0-setup.exe` and the
+  two Linux tarballs from the dispatched workflow. **To publish:** merge
+  the PR, `gh release edit v2.0.0 --target main` so the tag lands on
+  `main` like every Panthera tag since 3.0.0, then publish; the published
+  event re-runs `linux.yml`, which leaves the attached tarballs alone. The
+  update checkers see nothing while it is a draft.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync
