@@ -52,3 +52,4 @@
 /* The text front end: no CPU, no memory of its own, but every front end
  * reaches it through the same library. */
 #include "osp_numbers.c"
+#include "osp_nrl.c"

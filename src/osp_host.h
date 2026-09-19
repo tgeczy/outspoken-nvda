@@ -114,6 +114,23 @@ OSP_API long long osp_instr_count(void);
 OSP_API int      osp_numbers(const unsigned char *text, int len, int spell_out,
                              int spanish, unsigned char *out, int cap);
 
+/* The 1984 engine's English front end, ported from nrl.py (see osp_nrl.c).
+ * The rule tables are the user's own `RULZ` and `DICT` resources, handed in
+ * whole; the interpreter is ours.  Load returns 0, or -1 for a table that
+ * does not parse.  The text calls follow osp_numbers' contract -- MacRoman
+ * in and out, return the size needed -- and answer -2 when the table they
+ * need is not loaded, -1 for no memory. */
+OSP_API int      osp_nrl_load(const unsigned char *data, int len);            /* RULZ */
+OSP_API int      osp_nrl_load_dictionary(const unsigned char *data, int len); /* DICT */
+OSP_API void     osp_nrl_unload(void);
+OSP_API int      osp_nrl_rule_count(int dictionary);
+/* English -> phonemes, stripped. */
+OSP_API int      osp_nrl_translate(const unsigned char *text, int len, unsigned char *out, int cap);
+/* Berkeley's respellings applied; English out, unmatched text kept. */
+OSP_API int      osp_nrl_respell(const unsigned char *text, int len, unsigned char *out, int cap);
+/* How a lone letter is announced. */
+OSP_API int      osp_nrl_letter_name(const unsigned char *text, int len, unsigned char *out, int cap);
+
 #ifdef __cplusplus
 }
 #endif
