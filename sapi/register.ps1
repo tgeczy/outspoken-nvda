@@ -120,11 +120,12 @@ if ($Register) {
         & "$env:SystemRoot\System32\regsvr32.exe" /s (Join-Path $stage 'x64\outspoken_sapi.dll')
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
-    # The serve bridge is the one authority on which voices the data
-    # provides; registering with no data present is a clean no-op.
-    $py = Join-Path $stage 'python\python.exe'
-    if (-not (Test-Path $py)) { $py = 'python' }
-    $listing = & $py (Join-Path $stage 'osp_serve.py') --list $DataRoot 2>$null
+    # The host is the one authority on which voices the data provides;
+    # registering with no data present is a clean no-op.  The 64-bit host
+    # where there is one, else the 32-bit one (a 32-bit Windows).
+    $host_exe = Join-Path $stage 'osp_host.exe'
+    if (-not (Test-Path $host_exe)) { $host_exe = Join-Path $stage 'osp_host_x86.exe' }
+    $listing = & $host_exe --list $DataRoot 2>$null
     Remove-Tokens
     foreach ($root in $tokenRoots) {
         foreach ($line in @($listing)) {

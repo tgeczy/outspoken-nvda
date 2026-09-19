@@ -1,8 +1,9 @@
 ﻿param([string]$OutputRoot = "C:\outspoken")
-# Stage the outSPOKEN SAPI engine: both DLL bitnesses, the serve bridge, the
-# driver package it serves (our own code, MIT -- the ROMs are never here),
-# and the embeddable Python that runs it.  Template: panthera-speech's
-# sapi/build.ps1.
+# Stage the outSPOKEN SAPI engine: both DLL bitnesses, the native host that
+# serves speech (both widths, from build/ -- run `sh build.sh` first), the
+# extractor with the driver package it imports (our own code, MIT -- the
+# ROMs are never here), and the embeddable Python that runs the extractor.
+# Template: panthera-speech's sapi/build.ps1.
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $msvc = Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC" -Directory | Sort-Object Name | Select-Object -Last 1
@@ -25,8 +26,16 @@ if ($LASTEXITCODE) { throw "settings launcher build failed ($LASTEXITCODE)" }
 Set-Content -Encoding ASCII (Join-Path $stage "settings.cmd") '@echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0settings.ps1"'
 
-# The serve bridge and the driver it serves.  This is the whole point: the
-# same modules NVDA runs, not a port -- see tests/test_sapi_serve.py.
+# The native host, which the SAPI DLL launches with --serve.  This is the
+# whole point: the same engine code NVDA loads as a DLL, not a port -- see
+# tests/test_sapi_serve.py and tests/test_serve_hosts.py.  Both widths, so
+# a 32-bit Windows gets a host too; the DLL takes whichever is installed.
+foreach ($exe in "osp_host.exe","osp_host_x86.exe") {
+  $built = Join-Path $repo "build\$exe"
+  if (!(Test-Path $built)) { throw "$built is missing: run `sh build.sh` first" }
+  Copy-Item $built $stage
+}
+# The serve protocol's specification, kept beside the host that implements it.
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage
 Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage

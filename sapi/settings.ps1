@@ -113,11 +113,13 @@ $FamilyKeys = @('mt1','mtk2','mtk3','gala','cami')
 $FamilyNames = @('MacinTalk 1 (1984)','MacinTalk 2','MacinTalk 3','MacinTalk Pro','MacinTalk Pro (Spanish)')
 
 function Get-BridgeVoiceIds {
-    $py = Join-Path $stage 'python\python.exe'
-    if (-not (Test-Path $py)) { $py = 'python' }
+    # The host lists what the data provides; 64-bit where there is one,
+    # else the 32-bit one (a 32-bit Windows).
+    $host_exe = Join-Path $stage 'osp_host.exe'
+    if (-not (Test-Path $host_exe)) { $host_exe = Join-Path $stage 'osp_host_x86.exe' }
     $ids = @()
     try {
-        foreach ($line in @(& $py (Join-Path $stage 'osp_serve.py') --list $script:data 2>$null)) {
+        foreach ($line in @(& $host_exe --list $script:data 2>$null)) {
             if ($line -match "`t") { $ids += ($line -split "`t")[0] }
         }
     } catch {}

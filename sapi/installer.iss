@@ -14,7 +14,7 @@
 #ifndef StageDir
 #define StageDir "C:\outspoken\sapi"
 #endif
-#define AppVer "1.2.3"
+#define AppVer "2.0.0"
 
 [Setup]
 AppId={{4D6071E1-B142-4F49-8C5C-97C661EA748B}
@@ -35,6 +35,10 @@ UninstallDisplayName=outSPOKEN SAPI {#AppVer}
 [Files]
 Source: "{#StageDir}\x86\outspoken_sapi.dll"; DestDir: "{app}\x86"
 Source: "{#StageDir}\x64\outspoken_sapi.dll"; DestDir: "{app}\x64"; Check: Is64BitInstallMode
+; The native host that serves speech: the 64-bit one on a 64-bit Windows,
+; the 32-bit one everywhere, and the DLL takes whichever is there.
+Source: "{#StageDir}\osp_host.exe"; DestDir: "{app}"; Check: Is64BitInstallMode
+Source: "{#StageDir}\osp_host_x86.exe"; DestDir: "{app}"
 Source: "{#StageDir}\osp_serve.py"; DestDir: "{app}"
 Source: "{#StageDir}\register.ps1"; DestDir: "{app}"
 Source: "{#StageDir}\settings.ps1"; DestDir: "{app}"

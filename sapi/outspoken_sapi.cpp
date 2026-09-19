@@ -7,13 +7,16 @@
  * the seam when neither side brought one.
  *
  * The synthesis path is deliberately not a port.  This DLL launches the
- * embeddable Python installed beside it, running sapi/osp_serve.py, which
- * serves the SAME driver modules the NVDA add-on runs -- NRL rules,
- * MacinTalk 2 command building, number reading, the 8-to-16 widening --
- * so the SAPI voice is byte-identical to the NVDA voice by construction,
- * and tests/test_sapi_serve.py asserts exactly that.  There is no text
- * processing here at all: the driver on the other side of the pipe owns
- * every decision about how speech sounds.
+ * native host installed beside it, `osp_host.exe --serve`, which is the
+ * SAME engine code the NVDA add-on loads as a DLL -- NRL rules, the
+ * Component Manager glue, number reading, the 8-to-16 widening, all of it
+ * in src/ -- so the SAPI voice is byte-identical to the NVDA voice by
+ * construction, and tests/test_sapi_serve.py asserts exactly that.  Until
+ * 2.0 the child was an embeddable Python running sapi/osp_serve.py over
+ * the driver modules; that script stays as the protocol's specification
+ * and tests/test_serve_hosts.py holds the two hosts to each other.  There
+ * is no text processing here at all: the host on the other side of the
+ * pipe owns every decision about how speech sounds.
  *
  * The host stays resident: 22 ms warm to first PCM against 131 cold,
  * measured.  An abort kills it -- instant cancel -- and the next Speak
@@ -149,8 +152,8 @@ static bool exact(HANDLE h, void *p, DWORD n, bool write) {
 static std::wstring module_dir() {
     wchar_t p[MAX_PATH]; GetModuleFileNameW(g_module,p,MAX_PATH);
     wchar_t *s=wcsrchr(p,L'\\'); if(s)*s=0;
-    /* The DLL lives in x86\ or x64\; the serve script and Python live one
-     * level up, shared by both bitnesses. */
+    /* The DLL lives in x86\ or x64\; the host program lives one level up,
+     * shared by both bitnesses. */
     std::wstring d=p; size_t slash=d.rfind(L'\\');
     if(slash!=std::wstring::npos){
         std::wstring leaf=d.substr(slash+1);
@@ -259,8 +262,13 @@ static bool host_ensure(const std::wstring &dataRoot) {
     sweep_logs();
     if(host_alive())return true;
     std::wstring base=module_dir();
-    std::wstring cmd=L"\""+base+L"\\python\\python.exe\" \""+base+
-                     L"\\osp_serve.py\" \""+dataRoot+L"\"";
+    /* The 64-bit host where the installer put one, else the 32-bit one:
+     * a 32-bit Windows gets only the latter, and either serves both DLL
+     * bitnesses -- the child is its own process. */
+    std::wstring host=base+L"\\osp_host.exe";
+    if(GetFileAttributesW(host.c_str())==INVALID_FILE_ATTRIBUTES)
+        host=base+L"\\osp_host_x86.exe";
+    std::wstring cmd=L"\""+host+L"\" --serve \""+dataRoot+L"\"";
     /* A megabyte of buffer each way against the four-kilobyte default: a
      * request larger than the buffer would block the writer until the host
      * read it, and the response side never has to stall the serve over a
@@ -269,10 +277,10 @@ static bool host_ensure(const std::wstring &dataRoot) {
     if(!CreatePipe(&inR,&inW,&sa,1<<20)||!CreatePipe(&outR,&outW,&sa,1<<20))return false;
     SetHandleInformation(inW,HANDLE_FLAG_INHERIT,0);SetHandleInformation(outR,HANDLE_FLAG_INHERIT,0);
     /* The serve process never gets a pipe for its stderr.  A resident child
-     * that writes a traceback into a pipe nobody drains stops dead when the
+     * that writes diagnostics into a pipe nobody drains stops dead when the
      * buffer fills, and that would present as speech ending for good; NUL
      * discards and cannot block.  With diagnostics on it goes to a file
-     * instead, which is where a Python traceback is worth having. */
+     * instead, which is where the host's own complaints are worth having. */
     HANDLE errH=INVALID_HANDLE_VALUE;
     {
         SECURITY_ATTRIBUTES esa={sizeof(esa),0,TRUE};
