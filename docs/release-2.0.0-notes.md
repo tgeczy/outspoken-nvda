@@ -27,6 +27,17 @@ plain C, with the 68000 interpreter (Karl Stenerud's Musashi) compiled in.
   front end you build on it; `libosp_host.so` is the same engine as a
   library. Built for x86-64 and 64-bit ARM on Ubuntu 22.04, attached below,
   with the source it came from and a README inside.
+* **Android**, for the first time: outSPOKEN is a text-to-speech engine for
+  TalkBack and anything else that speaks through the system. All five
+  engines and every voice you have extracted, Carlos and Catalina as a
+  Spanish voice a Spanish screen reader can pick, the voices speaking on
+  the lock screen after a restart, and a settings screen with the
+  desktop's sliders for each engine. Get your extracted `outspoken` folder
+  onto the phone as a zip through the app's Setup page, or copy it over
+  the PC's file window. Interrupting is immediate: the engine stops inside
+  the word rather than finishing the sentence, and there is no worker
+  restart behind a swipe. The APK is attached below; it is a sibling of
+  Panthera's app, not a part of it.
 
 Nothing here is a rewrite by ear. Each piece of Python became the
 specification for its C, and an oracle diffs the two: 6,140 number-reading
@@ -68,16 +79,14 @@ reported it — the grid of renders that proved the port found it, on its
 ## Unchanged, on purpose
 
 No engine data ships with anything here — not the add-on, not the SAPI
-installer, not the Linux tarball — and the packaging refuses to build a
-release that contains any. You supply your own copy and the extractor stages
-it. The add-on still contains no program file, only the DLL, for the sake of
-the secure screens.
-
-Android is not part of this release; it is its own app, later, on the same
-host.
+installer, not the Linux tarball, not the APK — and the packaging refuses to
+build a release that contains any. You supply your own copy and the
+extractor stages it. The add-on still contains no program file, only the
+DLL, for the sake of the secure screens.
 
 ## Updating
 
 Press **Check for updates** in the speech data manager (NVDA's Tools menu)
 or in the SAPI settings window, and this release installs itself. The NVDA
-add-on, the SAPI installer and the Linux tarballs are attached below.
+add-on, the SAPI installer, the Linux tarballs and the Android APK are
+attached below.

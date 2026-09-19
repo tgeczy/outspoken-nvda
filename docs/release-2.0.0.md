@@ -326,6 +326,26 @@ Each phase ends green on the checks named, and each is a pull request against
   `osp_engine_*`) with the engine list, the settings, one worker per
   engine kind, the `outspoken` data folder, the zip import and Direct
   Boot storage. Not in 2.0.0; Tomi decides whether 2.0.0 waits for it.
+* **Phase 7 BUILT 2026-09-19, the same evening: Tomi held 2.0.0 for it.**
+  `src/platforms/android` is Panthera's app at `pantheraspeech/v3.2.0`
+  with the engine swapped -- `docs/android.md` is the account. One worker
+  process for every engine (the host interrupts, so nothing is retired to
+  cancel), the catalogue as the voice list, the zip import and the move
+  into protected storage rewritten around the extractor's folders with
+  `voices` merged, Spanish as a locale, the desktop's sliders per family.
+  `build_android.sh` cross-builds `liboutspoken.so` (both ABIs) from the
+  Linux sources plus a C JNI; `gradlew assembleDebug` built first time;
+  26 JVM tests pass. **On the Nothing Phone:** the preview renders
+  byte-identical to the desktop at the same settings (42870 samples both,
+  1984 Female, the phone's 215% speech rate being the desktop's slider at
+  78), and with `tts_default_synth` set to `com.outspoken.tts` TalkBack's
+  first request (Fred, 15 characters) streamed in ~100 ms. Tomi's first
+  hearing: "super high pitched and sped up" -- the 1984 Female at 499 wpm,
+  which is what 215% of the desktop default is; the default voice is Fred
+  since. Left: Tomi's ear on the phone across the engines and on
+  interrupting; the device suite (`androidTest`) not ported; release
+  signing (`signing.properties`, the same convention as Panthera's) and the
+  APK on the draft as `outspoken-2.0.0.apk`; the watch untried.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync

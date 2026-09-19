@@ -119,6 +119,19 @@ the file stops at 4 MB and starts over. `/d 0` turns it off again.
 > behave now — a probe-calibrated slider, twelve semitones either side of
 > each voice's own pitch.)
 
+## Linux and Android
+
+Since 2.0.0 the same host runs on Linux and on Android. `osp_host` on Linux
+lists the voices you have extracted, renders text to a WAV file, or serves
+speech over a pipe for a front end of your own, and `libosp_host.so` is the
+engine as a library; CI builds both for x86-64 and 64-bit ARM and attaches
+them to every release with `docs/linux.md` inside as the README. The Android
+app under `src/platforms/android` is a text-to-speech engine for TalkBack,
+mirrored from Panthera's with the engine swapped: every voice, Carlos and
+Catalina as a Spanish locale, speech on the lock screen after a restart, and
+a zip import for the extracted folder — `docs/android.md` has the whole of
+it. Neither carries a byte of engine data.
+
 ## You must supply the engine
 
 **This repository contains no part of MacinTalk or outSPOKEN, and releases built
