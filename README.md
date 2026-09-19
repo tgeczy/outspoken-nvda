@@ -49,12 +49,15 @@ to share, and it did not come from here.
 
 Beside the NVDA add-on there is a SAPI 5 engine, for JAWS, System Access,
 and anything else that speaks SAPI — and it is deliberately not a port.
-The engine DLL launches an embedded Python running `sapi/osp_serve.py`,
-which serves **the same driver modules NVDA loads**, so the SAPI voice is
-byte-identical to the NVDA voice by construction;
-`tests/test_sapi_serve.py` asserts exactly that, byte for byte. Measured on
-this machine under the interpreter the installer ships: 21 ms from request
-to first sound with the host warm, 158 ms cold. The fragment handling carries the JAWS lessons learned in
+The engine DLL launches `osp_host.exe --serve`, the native host, which is
+**the same engine code the NVDA add-on loads as a DLL** — the 68000
+interpreter, the Component Manager glue, the NRL rules, number reading,
+the widening with volume folded in — so the SAPI voice is byte-identical
+to the NVDA voice by construction; `tests/test_sapi_serve.py` asserts
+exactly that, byte for byte, and `tests/test_serve_hosts.py` holds the
+host to `sapi/osp_serve.py`, the Python bridge it replaced in 2.0.0 and
+the protocol's specification since. The embeddable Python the installer
+ships now serves the Extract button only. The fragment handling carries the JAWS lessons learned in
 TGSpeechbox and Panthera: word-per-fragment feeding with bookmarks between
 never reads bookmark names aloud, and the seam between fragments keeps its
 space.

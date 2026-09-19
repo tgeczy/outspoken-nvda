@@ -132,9 +132,13 @@ Each phase ends green on the checks named, and each is a pull request against
    Tab-hold on every engine.
 7. **Android, last and gated.** Cross-build the CLI with the NDK and *time*
    MacinTalk Pro on a phone and a watch before designing anything: 17× realtime
-   under an interpreter on a desktop is the number to divide. Whether outSPOKEN
-   is its own app or a fifth generation inside Panthera's is Tomi's call, asked
-   when this phase starts and not before.
+   under an interpreter on a desktop is the number to divide. **Tomi's call,
+   2026-09-19: its own app, not a fifth generation inside Panthera's.** The
+   app's shape mirrors Panthera's: the voice and engine tabs, the setup flow
+   and the zip import stay; what changes is the list of engines and the
+   settings each shows. Data arrives as a folder copied over MTP or as a zip
+   that holds `outspoken`, `outspoken-data`, or the bare engine folders --
+   all three are to be accepted.
 
 ## Decisions taken as assumptions
 
@@ -256,11 +260,58 @@ Each phase ends green on the checks named, and each is a pull request against
   driver, and `tests/test_serve_hosts.py` compares the two hosts with each
   other over the wire on every engine family, with settings changes, a
   cancel by seq, and the listing. All byte-identical.
-* **Not done, deliberately:** `outspoken_sapi.cpp` still launches
-  `python.exe osp_serve.py`. The launch string changes to
-  `osp_host.exe --serve` only after Tomi's Tab-hold test on every engine
-  through the C host, which is his ear and not a test here. `osp_serve.py`
-  stays in the repository as the specification.
+* **Phase 6 DONE 2026-09-19: the NVDA driver on the host.** `outspoken.py`
+  opens engines through `osp.HostEngine` (catalogue, open, select,
+  settings, apply, volume, numbers, translate, speak_start/pull/cancel,
+  widen) and no Python engine module runs at speech time. Held by
+  `tools/driver_oracle.py`: the bytes fed to the player for nine fixed
+  sequences on one voice per family, frozen per width
+  (`tests/baseline/driver-feed.json`, `driver-feed-x86.json`) and
+  cross-checked with `--driver-rev 0607ca4` against the 1.2.x driver on
+  the same host: **equal on 40 of 45 cases, the five "spelling" cases
+  differ by design**. (The first frozen baseline had English Pro from the
+  32-bit host — the pre-existing 32/64 Pro difference again — which is why
+  there is one per width now.) Indexes go on the audio queue on the side
+  of the run's audio their place in the sequence says, and the feeder
+  reports them when playback reaches them through `feed(onDone=)`, probed
+  once (`tests/test_marks.py`, ported from Panthera's; `tests/test_earcons.py`
+  passes and lost its expected-failure mark). `CharacterModeCommand` is
+  declared and flushes each character as its own utterance. The completion
+  notice moves to the feeder, after `idle()` and after the held marks, and
+  is owed for every sequence, empty ones included. A cancel mid-sequence
+  abandons the rest of it, audio is tagged with the cancel count it was
+  rendered under and the feeder drops a stale piece (Panthera's window,
+  now one per streamed piece). `_gainTables`, `_to16`, `_pitchTenths`,
+  `_baseHz` and `_applySettings` stay as the reference the settings
+  oracle runs. Suite: 403 passed on each width (the 32-bit run has its one
+  environmental `wx` failure).
+* **The SAPI launcher swapped, same day.** `outspoken_sapi.cpp` launches
+  `osp_host.exe --serve <dataRoot>` beside it, falling back to
+  `osp_host_x86.exe` (a 32-bit Windows gets only that one); `register.ps1`
+  and `settings.ps1` list voices with `osp_host --list`; `build.ps1`
+  stages both programs from `build/` and keeps the embeddable Python for
+  the Extract button only; `installer.iss` ships both. Built and staged:
+  `C:\outspoken\sapi\out\outspoken-sapi-2.0.0-setup.exe`. `osp_serve.py`
+  stays as the specification. **Tomi's Tab-hold test on every engine,
+  through the add-on and through the installer, is the gate that remains.**
+* **Release mechanics, same day.** Versions 2.0.0 in `addon/manifest.ini`
+  and `installer.iss`; `tools/package.py` now refuses a `.exe` inside the
+  add-on outright (secure screens) and allows the `advapi32.dll` import
+  the roots port added; `linux.yml` packages
+  `outspoken-linux-<arch>.tar.gz` (program, library, header, licences,
+  source archive, `docs/linux.md` as its README) and attaches it to a
+  release on publish or on `gh workflow run linux.yml -f release_tag=v2.0.0`.
+  User-facing notes: `docs/release-2.0.0-notes.md`.
+* **Parked, with the probe written down:** an index *between* words of one
+  run is still reported at the head, because its position in the audio is
+  not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync
+  ID]]` in the text and the Speech Manager calls `soSyncCallBack` when the
+  engine reaches it. The probe: set `soSyncCallBack` through
+  SetSpeechInfo to a stub in guest memory that the host's trap hook
+  recognises, break the render there, record `osp_pcm_len()` as the mark's
+  byte position, and never put a sync after final punctuation (it would
+  split the sentence's prosody). Hexadecimal IDs. Measured before shipped,
+  and by ear, since a sync may itself cost a pause.
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.
@@ -289,17 +340,19 @@ Each phase ends green on the checks named, and each is a pull request against
 * **Spelling markers must not be blocked** (Tomi, 2026-09-19). NVDA wraps
   single-character strings in `CharacterModeCommand(True/False)`
   (`source/speech/speech.py`, `_getSpellingSpeechAddCharMode` in 2026.2),
-  with `PitchCommand` around capitals. The driver drops that command today
-  and coalesces the letters into one utterance. To do: declare it in
-  `supportedCommands`; while it is on, suspend coalescing and speak each
-  single character as its letter name (`.sp`: `letter_name`; MacinTalk 2, 3
-  and Pro: the Speech Manager's own `[[char LTRL]]`…`[[char NORM]]` if the
-  engine honours it, measured first, else one utterance per character).
+  with `PitchCommand` around capitals. **DONE in Phase 6:** declared in
+  `supportedCommands`; while it is on, coalescing is suspended and each
+  string is flushed as its own utterance. The letter's name is the engine's
+  own affair as before (`.sp` already spells a lone letter through
+  `letter_name`; the Speech Manager engines say a single letter as a
+  letter). `[[char LTRL]]` was not measured and is not used.
 * **Prosody across say-all** (Tomi, same day): engines should carry their
   prosody from one say-all chunk into the next without depending on the
-  coalescing of adjacent strings. Exact shape to agree with Tomi: whether
-  that is honouring `EndUtteranceCommand` as the only utterance boundary,
-  or feeding the engine continuously and letting it find sentence ends.
+  coalescing of adjacent strings. Tomi, later the same day: it matters "a
+  bit less" here than in Panthera, but prosody should still continue with
+  markers. **Parked** behind the `[[sync]]` probe above: with interior
+  marks resolvable, a say-all chunk can stay one utterance across its
+  indexes and the engine keeps its sentence prosody. Not for 2.0.0.
 * **Earcons and Speech Rules must keep time** (Tomi, same day). The add-on
   at `C:\git\nvda-phonetic-punctuation` — formerly Phonetic Punctuation, in
   use, and the add-on behind Panthera's issue #21 — turns a punctuation
@@ -313,9 +366,9 @@ Each phase ends green on the checks named, and each is a pull request against
   the start of A and the silence lands after A. Measured, not just read:
   `tests/test_earcons.py` speaks `hello | index 7 | break 300 | world` and
   records `index 7, feed hello, feed 300 ms of silence, feed world`; it
-  asserts the required order and is a strict expected failure, so it turns
-  into a failure the day the fix lands, and the mark comes off with the fix.
-  That is Panthera's
+  asserts the required order and was a strict expected failure until Phase
+  6 landed the fix, when the mark came off. **DONE.** The design below is
+  what was built; `tests/test_marks.py` measures each case. That is Panthera's
   breathing-on fault, and outSPOKEN has no breath to buy with it: no engine
   here breathes, the cross-index sentence joiner Panthera needs never comes
   here, and the adjacent-string coalescing of 0.8.0 is a different mechanism
