@@ -46,10 +46,15 @@ Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
 # without NVDA, a Python install, or an execution-policy change.
 Copy-Item (Join-Path $repo "tools\extract_rom.py") $stage
 $drv = Join-Path $stage "synthDrivers"
+# Fresh every time: a stage that is only ever added to keeps whatever an
+# earlier build left in it, and a three-week-old engine DLL sitting beside
+# the driver is exactly the trap this project has already fallen into once.
+if (Test-Path $drv) { Remove-Item -Recurse -Force $drv }
 New-Item -ItemType Directory -Force $drv,(Join-Path $drv "_outspoken") | Out-Null
 Copy-Item (Join-Path $repo "addon\synthDrivers\outspoken.py") $drv
 Copy-Item (Join-Path $repo "addon\synthDrivers\_outspoken\*.py") (Join-Path $drv "_outspoken")
-Copy-Item (Join-Path $repo "addon\synthDrivers\_outspoken\*.dll") (Join-Path $drv "_outspoken")
+# No DLL here: the extractor is pure Python, and speech comes from the host
+# program above, so nothing in this tree runs 68000 code.
 Copy-Item -Recurse -Force (Join-Path $repo "addon\synthDrivers\_outspoken\_machfs") (Join-Path $drv "_outspoken\_machfs")
 Get-ChildItem -Recurse (Join-Path $drv "_outspoken") -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 # Embeddable Python, the portable lesson from day one.  The ._pth must name
