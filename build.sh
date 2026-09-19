@@ -70,8 +70,9 @@ build_one() {
         -Fo\"$OBJ/\"" > "$OBJ/compile.log" 2>&1 || {
             echo "compile failed; tail of log:"; tail -30 "$OBJ/compile.log"; exit 1; }
 
-    # osp_main.obj is the program's and must stay out of the DLL's link.
-    rm -f "$OBJ/osp_main.obj"
+    # osp_main.obj is the program's and osp_selftest.obj the self-test's:
+    # each has a main, and neither belongs in the DLL or in the other.
+    rm -f "$OBJ/osp_main.obj" "$OBJ/osp_selftest.obj"
     eval "\"$CL\" -nologo -LD -MT \"$OBJ\"/*.obj \
         -Fe\"$OUT/osp_host$SUF.dll\" -link $LIB advapi32.lib" > "$OBJ/link.log" 2>&1 || {
             echo "link failed; tail of log:"; tail -30 "$OBJ/link.log"; exit 1; }
@@ -83,8 +84,14 @@ build_one() {
     eval "\"$CL\" -nologo -c -O2 -MT -DNDEBUG $INC -I\"$ROOT/src\" \
         \"$ROOT/src/osp_main.c\" -Fo\"$OBJ/\"" > "$OBJ/compile-main.log" 2>&1 || {
             echo "osp_main compile failed; tail of log:"; tail -30 "$OBJ/compile-main.log"; exit 1; }
+    # The objects carry the DLL's exports, so linking them as a program also
+    # writes an import library -- named after the program, which is the
+    # DLL's name too.  Left alone it replaces build/osp_host.lib with one
+    # that names osp_host.exe, and the self-test then loads the program as
+    # a library and dies at its first call.  -IMPLIB keeps it out of the way.
     eval "\"$CL\" -nologo -MT \"$OBJ\"/*.obj \
-        -Fe\"$OUT/osp_host$SUF.exe\" -link $LIB advapi32.lib" > "$OBJ/link-exe.log" 2>&1 || {
+        -Fe\"$OUT/osp_host$SUF.exe\" -link $LIB advapi32.lib \
+        -IMPLIB:\"$OBJ/osp_host_exe.lib\"" > "$OBJ/link-exe.log" 2>&1 || {
             echo "exe link failed; tail of log:"; tail -30 "$OBJ/link-exe.log"; exit 1; }
     echo "  -> build/osp_host$SUF.exe"
 }
