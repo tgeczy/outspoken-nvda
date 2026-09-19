@@ -224,7 +224,24 @@ Each phase ends green on the checks named, and each is a pull request against
   driver's own methods against it over every slider value and offset: 3989
   cases, zero disagreements, first run; data-free, so it runs in CI.
   `tests/test_settings_c.py` wraps it. The NVDA driver still does its own
-  arithmetic until Phase 6 moves it onto these calls. Next: Phase 5.
+  arithmetic until Phase 6 moves it onto these calls.
+* **Phase 5, step 1 DONE 2026-09-19: streaming in C.** The advisor's
+  ordering: streaming had to exist in C before the SAPI launcher switches,
+  or Pro would regress from a 30 ms first sound to a full-render wait.
+  `osp_engine_speak_start` / `osp_engine_pull` / `osp_engine_cancel` on the
+  engine layer, with `ospaudio.Stream` ported (the held-back piece, head
+  trim first, tail trim last) and MacinTalk 3 and Pro split into begin,
+  pump, quiet and drain steps that the blocking call and the pull path
+  share. `tests/test_engine_pull.py`: pulled equals blocking on all four
+  engines, the first piece arrives early, an abandoned utterance stops
+  quickly and does not poison the next. This is also real cancel for
+  MacinTalk 2, 3 and Pro from the rendering thread, ahead of Phase 6.
+  Measured on the way: MacinTalk 2 carries something of the previous
+  utterance into the next (the first "quick brown fox" after "a, b, c, d,
+  e" is 8 bytes longer than every repetition after it), in the Python
+  reference too; the tests compare like positions.
+  Next: serve and CLI in C (step 2), roots in a separate translation unit
+  (step 3), and the parametrized SAPI test as the swap gate (step 4).
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.

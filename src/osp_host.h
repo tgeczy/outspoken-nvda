@@ -145,6 +145,15 @@ OSP_API int         osp_engine_speak(const unsigned char *prepared, int len);
 OSP_API int         osp_engine_pcm(unsigned char *out, int cap);
 /* Ask the utterance in flight to stop, where the engine allows it. */
 OSP_API void        osp_engine_stop(void);
+/* Streaming: begin an utterance (-> 0 accepted, 1 nothing to say, negative
+ * on failure), then pull 8-bit PCM as the engine renders it -- each pull
+ * runs one round of the engine on the calling thread and answers the bytes
+ * written, 0 when the utterance is over.  The pieces concatenate to exactly
+ * what osp_engine_speak returns.  osp_engine_cancel abandons the utterance
+ * being pulled: the next pull stops the engine and answers 0. */
+OSP_API int         osp_engine_speak_start(const unsigned char *prepared, int len);
+OSP_API int         osp_engine_pull(unsigned char *out, int cap);
+OSP_API void        osp_engine_cancel(void);
 
 /* ---- the driver's settings, 0-100 (see osp_settings.c) -------------------- */
 /* Rate, pitch, volume and inflection on the sliders' own 0-100 scales;

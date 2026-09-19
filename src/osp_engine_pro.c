@@ -331,26 +331,46 @@ static int pro_busy(void)
     return osp_r8(PRO_STATUS_BUF) != 0 || osp_r32(PRO_STATUS_BUF + 2) != 0;
 }
 
-static void pro_speak(const unsigned char *text, int len, NumBuf *out)
+static int pro_begin(const unsigned char *text, int len)
 {
     const unsigned char *raw = text;
     int n = len;
     unsigned args[3], result = 0;
 
     eng_strip(&raw, &n);
-    if (n <= 0) return;
+    if (n <= 0) return 0;
     osp_pcm_reset();
     osp_write_block(PRO_TEXT_BUF, raw, n);
     args[0] = PRO_TEXT_BUF; args[1] = (unsigned)n; args[2] = 0;
-    if (osp_component_call(g_pro.chan, M2_SPEAK, args, 3, 400000000LL, &result) != OSP_STOP_SENTINEL)
-        return;
-    while (osp_buffers_taken() < PRO_MAX_BUFFERS) {
-        if (!osp_run_callbacks(8, 200000000LL)) break;
-        if (!pro_busy()) break;
-    }
-    eng_take_pcm(out);
+    return osp_component_call(g_pro.chan, M2_SPEAK, args, 3, 400000000LL, &result) == OSP_STOP_SENTINEL;
+}
+
+static int pro_pump(NumBuf *out)
+{
+    if (osp_buffers_taken() >= PRO_MAX_BUFFERS) return 0;
+    if (!osp_run_callbacks(8, 200000000LL)) return 0;
+    if (osp_pcm_len()) { eng_take_pcm(out); osp_pcm_reset(); }
+    return pro_busy();
+}
+
+static void pro_quiet(void)
+{
+    unsigned args[1] = { 0 }, result = 0;
+    osp_component_call(g_pro.chan, M2_STOP, args, 1, 20000000LL, &result);
+}
+
+static void pro_drain(void)
+{
     osp_run_callbacks(64, 200000000LL);
     osp_pcm_reset();
+}
+
+static void pro_speak(const unsigned char *text, int len, NumBuf *out)
+{
+    if (!pro_begin(text, len)) return;
+    while (pro_pump(out)) { }
+    eng_take_pcm(out);
+    pro_drain();
     if (out->oom) return;
     eng_trim(out, 1200, 220);
 }
@@ -359,5 +379,6 @@ static void pro_stop(void) { }
 
 static const EngOps ENG_PRO_OPS = {
     pro_open, pro_close, pro_select, pro_set_rate, pro_set_pitch, NULL,
-    pro_set_inflection, pro_translate, pro_speak, pro_stop
+    pro_set_inflection, pro_translate, pro_speak, pro_stop,
+    pro_begin, pro_pump, pro_quiet, pro_drain
 };

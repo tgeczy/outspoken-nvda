@@ -86,6 +86,17 @@ typedef struct {
     void (*translate)(const unsigned char *text, int len, NumBuf *out);
     void (*speak)(const unsigned char *prepared, int len, NumBuf *out);
     void (*stop)(void);
+    /* Streaming, for the engines that render a buffer at a time: `begin`
+     * issues SpeakBuffer (-> 1, or 0 when there is nothing to say), `pump`
+     * runs one round of the Sound Manager and appends whatever landed (-> 1
+     * while the engine is still busy, 0 when it has finished), `quiet` is
+     * StopSpeech for an abandoned utterance, `drain` settles the engine
+     * afterwards.  NULL means the engine renders whole: `speak` is used and
+     * the pull path hands the result over in one piece. */
+    int  (*begin)(const unsigned char *prepared, int len);
+    int  (*pump)(NumBuf *out);
+    void (*quiet)(void);
+    void (*drain)(void);
 } EngOps;
 
 static struct {
@@ -496,10 +507,115 @@ static const EngOps *eng_ops_for(int kind)
     }
 }
 
+/* ---- streaming: ospaudio.Stream, and the sink branch of speak ----------------- */
+/*
+ * Hands rendered audio out as it arrives, one piece behind.  **One piece is
+ * always held back**, because trailing silence can only be recognised once
+ * it has stopped growing: a buffer that ends quiet may be the end of the
+ * utterance or a pause with more speech behind it.  The held piece keeps
+ * absorbing while it is entirely silent.  Only the first piece out is
+ * head-trimmed and only the last is tail-trimmed, which is what makes the
+ * streamed audio identical to the whole-utterance render -- asserted per
+ * engine by tests/test_engine_pull.py, as tests/test_macintalk3.py asserts
+ * it for the Python.
+ */
+#define STREAM_SILENT 0x80
+#define STREAM_KEEP   1200
+#define STREAM_LEAD   220
+
+static struct {
+    int active;             /* between speak_start and the final pull */
+    int whole;              /* the engine renders whole: one piece, then done */
+    int first;              /* nothing has gone out yet */
+    int finished;           /* the engine has said it is done */
+    int aborted;            /* the caller cancelled */
+    NumBuf held;            /* what the lookbehind is holding */
+    NumBuf ready;           /* emitted, not yet pulled */
+} g_stream;
+
+static size_t stream_tail_silence(const unsigned char *p, size_t n)
+{
+    size_t i = n;
+    while (i > 0 && p[i - 1] == STREAM_SILENT) i--;
+    return n - i;
+}
+
+/* trim_head: drop the leading silence, leaving LEAD bytes of it. */
+static void stream_trim_head(NumBuf *b)
+{
+    size_t n = b->len, start = 0, from;
+    while (start < n && b->p[start] == STREAM_SILENT) start++;
+    if (start >= n) { b->len = 0; return; }
+    from = start > STREAM_LEAD ? start - STREAM_LEAD : 0;
+    memmove(b->p, b->p + from, n - from);
+    b->len = n - from;
+}
+
+/* trim_tail: drop the trailing silence, leaving KEEP bytes of it. */
+static void stream_trim_tail(NumBuf *b)
+{
+    size_t n = b->len, end = n;
+    while (end > 0 && b->p[end - 1] == STREAM_SILENT) end--;
+    if (end == 0) { b->len = 0; return; }
+    b->len = end + STREAM_KEEP < n ? end + STREAM_KEEP : n;
+}
+
+/* Stream.feed: take one rendered piece into the lookbehind and move what is
+ * certainly speech into `ready`. */
+static void stream_feed(const unsigned char *piece, size_t n)
+{
+    size_t keep, out_n;
+    nb_put(&g_stream.held, piece, n);
+    if (g_stream.held.oom) return;
+    keep = stream_tail_silence(g_stream.held.p, g_stream.held.len);
+    if (keep >= g_stream.held.len) return;            /* all quiet so far: hold it all */
+    out_n = g_stream.held.len - keep;
+    if (g_stream.first) {
+        NumBuf out;
+        nb_init(&out);
+        nb_put(&out, g_stream.held.p, out_n);
+        stream_trim_head(&out);
+        nb_put(&g_stream.ready, out.p, out.len);
+        nb_free(&out);
+        g_stream.first = 0;
+    } else {
+        nb_put(&g_stream.ready, g_stream.held.p, out_n);
+    }
+    memmove(g_stream.held.p, g_stream.held.p + out_n, keep);
+    g_stream.held.len = keep;
+}
+
+/* Stream.finish: emit what is held, trimmed as the end of an utterance. */
+static void stream_finish(const unsigned char *last, size_t n)
+{
+    nb_put(&g_stream.held, last, n);
+    if (g_stream.held.oom) return;
+    if (g_stream.first) {
+        /* Nothing went out, so this is the whole utterance and the ordinary
+         * two-ended trim applies exactly as it always did. */
+        eng_trim(&g_stream.held, STREAM_KEEP, STREAM_LEAD);
+    } else if (stream_tail_silence(g_stream.held.p, g_stream.held.len) >= g_stream.held.len) {
+        /* Only the silence deliberately held back: keep the usual pad. */
+        if (g_stream.held.len > STREAM_KEEP) g_stream.held.len = STREAM_KEEP;
+    } else {
+        stream_trim_tail(&g_stream.held);
+    }
+    nb_put(&g_stream.ready, g_stream.held.p, g_stream.held.len);
+    g_stream.held.len = 0;
+}
+
+static void stream_reset(void)
+{
+    nb_free(&g_stream.held);
+    nb_free(&g_stream.ready);
+    memset(&g_stream, 0, sizeof g_stream);
+}
+
 /* ---- the API -------------------------------------------------------------------- */
 
 OSP_API void osp_engine_close(void)
 {
+    stream_reset();
     if (g_eng.ops && g_eng.ops->close) g_eng.ops->close();
     g_eng.ops = NULL;
     g_eng.kind = ENG_KIND_NONE;
@@ -620,6 +736,94 @@ OSP_API int osp_engine_pcm(unsigned char *out, int cap)
 OSP_API void osp_engine_stop(void)
 {
     if (g_eng.ops && g_eng.ops->stop) g_eng.ops->stop();
+}
+
+/* Begin an utterance for pulling.  -> 0 accepted (pull for the audio),
+ * 1 nothing to say, negative on failure.  For an engine that renders whole
+ * the render happens here and arrives in one piece. */
+OSP_API int osp_engine_speak_start(const unsigned char *prepared, int len)
+{
+    if (!g_eng.ops) return ENG_ERR_STATE;
+    stream_reset();
+    nb_free(&g_eng.pcm);
+    nb_init(&g_eng.pcm);
+    if (len < 0) len = 0;
+    if (!g_eng.ops->begin) {
+        g_stream.whole = 1;
+        g_eng.ops->speak(prepared, len, &g_eng.pcm);
+        if (g_eng.pcm.oom) return -1;
+        nb_put(&g_stream.ready, g_eng.pcm.p, g_eng.pcm.len);
+        g_stream.active = 1;
+        g_stream.finished = 1;
+        return 0;
+    }
+    if (!g_eng.ops->begin(prepared, len)) { g_stream.finished = 1; g_stream.active = 1; g_stream.whole = 1; return 1; }
+    g_stream.active = 1;
+    g_stream.first = 1;
+    return 0;
+}
+
+/* Pull the next piece of 8-bit PCM.  -> bytes written; 0 when the utterance
+ * is over (or was cancelled), and the utterance is then closed out.  A piece
+ * larger than `cap` is handed over across several pulls.  Rendering happens
+ * here, on the calling thread, one Sound Manager round at a time. */
+OSP_API int osp_engine_pull(unsigned char *out, int cap)
+{
+    if (!g_stream.active || !out || cap <= 0) return 0;
+    while (g_stream.ready.len == 0) {
+        if (g_stream.aborted) {
+            /* Abandoned, so tell the engine to stop rather than pumping the
+             * rest into a bin -- StopSpeech before the drain brought the
+             * cost of giving up from 38 per cent of the render to 9. */
+            if (!g_stream.whole) {
+                if (g_eng.ops->quiet) g_eng.ops->quiet();
+                if (g_eng.ops->drain) g_eng.ops->drain();
+            }
+            stream_reset();
+            return 0;
+        }
+        if (g_stream.finished) {
+            if (!g_stream.whole) {
+                /* Before the drain, never after: what the drain produces is
+                 * the engine settling, and it must reach nobody. */
+                NumBuf rest;
+                nb_init(&rest);
+                eng_take_pcm(&rest);
+                stream_finish(rest.p, rest.len);
+                nb_free(&rest);
+                if (g_eng.ops->drain) g_eng.ops->drain();
+                g_stream.whole = 1;          /* finished for good */
+                if (g_stream.ready.len) break;
+            }
+            stream_reset();
+            return 0;
+        }
+        {
+            NumBuf piece;
+            int busy;
+            nb_init(&piece);
+            busy = g_eng.ops->pump(&piece);
+            if (piece.len) stream_feed(piece.p, piece.len);
+            nb_free(&piece);
+            if (!busy) g_stream.finished = 1;
+        }
+    }
+    {
+        size_t n = g_stream.ready.len < (size_t)cap ? g_stream.ready.len : (size_t)cap;
+        memcpy(out, g_stream.ready.p, n);
+        memmove(g_stream.ready.p, g_stream.ready.p + n, g_stream.ready.len - n);
+        g_stream.ready.len -= n;
+        return (int)n;
+    }
+}
+
+/* Give up on the utterance being pulled: the next pull stops the engine,
+ * drains it and answers 0.  Meant for the thread that is pulling; a stop
+ * from another thread goes through osp_engine_stop, where an engine allows
+ * it. */
+OSP_API void osp_engine_cancel(void)
+{
+    if (g_stream.active) g_stream.aborted = 1;
 }
 
 /* The driver's 0-100 scales on top of the engines' own. */

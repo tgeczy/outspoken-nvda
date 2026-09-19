@@ -249,7 +249,8 @@ static int m3_busy(void)
     return osp_r8(M3_STATUS_BUF) != 0 || osp_r32(M3_STATUS_BUF + 2) != 0;
 }
 
-static void m3_speak(const unsigned char *text, int len, NumBuf *out)
+/* SpeakBuffer.  -> 1 when there is something to render, 0 for nothing. */
+static int m3_begin(const unsigned char *text, int len)
 {
     const unsigned char *raw = text;
     int n = len;
@@ -257,28 +258,52 @@ static void m3_speak(const unsigned char *text, int len, NumBuf *out)
     unsigned char *buf;
 
     eng_strip(&raw, &n);
-    if (n <= 0) return;
+    if (n <= 0) return 0;
     osp_pcm_reset();
     /* The engine reads its text buffer as a C string in places, so the
      * terminator goes in even though the length is passed too. */
     buf = (unsigned char *)malloc((size_t)n + 1);
-    if (!buf) { out->oom = 1; return; }
+    if (!buf) return 0;
     memcpy(buf, raw, (size_t)n);
     buf[n] = 0;
     osp_write_block(M3_TEXT_BUF, buf, n + 1);
     free(buf);
     args[0] = M3_TEXT_BUF; args[1] = (unsigned)n; args[2] = 0;
-    if (osp_component_call(g_m3.chan, M2_SPEAK, args, 3, 400000000LL, &result) != OSP_STOP_SENTINEL)
-        return;
-    while (osp_buffers_taken() < M3_MAX_BUFFERS) {
-        if (!osp_run_callbacks(8, 200000000LL)) break;
-        if (!m3_busy()) break;
-    }
-    eng_take_pcm(out);
-    /* Drain whatever the engine still has queued and throw it away, so the
-     * tail of this utterance cannot arrive at the front of the next one. */
+    return osp_component_call(g_m3.chan, M2_SPEAK, args, 3, 400000000LL, &result) == OSP_STOP_SENTINEL;
+}
+
+/* One round of being the Sound Manager: appends what landed, -> 1 while the
+ * engine is still busy.  The same loop body as the Python's, so that the
+ * blocking and streamed renders are one and the same. */
+static int m3_pump(NumBuf *out)
+{
+    if (osp_buffers_taken() >= M3_MAX_BUFFERS) return 0;   /* the ceiling: a finding, not an utterance */
+    if (!osp_run_callbacks(8, 200000000LL)) return 0;      /* nothing pending: really finished */
+    if (osp_pcm_len()) { eng_take_pcm(out); osp_pcm_reset(); }
+    return m3_busy();
+}
+
+/* StopSpeech(kImmediate), from the rendering thread only. */
+static void m3_quiet(void)
+{
+    unsigned args[1] = { 0 }, result = 0;
+    osp_component_call(g_m3.chan, M2_STOP, args, 1, 20000000LL, &result);
+}
+
+/* Drain whatever the engine still has queued and throw it away, so the
+ * tail of this utterance cannot arrive at the front of the next one. */
+static void m3_drain(void)
+{
     osp_run_callbacks(64, 200000000LL);
     osp_pcm_reset();
+}
+
+static void m3_speak(const unsigned char *text, int len, NumBuf *out)
+{
+    if (!m3_begin(text, len)) return;
+    while (m3_pump(out)) { }
+    eng_take_pcm(out);
+    m3_drain();
     if (out->oom) return;
     eng_trim(out, 1200, 220);                    /* ospaudio.trim: KEEP, LEAD */
 }
@@ -287,5 +312,6 @@ static void m3_stop(void) { }
 
 static const EngOps ENG_MTK3_OPS = {
     m3_open, m3_close, m3_select, m3_set_rate, m3_set_pitch, NULL,
-    m3_set_inflection, m3_translate, m3_speak, m3_stop
+    m3_set_inflection, m3_translate, m3_speak, m3_stop,
+    m3_begin, m3_pump, m3_quiet, m3_drain
 };

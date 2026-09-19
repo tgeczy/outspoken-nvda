@@ -374,5 +374,6 @@ static void sp_stop(void)
 
 static const EngOps ENG_SP_OPS = {
     sp_open, sp_close, NULL, sp_set_rate, NULL, sp_set_voice_hz,
-    sp_set_inflection, sp_translate, sp_speak, sp_stop
+    sp_set_inflection, sp_translate, sp_speak, sp_stop,
+    NULL, NULL, NULL, NULL
 };

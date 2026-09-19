@@ -448,5 +448,6 @@ static void m2_stop(void) { }
 
 static const EngOps ENG_MTK2_OPS = {
     m2_open, m2_close, m2_select, m2_set_rate, m2_set_pitch, NULL,
-    m2_set_inflection, m2_translate, m2_speak, m2_stop
+    m2_set_inflection, m2_translate, m2_speak, m2_stop,
+    NULL, NULL, NULL, NULL
 };
