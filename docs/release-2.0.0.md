@@ -310,6 +310,22 @@ Each phase ends green on the checks named, and each is a pull request against
   `main` like every Panthera tag since 3.0.0, then publish; the published
   event re-runs `linux.yml`, which leaves the attached tarballs alone. The
   update checkers see nothing while it is a draft.
+* **Phase 7's gate measured 2026-09-19, and passed by a distance.** The
+  host cross-built for arm64 Android with NDK r27c in one clang command
+  (`--target=aarch64-linux-android24`, the `build_linux.sh` sources and
+  flags, no source change) and ran on the Nothing Phone from
+  `/data/local/tmp`: all 36 voices listed, and the three-sentence test
+  text rendered **byte-identical to the Windows host on every engine
+  family** (five WAVs, five matching hashes). Render speed with process
+  start subtracted, phone against desktop: Pro 52x realtime against 39x,
+  Carlos 61x against 41x, MacinTalk 2 and the 1984 driver far above both;
+  MacinTalk 3 read 10x on one run against 32x and wants re-measuring.
+  Process start plus engine open is 0.04–0.11 s on the phone. So the
+  engine side of Android is done; what remains is the app itself, a fork
+  of Panthera's (16 Kotlin files, a 171-line JNI whose shape is exactly
+  `osp_engine_*`) with the engine list, the settings, one worker per
+  engine kind, the `outspoken` data folder, the zip import and Direct
+  Boot storage. Not in 2.0.0; Tomi decides whether 2.0.0 waits for it.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync
