@@ -342,10 +342,12 @@ Each phase ends green on the checks named, and each is a pull request against
   first request (Fred, 15 characters) streamed in ~100 ms. Tomi's first
   hearing: "super high pitched and sped up" -- the 1984 Female at 499 wpm,
   which is what 215% of the desktop default is; the default voice is Fred
-  since. Left: Tomi's ear on the phone across the engines and on
-  interrupting; the device suite (`androidTest`) not ported; release
-  signing (`signing.properties`, the same convention as Panthera's) and the
-  APK on the draft as `outspoken-2.0.0.apk`; the watch untried.
+  since. **Tomi's ear on the phone, the same evening: "Android's perfect.
+  no lag when swiping, no oddities in speech. pro works, and the other
+  engines do too."** Left: the device suite (`androidTest`) not ported;
+  release signing (`signing.properties`, the same convention as
+  Panthera's) and the APK on the draft as `outspoken-2.0.0.apk`; the watch
+  untried.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync
