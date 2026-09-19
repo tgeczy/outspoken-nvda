@@ -16,9 +16,9 @@ losing the breath.  No outSPOKEN engine breathes, so outSPOKEN can report at
 playback position unconditionally -- see ``docs/release-2.0.0.md``, "Asked
 for along the way".
 
-The test below asserts the required order and is marked as an expected
-failure, strictly: it documents the fault today and turns into a failure the
-day the fault is fixed, so whoever fixes it also removes the mark.
+The test below asserts the required order.  It was an expected failure
+until 2.0's driver put indexes on the audio queue and reported them where
+their audio is heard; it passes since, and must keep passing.
 """
 
 import time
@@ -33,9 +33,9 @@ def _record(driver, synthDriverHandler, order):
     notifier = synthDriverHandler.synthIndexReached
     orig_notify = notifier.notify
 
-    def feed(data):
+    def feed(data, *a, **k):
         order.append(("feed", len(data)))
-        return orig_feed(data)
+        return orig_feed(data, *a, **k)
 
     def notify(**kw):
         order.append(("index", kw.get("index")))
@@ -47,9 +47,6 @@ def _record(driver, synthDriverHandler, order):
                     setattr(notifier, "notify", orig_notify))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="indexes are reported before the run is rendered; "
-                          "Phase 6 reports them at playback position")
 def test_an_earcon_index_follows_the_text_before_it(driver, rom_files):
     """``hello | index | break | world``: the index after ``hello``'s audio."""
     import speech.commands
@@ -60,8 +57,10 @@ def test_an_earcon_index_follows_the_text_before_it(driver, rom_files):
         driver.speak(["hello", speech.commands.IndexCommand(7),
                       speech.commands.BreakCommand(300), "world"])
         t0 = time.perf_counter()
-        # Three feeds are due: hello, the break's silence, world.
-        while (sum(1 for k, _v in order if k == "feed") < 3
+        # Three feeds are due -- hello, the break's silence, world -- and
+        # the index, which waits for hello to finish sounding.
+        while ((sum(1 for k, _v in order if k == "feed") < 3
+                or ("index", 7) not in order)
                and time.perf_counter() - t0 < 5.0):
             time.sleep(0.01)
         time.sleep(0.1)

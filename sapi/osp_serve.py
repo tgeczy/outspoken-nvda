@@ -80,7 +80,7 @@ def _install_fakes(data_root, player_cls):
     speech = types.ModuleType("speech")
     commands = types.ModuleType("speech.commands")
     for name in ("IndexCommand", "BreakCommand", "PitchCommand",
-                 "VolumeCommand", "RateCommand"):
+                 "VolumeCommand", "RateCommand", "CharacterModeCommand"):
         cls = type(name, (), {"__init__":
                               lambda self, value=0: setattr(self, "value",
                                                             value)})

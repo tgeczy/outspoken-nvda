@@ -40,24 +40,24 @@
   },
   "gala:Bruce": {
    "adjacent": [
-    43566,
-    "0b899788ec49ab0f0930c418eb87533c"
+    43540,
+    "16e0430d006c80fc1ccafbb8b406697d"
    ],
    "break": [
-    50296,
-    "1000d739c82c2a10c77003d08d749b81"
+    50582,
+    "bce1a123005debce3da1357b0f4d9bdd"
    ],
    "empty": [
     0,
     "d41d8cd98f00b204e9800998ecf8427e"
    ],
    "index": [
-    33900,
-    "02263e68a35a17da1f772cb9540045fa"
+    34160,
+    "5e713adab47fb3c838005ee94b7c47e0"
    ],
    "pitch": [
-    44570,
-    "8265864e1072d999bfbac3c835aa5524"
+    44856,
+    "9406c318fe01d40ff3e9bbdc8147812f"
    ],
    "rate": [
     32610,
@@ -68,12 +68,12 @@
     "a9be7250c84ef32da15e8015c598e857"
    ],
    "text": [
-    173618,
-    "a4d1692702228278a3710c184b467cfe"
+    173834,
+    "82f24986a397d6d22076eaeae5c0adee"
    ],
    "volume": [
-    62768,
-    "0cce469c39eb0877ded86de279dbdc35"
+    63082,
+    "a71522585dace833f41e8ce01af14bff"
    ]
   },
   "male": {
@@ -191,5 +191,5 @@
    ]
   }
  },
- "note": "Bytes the driver fed the player, per voice and sequence, on the 64-bit host. Rewrite only with --freeze, deliberately; see the module docstring for what it was checked against."
+ "note": "Bytes the driver fed the player, per voice and sequence, on the 32-bit host. Rewrite only with --freeze, deliberately; see the module docstring for what it was checked against."
 }

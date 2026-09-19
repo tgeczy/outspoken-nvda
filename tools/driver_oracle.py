@@ -8,15 +8,20 @@ RateCommand part-way through, indexes, a spelling-shaped run of single
 characters -- by capturing the bytes `SynthDriver` feeds `nvwave.WavePlayer`
 for fixed sequences, one voice per engine family, and hashing them.
 
-`tests/baseline/driver-feed.json` is those hashes as the 1.2.x driver
-produced them, through the Python engine modules.  The 2.0 driver, on the
-host's C engines, must match on every case whose semantics were not
-deliberately changed.  Index timing changes nothing here (only when a
-notification fires); spelling changes bytes only for the single-character
-case, recorded on its own so that diff is a decision and not a surprise.
+`tests/baseline/driver-feed.json` (64-bit) and `driver-feed-x86.json`
+(32-bit) are those hashes frozen from the 2.0 driver on the host's C
+engines, one per width because the 32-bit host renders English MacinTalk
+Pro differently on longer utterances (a pre-existing difference, noted in
+docs/release-2.0.0.md).  They were checked against the 1.2.x driver at
+commit 0607ca4, through the Python engine modules, on the same width:
+equal on every case but "spelling", which 2.0 changed on purpose -- one
+utterance per character instead of one for the run.  `--driver-rev`
+repeats that check any time: it loads the driver from that git revision
+in place of the working tree's.
 
-    py -3 tools/driver_oracle.py            # compare against the baseline
-    py -3 tools/driver_oracle.py --freeze   # rewrite the baseline, deliberately
+    py -3 tools/driver_oracle.py                      # compare
+    py -3 tools/driver_oracle.py --freeze             # rewrite, deliberately
+    py -3 tools/driver_oracle.py --driver-rev 0607ca4 # the 1.2.x driver
 
 Needs the engine data under NVDA's configuration folder on this machine
 (`%APPDATA%\\nvda`), so every engine family is present; runs here, not in CI.
@@ -26,10 +31,13 @@ import json
 import os
 import sys
 import time
+import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-BASELINE = os.path.join(ROOT, "tests", "baseline", "driver-feed.json")
+BASELINE = os.path.join(ROOT, "tests", "baseline",
+                        "driver-feed.json" if sys.maxsize > 2 ** 32
+                        else "driver-feed-x86.json")
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 sys.path.insert(0, os.path.join(ROOT, "addon", "synthDrivers", "_outspoken"))
 sys.path.insert(0, os.path.join(ROOT, "addon", "synthDrivers"))
@@ -45,8 +53,12 @@ def _config():
     return cfg
 
 
-def make_driver():
-    """The driver under the suite's NVDA stand-ins, on this machine's data."""
+def make_driver(rev=None):
+    """The driver under the suite's NVDA stand-ins, on this machine's data.
+
+    `rev` loads outspoken.py from that git revision instead of the working
+    tree -- the engine modules and the host stay the working tree's, so what
+    is compared is the driver alone."""
     import conftest
     conftest._install_fake_nvda()
     cfg = _config()
@@ -60,7 +72,17 @@ def make_driver():
                 self.state = state
         commands.CharacterModeCommand = CharacterModeCommand
         # As NVDA does: the command also lives on the `speech` module's view.
-    import outspoken
+    if rev:
+        import subprocess
+        path = os.path.join(ROOT, "addon", "synthDrivers", "outspoken.py")
+        src = subprocess.check_output(
+            ["git", "-C", ROOT, "show", "%s:addon/synthDrivers/outspoken.py" % rev])
+        outspoken = types.ModuleType("outspoken")
+        outspoken.__file__ = path
+        sys.modules["outspoken"] = outspoken
+        exec(compile(src, path, "exec"), outspoken.__dict__)
+    else:
+        import outspoken
     return outspoken.SynthDriver(), commands
 
 
@@ -130,7 +152,10 @@ def capture(driver, commands, verbose=True):
 
 def main():
     freeze = "--freeze" in sys.argv
-    driver, commands = make_driver()
+    rev = None
+    if "--driver-rev" in sys.argv:
+        rev = sys.argv[sys.argv.index("--driver-rev") + 1]
+    driver, commands = make_driver(rev)
     try:
         got = capture(driver, commands)
     finally:
@@ -138,9 +163,11 @@ def main():
     if freeze:
         os.makedirs(os.path.dirname(BASELINE), exist_ok=True)
         with open(BASELINE, "w", encoding="utf-8") as fh:
-            json.dump({"note": "Bytes the 1.2.x driver fed the player, per voice and "
-                               "sequence, through the Python engine modules. Rewrite "
-                               "only with --freeze, deliberately.",
+            json.dump({"note": "Bytes the driver fed the player, per voice and "
+                               "sequence, on the %d-bit host. Rewrite only with "
+                               "--freeze, deliberately; see the module docstring "
+                               "for what it was checked against."
+                               % (64 if sys.maxsize > 2 ** 32 else 32),
                        "feeds": got}, fh, indent=1, sort_keys=True)
         print("baseline frozen: %s" % BASELINE)
         return 0

@@ -116,25 +116,50 @@ def test_a_volume_command_reaches_the_conversion(monkeypatch):
     assert speech.commands.RateCommand in wanted
 
     d = _driver()
-    seen = []
-    d._gainTables = lambda v: seen.append(v) or (None, d._FLIP)
-    d._applySettings = lambda eng, adj=0, radj=0: seen.append(("rate", radj))
     d._entry = lambda: ("mtk2:Ben", "Ben", "mtk2", None)
+    d._numberWords = True
 
     class Eng(object):
-        def translate(self, text):
-            return text
+        """The host's engine interface, recording what the driver asked."""
+        calls = []
 
-        def speak(self, text):
-            return b"\x80" * 100
+        def numbers(self, mode):
+            self.calls.append(("numbers", mode))
+
+        def settings(self, rate, pitch, inflection):
+            self.calls.append(("settings", rate, pitch, inflection))
+
+        def apply(self, radj, padj):
+            self.calls.append(("apply", radj, padj))
+
+        def volume(self, percent, vadj):
+            self.calls.append(("volume", percent, vadj))
+
+        def translate(self, text):
+            return text.encode("mac_roman")
+
+        def speak_start(self, prepared):
+            self._pending = b"\x80" * 100
+            return True
+
+        def pull(self):
+            piece, self._pending = self._pending, b""
+            return piece
+
+        def cancel(self):
+            pass
+
+        def widen(self, pcm8):
+            return bytes(len(pcm8) * 2)
 
     d._stopped = False
-    d._engineRate = 200
     d._cancels = 0
     d._audioOut = False
     d._nSpoken = d._nEmpty = 0
+    d._lastReport = 0.0
     d._audioQueue = type("Q", (), {"put": lambda self, x: None})()
     d._flush(Eng(), ["hello"], 0, -40, 15, [], 0.0)
-    assert ("rate", 15) in seen, (
+    assert ("apply", 15, 0) in Eng.calls, (
         "a RateCommand offset never reached the engine")
-    assert 60 in seen, "a VolumeCommand offset never reached the conversion"
+    assert ("volume", 100, -40) in Eng.calls, (
+        "a VolumeCommand offset never reached the conversion")

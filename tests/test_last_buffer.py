@@ -46,9 +46,15 @@ def _cliff(pcm):
 
 @pytest.fixture
 def sp(driver, rom_files):
-    """The 1984 engine, on the original voice."""
+    """The 1984 engine, on the original voice: the Python module, which is
+    the specification the host's `.sp` port is held to byte for byte
+    (tools/render_oracle.py), and the only one that exposes the emulated
+    memory `test_the_harvested_tail_is_the_continuation` reads.  The driver
+    is here for its settings arithmetic and speaks nothing."""
+    import rom
     driver._set_voice("male")
-    return driver, driver._ensureEngine()
+    found, _missing = rom.find()
+    return driver, eng_mod.Engine(found)
 
 
 def _say(driver, eng, text, rate):
