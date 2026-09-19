@@ -74,6 +74,26 @@ A fresh block still arrives as it always did — zeroed when the *Clear*
 variant was asked for, otherwise with the odd-word pattern the Spanish Pro
 front end depends on — so a reused address reads exactly as a fresh one.
 
+## Three things checked before trusting it
+
+Because block sizes matter now where they did not before, three questions
+were measured rather than assumed, on every engine, one utterance each and
+then forty with the short, medium and long texts in rotation:
+
+| engine | unserved traps in an utterance | zero-size blocks | blocks after open → after 40 | heap after 1st → after 40 |
+|---|---|---|---|---|
+| MacinTalk (1984) | 0 | 0 | 4 → 4 | 4,452 → 4,452 |
+| MacinTalk 2 | 0 | 0 | 85 → 85 | 342,324 → 342,324 |
+| MacinTalk 3 | 0 | 0 | 88 → 88 | 451,240 → 451,240 |
+| Pro (`gala`) | 0 | 0 | 435 → 435 | 2,435,484 → 2,435,484 |
+| Pro (`cami`) | 0 | 0 | 317 → 317 | 2,074,068 → 2,074,068 |
+
+No engine reaches a Memory Manager trap the host does not serve
+(`_SetHandleSize` is not served, and nobody asks). No allocation is ever of
+size zero, which would have let two blocks share an address. And the block
+table is bounded: Pro's first utterance keeps 184 blocks for the life of
+the engine, then nothing more.
+
 ## What guards it now
 
 * `src/osp_selftest.c`: `_NewPtr`, `_NewHandle`, `_DisposeHandle`,
