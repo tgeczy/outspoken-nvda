@@ -231,7 +231,12 @@ Each phase ends green on the checks named, and each is a pull request against
   again. The break and the prosody are already honoured here. The index is
   not kept in time: `_flush` reports every index it has collected *before*
   it renders the run, so for `A | index | break | B` the earcon sounds over
-  the start of A and the silence lands after A. That is Panthera's
+  the start of A and the silence lands after A. Measured, not just read:
+  `tests/test_earcons.py` speaks `hello | index 7 | break 300 | world` and
+  records `index 7, feed hello, feed 300 ms of silence, feed world`; it
+  asserts the required order and is a strict expected failure, so it turns
+  into a failure the day the fix lands, and the mark comes off with the fix.
+  That is Panthera's
   breathing-on fault, and outSPOKEN has no breath to buy with it: no engine
   here breathes, the cross-index sentence joiner Panthera needs never comes
   here, and the adjacent-string coalescing of 0.8.0 is a different mechanism
