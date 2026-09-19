@@ -1,0 +1,22 @@
+outSPOKEN distribution licenses
+
+Copyright (c) 2026 Tamas Geczy
+
+outSPOKEN's source and its Windows, Linux and Android builds are distributed
+under the MIT license. No Apple engine, voice, dictionary or rule data is
+distributed: the user supplies it from their own copy of the software, and
+the extractor in the desktop add-on stages it.
+
+The host that runs the engines carries Musashi, Karl Stenerud's Motorola
+68000 emulation engine, compiled in under its MIT license. The Android app
+also carries the BSD-licensed emoji description tables, generated from
+Unicode's own data, and the Kotlin runtime. Use Full licenses to read the
+included terms. Third-party components retain their own licenses.
+
+The command-line renderer, streaming pipe protocol and C library can be used
+by independent clients.
+
+Source and build instructions:
+https://github.com/tgeczy/outspoken-nvda
+
+Musashi: https://github.com/kstenerud/Musashi

@@ -1,0 +1,20 @@
+# Gradle / AGP build output
+/build/
+/app/build/
+/app/.cxx/
+.gradle/
+.kotlin/
+hs_err_pid*.log
+local.properties
+*.iml
+.idea/
+
+# The native library is prebuilt by build_android.sh at the repository root
+# from the host sources; it is reproducible, so it is not committed.
+/app/src/main/jniLibs/**/liboutspoken.so
+
+# Keystores never go in the repo.
+signing.properties
+keystore.properties
+*.keystore
+*.jks

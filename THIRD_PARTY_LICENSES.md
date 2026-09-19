@@ -64,3 +64,19 @@ This project ships **only the emulator and host**. The engine comes from the
 user's own copy of outSPOKEN, placed in the add-on's `rom/` folder by hand.
 That arrangement is the entire reason this repository is publishable, and it is
 the same one EchoTalk uses for its Textalker images.
+
+## Emoji descriptions — `src/platforms/android/.../Emoji.kt`
+
+The Android app describes an emoji in words before the text reaches the
+engine, because the engines read MacRoman and TalkBack hands over the code
+points themselves. The description tables are David Sexton's, from
+doubledroid, under the BSD 3-Clause licence, generated from Unicode's own
+`emoji-test.txt`; the notice ships in the APK as `Emoji-BSD.txt` beside
+Unicode's terms (`Unicode.txt`). Neither reaches the Windows or Linux
+builds.
+
+## Kotlin runtime — the Android app
+
+The APK carries the Kotlin standard library under the Apache License 2.0;
+its licence and notice ship in the APK as `Kotlin-LICENSE.txt` and
+`Kotlin-NOTICE.txt`.
