@@ -43,8 +43,9 @@ def find(name):
     """-> full path, or None. `name` is a canonical name from ALIASES."""
     wanted = {name} | set(ALIASES.get(name, ()))
     for root in roots():
-        for dirpath, _dirs, names in os.walk(root):
-            for n in names:
+        for dirpath, dirs, names in os.walk(root):
+            dirs.sort()                 # the same answer on every file system
+            for n in sorted(names):
                 if n in wanted:
                     return os.path.join(dirpath, n)
     return None

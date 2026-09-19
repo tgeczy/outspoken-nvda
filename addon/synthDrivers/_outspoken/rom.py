@@ -245,8 +245,11 @@ def find():
     for root in search_roots():
         if not os.path.isdir(root):
             continue
-        for dirpath, _dirs, names in os.walk(root):
-            for n in names:
+        for dirpath, dirs, names in os.walk(root):
+            # Sorted, so "first found" means the same on every file system;
+            # see macintalk2.find for the case that made it matter.
+            dirs.sort()
+            for n in sorted(names):
                 if n in FILES and n not in found:
                     found[n] = os.path.join(dirpath, n)
     return found, [n for n in FILES if n not in found]

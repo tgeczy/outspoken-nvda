@@ -339,7 +339,7 @@ def installed(engine=None, roots=None, speakable=False):
             # what a resource file looks like rather than assuming the folder
             # contains nothing else.
             files, extra = {}, {}
-            for f in os.listdir(p):
+            for f in sorted(os.listdir(p)):      # the last of a type wins, the same everywhere
                 stem, ext = os.path.splitext(f)
                 if ext.lower() != ".bin" or "_" not in stem:
                     extra[f] = os.path.join(p, f)
