@@ -714,7 +714,19 @@ $chooseRoot.Add_Click({
         }
     }
 })
-$open.Add_Click({ New-Item -ItemType Directory -Force $script:data | Out-Null; Start-Process explorer.exe -ArgumentList ('"{0}"' -f $script:data) })
+# The folder the engines are actually in -- macintalk\outspoken under the
+# root, or outspoken-roms, or the root itself when they are loose in it --
+# not the root the voices were resolved from.  On a machine whose tree sits
+# at %APPDATA%\macintalk\outspoken the root is Roaming itself, and opening
+# Roaming is not what anybody pressing "Open data folder" wants to see.
+$open.Add_Click({
+    $target = Get-OspTree $script:data
+    if ((-not $target) -or (-not (Test-Path -LiteralPath $target))) {
+        $target = $script:data
+        New-Item -ItemType Directory -Force $target | Out-Null
+    }
+    Start-Process explorer.exe -ArgumentList ('"{0}"' -f $target)
+})
 $register.Add_Click({
     # **Register what, exactly?**  A root with no speech data has no voices
     # to register, and elevating anyway ends with "voices were registered"
