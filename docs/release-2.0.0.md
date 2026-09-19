@@ -221,6 +221,41 @@ Each phase ends green on the checks named, and each is a pull request against
   coalescing of adjacent strings. Exact shape to agree with Tomi: whether
   that is honouring `EndUtteranceCommand` as the only utterance boundary,
   or feeding the engine continuously and letting it find sentence ends.
+* **Earcons and Speech Rules must keep time** (Tomi, same day). The add-on
+  at `C:\git\nvda-phonetic-punctuation` — formerly Phonetic Punctuation, in
+  use, and the add-on behind Panthera's issue #21 — turns a punctuation
+  mark, a role or a state into a `BaseCallbackCommand` (an `IndexCommand` by
+  the time it reaches a driver) **followed by a `BreakCommand` sized to the
+  sound**, and expresses headings and formatting as additive `PitchCommand`,
+  `VolumeCommand` and `RateCommand` offsets, 0 meaning the user's setting
+  again. The break and the prosody are already honoured here. The index is
+  not kept in time: `_flush` reports every index it has collected *before*
+  it renders the run, so for `A | index | break | B` the earcon sounds over
+  the start of A and the silence lands after A. That is Panthera's
+  breathing-on fault, and outSPOKEN has no breath to buy with it: no engine
+  here breathes, the cross-index sentence joiner Panthera needs never comes
+  here, and the adjacent-string coalescing of 0.8.0 is a different mechanism
+  that stays (the bullet above uses the same word for it). So take
+  Panthera's breathing-off path unconditionally, with no checkbox:
+  `speech_pipeline.py`'s `_feedPiece`/`_played`/`_markReached`/`_marksDrained`
+  and `panthera/tests/test_marks.py` are the model. A head index (before the
+  run's text) reports when the run starts to play, which keeps say-all one
+  line ahead as today; a tail index (text before it, a break, a prosody
+  change or the end after it) reports when the speech has played and
+  *before* the appended silence, so NVDA's next push renders under the
+  pause; an interior index stays at the head, its position unknown. A break
+  must keep forcing a flush — the add-on's trailing break is what makes a
+  tail possible. The traps are Panthera's: `cancel()` bumps a generation,
+  because NVDA's `stop()` drops `onDone` callbacks without firing them;
+  drain the marks after `idle()` so every index precedes
+  `synthDoneSpeaking`; never take the player lock inside the callback, WASAPI
+  fires it inside `feed()` on the feeder thread. The manifest admits 2023.1,
+  which predates `onDone`, so probe `inspect.signature(feed)` once and fall
+  back to reporting at dequeue. Tests: the `FakeWavePlayer` in
+  `tests/conftest.py` learns `onDone` and mirrors NVDA's timing, as
+  Panthera's did; the cases are the earcon shape above, a say-all head
+  index, and a cancel mid-run that loses no index. Python only, so it could
+  ship ahead of 2.0.0 if wanted.
 * **NVDA stays in-process.** Tomi, 2026-09-19: the DLL-and-Python route is
   what keeps secure screens working, and it always has; the separate host
   process is for SAPI, Linux and Android only.
