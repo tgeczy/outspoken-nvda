@@ -47,7 +47,7 @@ def _record(driver, synthDriverHandler, order):
                     setattr(notifier, "notify", orig_notify))
 
 
-@pytest.mark.xfail(strict=True,
+@pytest.mark.xfail(strict=True, raises=AssertionError,
                    reason="indexes are reported before the run is rendered; "
                           "Phase 6 reports them at playback position")
 def test_an_earcon_index_follows_the_text_before_it(driver, rom_files):
@@ -68,8 +68,12 @@ def test_an_earcon_index_follows_the_text_before_it(driver, rom_files):
     finally:
         restore()
     kinds = [k for k, _v in order]
-    assert ("index", 7) in order, order
-    assert kinds.count("feed") >= 3, order
+    # Preconditions fail outright rather than satisfying the expected
+    # failure: only the ordering assertion below is the known fault.
+    if ("index", 7) not in order:
+        pytest.fail("the index was never reported: %r" % order)
+    if kinds.count("feed") < 3:
+        pytest.fail("fewer than three feeds (text, silence, text): %r" % order)
     first_feed = kinds.index("feed")
     index_at = order.index(("index", 7))
     assert index_at > first_feed, \
