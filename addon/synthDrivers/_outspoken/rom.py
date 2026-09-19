@@ -171,7 +171,10 @@ def search_roots():
             value, kind = winreg.QueryValueEx(key, "DataPath")
             if kind == winreg.REG_SZ and value:
                 roots.append(value)
-    except OSError:
+    except (OSError, ImportError):
+        # ImportError too: the engine tests now run on the Linux box, where
+        # there is no registry and no winreg, and a missing key and a
+        # missing module mean the same thing here -- no SAPI data path.
         pass
     #: The machine-wide DataPath, from **both registry views**, because
     #: `HKLM\Software` is redirected under WOW64 while `HKCU\Software` is
