@@ -120,17 +120,24 @@ typedef struct { unsigned char *p; size_t len, cap; int oom; } NumBuf;
 
 static void nb_init(NumBuf *b) { b->p = NULL; b->len = b->cap = 0; b->oom = 0; }
 static void nb_free(NumBuf *b) { if (b->p) free(b->p); nb_init(b); }
+/* Make room for `extra` more bytes after `len`. -> 0, or -1 with oom set. */
+static int nb_reserve(NumBuf *b, size_t extra)
+{
+    size_t want;
+    unsigned char *q;
+    if (b->oom) return -1;
+    if (b->len + extra <= b->cap) return 0;
+    want = b->cap ? b->cap : 256;
+    while (want < b->len + extra) want *= 2;
+    q = (unsigned char *)realloc(b->p, want);
+    if (!q) { b->oom = 1; return -1; }
+    b->p = q; b->cap = want;
+    return 0;
+}
 static void nb_put(NumBuf *b, const void *s, size_t n)
 {
     if (b->oom || !n) return;
-    if (b->len + n > b->cap) {
-        size_t want = b->cap ? b->cap * 2 : 256;
-        unsigned char *q;
-        while (want < b->len + n) want *= 2;
-        q = (unsigned char *)realloc(b->p, want);
-        if (!q) { b->oom = 1; return; }
-        b->p = q; b->cap = want;
-    }
+    if (nb_reserve(b, n)) return;
     memcpy(b->p + b->len, s, n);
     b->len += n;
 }

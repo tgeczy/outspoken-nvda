@@ -29,6 +29,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 #include "m68k.h"
 
@@ -53,3 +54,6 @@
  * reaches it through the same library. */
 #include "osp_numbers.c"
 #include "osp_nrl.c"
+/* The engines themselves, driven from C: one file per engine behind one
+ * surface, mirroring the Python modules they were ported from. */
+#include "osp_engine.c"

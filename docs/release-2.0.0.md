@@ -186,10 +186,41 @@ Each phase ends green on the checks named, and each is a pull request against
   cases, zero on the first run; needs `RULZ`, so local only.
   `tests/test_numbers_c.py` and `tests/test_nrl_c.py` wrap both for the
   suite: 367 passed, 2 skipped.
-* Not started: the render oracle harness (`tools/render_oracle.py`) and
-  everything from Phase 3 on. The text calls take MacRoman bytes and return
-  the size needed (`> cap` means retry); the NRL calls answer -2 when their
-  table is not loaded.
+* **The render oracle exists** (`tools/render_oracle.py`): a fixed script per
+  engine instance, both sides in separate processes, diffed against each
+  other and against a frozen baseline. `tests/baseline/renders.json` (64-bit)
+  and `renders-x86.json` (32-bit) hold the 2026-08-30 binaries' hashes, 223
+  renders each; the current builds match both in full.
+* **A pre-existing 32/64 difference, not ours:** the 32-bit host renders
+  English Pro (`gala`) differently from the 64-bit host on 14 of 223 steps,
+  all longer utterances, by a few dozen samples; the August binaries do the
+  same. `cami` and every other engine agree. Suspect the C runtime's
+  transcendental functions behind the SANE traps; not measured. Each width
+  is held to its own baseline meanwhile.
+* **Phase 3, `.sp` DONE 2026-09-19.** `src/osp_engine.c` (the manifest,
+  file reading, one surface for all engines) and `src/osp_engine_sp.c`
+  (engine.py ported). The oracle: byte-identical on the whole script, both
+  voices, 64-bit and 32-bit, first run. Full grid pending. Next: mtk2.
+* The text calls take MacRoman bytes and return the size needed (`> cap`
+  means retry); the NRL calls answer -2 when their table is not loaded;
+  `osp_engine_open` answers -100 for an engine not yet ported.
+
+## Asked for along the way (Phase 6, the NVDA driver)
+
+* **Spelling markers must not be blocked** (Tomi, 2026-09-19). NVDA wraps
+  single-character strings in `CharacterModeCommand(True/False)`
+  (`source/speech/speech.py`, `_getSpellingSpeechAddCharMode` in 2026.2),
+  with `PitchCommand` around capitals. The driver drops that command today
+  and coalesces the letters into one utterance. To do: declare it in
+  `supportedCommands`; while it is on, suspend coalescing and speak each
+  single character as its letter name (`.sp`: `letter_name`; MacinTalk 2, 3
+  and Pro: the Speech Manager's own `[[char LTRL]]`…`[[char NORM]]` if the
+  engine honours it, measured first, else one utterance per character).
+* **Prosody across say-all** (Tomi, same day): engines should carry their
+  prosody from one say-all chunk into the next without depending on the
+  coalescing of adjacent strings. Exact shape to agree with Tomi: whether
+  that is honouring `EndUtteranceCommand` as the only utterance boundary,
+  or feeding the engine continuously and letting it find sentence ends.
 * **NVDA stays in-process.** Tomi, 2026-09-19: the DLL-and-Python route is
   what keeps secure screens working, and it always has; the separate host
   process is for SAPI, Linux and Android only.

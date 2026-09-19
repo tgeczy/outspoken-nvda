@@ -104,6 +104,46 @@ OSP_API int      osp_stop_reason(void);
 OSP_API int      osp_stop_vector(void);
 OSP_API unsigned osp_stop_pc(void);
 OSP_API long long osp_instr_count(void);
+/* Push `args` (in declared order) and call `entry` to the sentinel. */
+OSP_API int      osp_call_with_args(unsigned entry, const unsigned *args, int nargs,
+                                    long long max_instr);
+
+/* ---- the PCM the Sound Manager model collects ---------------------------- */
+OSP_API void     osp_pcm_reset(void);
+OSP_API unsigned osp_pcm_len(void);
+OSP_API int      osp_pcm_get(unsigned char *out, int max);
+
+/* ---- the engines: text in, PCM out (see osp_engine.c) --------------------- */
+/* One engine at a time.  `manifest` names the engine and every file it needs
+ * by explicit path, one key=value a line; the format is documented at the
+ * top of osp_engine.c.  -> 0; -100 when that engine is not ported yet; another
+ * negative with osp_engine_error() set. */
+OSP_API int         osp_engine_open(const char *manifest);
+OSP_API const char *osp_engine_error(void);
+OSP_API void        osp_engine_close(void);
+/* Voice switch within the open engine: -> 1 took it, 0 refused (the previous
+ * voice stays).  Engines with one voice per instance answer 1. */
+OSP_API int         osp_engine_select(const char *creator, int id);
+/* Settings on the engines' own scales -- words per minute, tenths of a
+ * semitone from the voice's own pitch, hertz for `.sp` only, percent with 50
+ * as recorded -- and the number style: 0 leaves numbers to the engine, 1
+ * words, 2 digit by digit.  A setting an engine lacks is a no-op. */
+OSP_API void        osp_engine_set_rate(int wpm);
+OSP_API void        osp_engine_set_pitch(int tenths);
+OSP_API void        osp_engine_set_voice_hz(double hz);
+OSP_API void        osp_engine_set_inflection(int percent);
+OSP_API void        osp_engine_set_numbers(int mode);
+/* The engine's own text preparation (numbers, punctuation, the 1984 rules),
+ * MacRoman in and out, size-needed contract as osp_numbers.  What it returns
+ * is what osp_engine_speak is handed. */
+OSP_API int         osp_engine_translate(const unsigned char *text, int len,
+                                         unsigned char *out, int cap);
+/* Render, blocking; -> bytes of 8-bit unsigned PCM at 22254 Hz after the
+ * engine's own tidying, fetched with osp_engine_pcm; negative on failure. */
+OSP_API int         osp_engine_speak(const unsigned char *prepared, int len);
+OSP_API int         osp_engine_pcm(unsigned char *out, int cap);
+/* Ask the utterance in flight to stop, where the engine allows it. */
+OSP_API void        osp_engine_stop(void);
 
 /* ---- the text front end ------------------------------------------------- */
 /* Numbers as words, ported from numwords.py (see osp_numbers.c).  MacRoman

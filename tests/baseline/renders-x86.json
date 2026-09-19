@@ -1,0 +1,1427 @@
+{
+ "bits": 32,
+ "engines": {
+  "mtk2": {
+   "mtk2:Ben": [
+    [
+     "001 short",
+     11468,
+     "7e757a69ea8845193114d46dadce6ca8",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     359399,
+     "7abde70f6bf74dc470092cc6c2257f66",
+     "e956ca8d"
+    ],
+    [
+     "003 letter",
+     4797,
+     "8b7e5d247701a0f8f23ad4564d787134",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     11468,
+     "7e757a69ea8845193114d46dadce6ca8",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     4164,
+     "f78bce40c0fead86431368633e2daced",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     130220,
+     "a25db1b479e036191757929132e36449",
+     "31946688"
+    ],
+    [
+     "008 punctuation",
+     127319,
+     "98ea59bfc2c2cd518b6a716d3e8f1115",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     30179,
+     "f43e5747f2fda87d897a953634b3b0d5",
+     "7148c170"
+    ],
+    [
+     "010 numbers off",
+     41560,
+     "9a0354acdeeaa57d6b341fdf39c2d1c3",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     7874,
+     "56cf6ecdb2d6204cca59574e234e9e64",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     30242,
+     "3aeb97f2d8e0f0b0495559d3e82059f9",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     11469,
+     "0d8b7bae7a71af0ffdab2b05da57729d",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     11470,
+     "60ff620be8046930cae7b4a605c19be4",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     11470,
+     "1bb9e514f713346377f8d9d6f3082a04",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     11468,
+     "7e757a69ea8845193114d46dadce6ca8",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     11468,
+     "7e757a69ea8845193114d46dadce6ca8",
+     "f9776f93"
+    ],
+    [
+     "045 short, first voice back",
+     11468,
+     "7e757a69ea8845193114d46dadce6ca8",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Boris": [
+    [
+     "018 short",
+     11409,
+     "ddf646a06abfa67f10e32961b649b704",
+     "f9776f93"
+    ],
+    [
+     "019 medium",
+     63612,
+     "3d507be3c442ea0d1204537e6426d89d",
+     "bfc532d4"
+    ],
+    [
+     "020 pitch +60",
+     11470,
+     "dafec6523f7871eebcadc91099dad772",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Brenda": [
+    [
+     "021 short",
+     11243,
+     "a268f7926c6b50ca286ef998ae3f9db5",
+     "f9776f93"
+    ],
+    [
+     "022 medium",
+     68077,
+     "4f54002623da654da46aff90604bcee6",
+     "bfc532d4"
+    ],
+    [
+     "023 pitch +60",
+     11246,
+     "0f8f9ed0975ed3eb0c4a79f12b7bd5e1",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Mariel": [
+    [
+     "024 short",
+     11238,
+     "4b69cafbd31ed2677d8ab69dbd129aa4",
+     "f9776f93"
+    ],
+    [
+     "025 medium",
+     68117,
+     "c4b32bd452d65e4d2cfe23674b38e45f",
+     "bfc532d4"
+    ],
+    [
+     "026 pitch +60",
+     11219,
+     "0e01100101dca2444461a40bde947b14",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Marvin": [
+    [
+     "027 short",
+     11457,
+     "6e04efbe156aeec2a0d831f9cf8011a7",
+     "f9776f93"
+    ],
+    [
+     "028 medium",
+     63780,
+     "a069477d68fedeca3ca34438713d6da4",
+     "bfc532d4"
+    ],
+    [
+     "029 pitch +60",
+     11460,
+     "5e4b61153461ffbbc187435acfe76b96",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Mr. Hughes": [
+    [
+     "030 short",
+     10097,
+     "c5dc24d3c71d5fae2a426ef1444f0450",
+     "f9776f93"
+    ],
+    [
+     "031 medium",
+     59447,
+     "a02fcf036f5ec7e905f2226669b776dd",
+     "bfc532d4"
+    ],
+    [
+     "032 pitch +60",
+     10139,
+     "aaa9e9a4457ccfe0257fa6686580e17e",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Otis": [
+    [
+     "033 short",
+     11246,
+     "2b069584bd0b7bc45e6e60e4596d57b7",
+     "f9776f93"
+    ],
+    [
+     "034 medium",
+     68007,
+     "9aa930bd33e7f9f65fbb74cba08686c8",
+     "bfc532d4"
+    ],
+    [
+     "035 pitch +60",
+     11246,
+     "9a59ef308b14d4d4ed2d3761af4169cf",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:RoboVox": [
+    [
+     "036 short",
+     11470,
+     "d2b9729c04ac7f862a41a77538fcd1b5",
+     "f9776f93"
+    ],
+    [
+     "037 medium",
+     63775,
+     "0a3ff3907af2511efe599ceda299ee4f",
+     "bfc532d4"
+    ],
+    [
+     "038 pitch +60",
+     11470,
+     "a6fe2982bc5c2818c58dd8413c48ea18",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Votron": [
+    [
+     "039 short",
+     11455,
+     "2245883acc473380287587fb6cee438d",
+     "f9776f93"
+    ],
+    [
+     "040 medium",
+     63664,
+     "8185a590a198a6941e17bc6a430805e5",
+     "bfc532d4"
+    ],
+    [
+     "041 pitch +60",
+     11470,
+     "3415318fe1eece9006fe5e70c0ef944c",
+     "f9776f93"
+    ]
+   ],
+   "mtk2:Xero": [
+    [
+     "042 short",
+     11431,
+     "99103f78ca8175f3d0aa14c2ca7bf890",
+     "f9776f93"
+    ],
+    [
+     "043 medium",
+     63785,
+     "a51eae06b72d65f7522c6b33fea3b7ff",
+     "bfc532d4"
+    ],
+    [
+     "044 pitch +60",
+     11470,
+     "371dc34a00246d5e73d1bb9f5e21d173",
+     "f9776f93"
+    ]
+   ]
+  },
+  "mtk3": {
+   "mtk3:Albert": [
+    [
+     "001 short",
+     13968,
+     "1a85788b0ac49d832c9d00c586d80f20",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     426464,
+     "5b54e93503a65e2cfa3dbdfe34b08402",
+     "e956ca8d"
+    ],
+    [
+     "003 letter",
+     9024,
+     "3f60ddfe52af9745a4bd386666f7917b",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     13968,
+     "1a85788b0ac49d832c9d00c586d80f20",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     9706,
+     "6d854ad6130a746d4813a59c2fe9414d",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     152512,
+     "ea49fe95e1125b7ca57f3a79af4216d9",
+     "31946688"
+    ],
+    [
+     "008 punctuation",
+     105696,
+     "73a4cbfc6c02cf2586b88ad5822e6705",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     40074,
+     "13ccb80e238960c4c49132cca6b6c4ac",
+     "7148c170"
+    ],
+    [
+     "010 numbers off",
+     50042,
+     "9677cc59cbd896fd8e5f8c2be8e55db6",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     10384,
+     "89fd7c59c9de1bdfa906db67c04f89e5",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     24268,
+     "12a60f862f3cc1835a64e699f2cedfcb",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     13962,
+     "679da8260489bd261494c49e945d239f",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     13968,
+     "dc25c1f352338453d66743edda9fb661",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     13968,
+     "068bd896d99309156ae20949a98b0eac",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     13968,
+     "7705a02cd6add6ef6b93937de6e88732",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     13968,
+     "1a85788b0ac49d832c9d00c586d80f20",
+     "f9776f93"
+    ],
+    [
+     "072 short, first voice back",
+     13968,
+     "1a85788b0ac49d832c9d00c586d80f20",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Bad News": [
+    [
+     "018 short",
+     19008,
+     "4e16d7d24c7c56421cf86610cd319dc6",
+     "f9776f93"
+    ],
+    [
+     "019 medium",
+     67742,
+     "1da2ad24c82b856b6575de1705e52238",
+     "bfc532d4"
+    ],
+    [
+     "020 pitch +60",
+     19008,
+     "e0e873dd1e78f48a6160bebea7770087",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Bahh": [
+    [
+     "021 short",
+     13968,
+     "e1ee87154782f90a21642a5caece61a8",
+     "f9776f93"
+    ],
+    [
+     "022 medium",
+     71326,
+     "8d2801d06166ccafff29f7b47f363348",
+     "bfc532d4"
+    ],
+    [
+     "023 pitch +60",
+     13968,
+     "38550b027a8660c8622b14639abc6fab",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Bells": [
+    [
+     "024 short",
+     32448,
+     "0de89d2621765cb9a94de9d1ad7c559a",
+     "f9776f93"
+    ],
+    [
+     "025 medium",
+     174926,
+     "e58d4f5932f719139f596e83969ecc45",
+     "bfc532d4"
+    ],
+    [
+     "026 pitch +60",
+     32448,
+     "0de89d2621765cb9a94de9d1ad7c559a",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Boing": [
+    [
+     "027 short",
+     13968,
+     "db0149bb4327cfb92e863cec4d642813",
+     "f9776f93"
+    ],
+    [
+     "028 medium",
+     71324,
+     "71f43ff9c6f504fbc7594a6e0b64c27e",
+     "bfc532d4"
+    ],
+    [
+     "029 pitch +60",
+     13966,
+     "3611b4f92f631a3e14afb7652ad07654",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Bubbles": [
+    [
+     "030 short",
+     13966,
+     "798ab4d17f7b769c1513ff95386436fd",
+     "f9776f93"
+    ],
+    [
+     "031 medium",
+     71326,
+     "68d7c1e2783d2fea15b97dc83a7b1eda",
+     "bfc532d4"
+    ],
+    [
+     "032 pitch +60",
+     13968,
+     "1301498ad23472cbd670ec9733724e6e",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Cellos": [
+    [
+     "033 short",
+     15534,
+     "f9ea0aa588639a8a0d0c40241d825c97",
+     "f9776f93"
+    ],
+    [
+     "034 medium",
+     60238,
+     "86845adca6c49efff05a5a6b3d622b2b",
+     "bfc532d4"
+    ],
+    [
+     "035 pitch +60",
+     15536,
+     "e485facae6724d4571e22f8de2027167",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Deranged": [
+    [
+     "036 short",
+     13964,
+     "261bb658e8bb582cc81669d3edb5d378",
+     "f9776f93"
+    ],
+    [
+     "037 medium",
+     71326,
+     "2b646256bbca71f5dbf8953b9e93e63f",
+     "bfc532d4"
+    ],
+    [
+     "038 pitch +60",
+     13960,
+     "5eb3062d71451ed259d518da86de23b8",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Fred": [
+    [
+     "039 short",
+     13968,
+     "67067e42c38c8e8a07944315fb53a4ca",
+     "f9776f93"
+    ],
+    [
+     "040 medium",
+     71326,
+     "74226046909c10663a69e61cdfad2977",
+     "bfc532d4"
+    ],
+    [
+     "041 pitch +60",
+     13968,
+     "e558e0465442afcc9e8241e1172a5860",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Good News": [
+    [
+     "042 short",
+     26288,
+     "14bc3bcb5ff8c9ff42e7f371dad1c8f4",
+     "f9776f93"
+    ],
+    [
+     "043 medium",
+     106718,
+     "abf677139a796885302b40e3babd82f2",
+     "bfc532d4"
+    ],
+    [
+     "044 pitch +60",
+     26288,
+     "03563025508f4233b53c9ed4ead09fee",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Hysterical": [
+    [
+     "045 short",
+     30432,
+     "50742a55a01ce32bbfefa750dee3761e",
+     "f9776f93"
+    ],
+    [
+     "046 medium",
+     166302,
+     "d339e072991656cfc981493319a37277",
+     "bfc532d4"
+    ],
+    [
+     "047 pitch +60",
+     30432,
+     "50742a55a01ce32bbfefa750dee3761e",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Junior": [
+    [
+     "048 short",
+     13964,
+     "9ee5c1427dfeea94d5b0cf7f8195de41",
+     "f9776f93"
+    ],
+    [
+     "049 medium",
+     71326,
+     "6122b973d4338cf41190754260eac3d6",
+     "bfc532d4"
+    ],
+    [
+     "050 pitch +60",
+     13964,
+     "b14590db4185c042cf09045835d920b3",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Kathy": [
+    [
+     "051 short",
+     13968,
+     "321416fa15d4e175469274c52d033db1",
+     "f9776f93"
+    ],
+    [
+     "052 medium",
+     71326,
+     "5c9da210e3c0ef67fe83a1f740925b9c",
+     "bfc532d4"
+    ],
+    [
+     "053 pitch +60",
+     13968,
+     "58318ac2bccbdb5423e44488c774cbcf",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Pipe Organ": [
+    [
+     "054 short",
+     15536,
+     "efaadc8330ce1d179964428adcd0b04d",
+     "f9776f93"
+    ],
+    [
+     "055 medium",
+     63038,
+     "07bb8865ed67995a103ab319c2f645f5",
+     "bfc532d4"
+    ],
+    [
+     "056 pitch +60",
+     15536,
+     "4ade270bd802b025e4bf8c70654f331b",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Princess": [
+    [
+     "057 short",
+     13968,
+     "8a5d4f30c8f0c1bb851f86db76491796",
+     "f9776f93"
+    ],
+    [
+     "058 medium",
+     71326,
+     "f1ca4135f671dfd05bace103a45d4ad5",
+     "bfc532d4"
+    ],
+    [
+     "059 pitch +60",
+     13968,
+     "5d9a8b1338e44191c9219e92737941ec",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Ralph": [
+    [
+     "060 short",
+     13968,
+     "ba8bc1e20995d07bf6692e7b30eaabac",
+     "f9776f93"
+    ],
+    [
+     "061 medium",
+     71326,
+     "7e584de410cefd740fe43f4c3e21d789",
+     "bfc532d4"
+    ],
+    [
+     "062 pitch +60",
+     13968,
+     "209167d0f137c17e77528b49f4888f92",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Trinoids": [
+    [
+     "063 short",
+     13968,
+     "60aa90458d2f7dfe1baad992c53705b0",
+     "f9776f93"
+    ],
+    [
+     "064 medium",
+     71325,
+     "d90d1baa94bd0dea36f066d9cdcbfc0c",
+     "bfc532d4"
+    ],
+    [
+     "065 pitch +60",
+     13968,
+     "8552eb954537049a28378349b8a9ac38",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Whisper": [
+    [
+     "066 short",
+     13968,
+     "9338171e1a5a14d8412834899b24b58b",
+     "f9776f93"
+    ],
+    [
+     "067 medium",
+     71326,
+     "5984e7fbf7bfd86d0f2bf077af704ba0",
+     "bfc532d4"
+    ],
+    [
+     "068 pitch +60",
+     13968,
+     "44d25e7f9ce264284effd01b85f0f769",
+     "f9776f93"
+    ]
+   ],
+   "mtk3:Zarvox": [
+    [
+     "069 short",
+     13968,
+     "4ec3d0a7dd1a89ac1dadc1f67ab7e589",
+     "f9776f93"
+    ],
+    [
+     "070 medium",
+     71324,
+     "55ef6a4766f7e686384fce4245e97691",
+     "bfc532d4"
+    ],
+    [
+     "071 pitch +60",
+     13968,
+     "23b5c7162a15645d8b519f775968decb",
+     "f9776f93"
+    ]
+   ]
+  },
+  "pro/cami": {
+   "cami:Carlos": [
+    [
+     "001 short",
+     9443,
+     "9e311691eef3c06925ad181ac92d5f4f",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     548642,
+     "bb79d07ba054a27254598857c5d69cd7",
+     "59f5f8c9"
+    ],
+    [
+     "003 letter",
+     3923,
+     "6a78cc6f916c4dc317d18518e100a883",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     9410,
+     "add3145a0ce95e0ce8be6d6d661491e8",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     3913,
+     "d8301d8d2c63cf57cb23368456b279b4",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     200137,
+     "0f911557c1426180ecc8976ed47b049d",
+     "e83120f1"
+    ],
+    [
+     "008 punctuation",
+     130496,
+     "be34abac93c6255c81cc90838494493f",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     52175,
+     "85061426e79966c02cb6dae0250e5c12",
+     "5b60a477"
+    ],
+    [
+     "010 numbers off",
+     57224,
+     "34cdaf18ef2e1c73adcd08f83a0cd9d9",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     5941,
+     "f5c95ed99034fbb75cbfd695b3c7e28e",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     14616,
+     "5f7fff6db2d74b38484c890d8f5b42dc",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     9551,
+     "166b868710ee2cf3552b1857eb21c770",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     9798,
+     "d38f7cdfddbc64c013f00ede1b4b6b3b",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     9645,
+     "b393f1fc228304e54be7d163aea345b1",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     9554,
+     "8e369286e952c8ef0bd976740ad92a19",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     9443,
+     "9e311691eef3c06925ad181ac92d5f4f",
+     "f9776f93"
+    ]
+   ],
+   "cami:Catalina": [
+    [
+     "001 short",
+     9389,
+     "c6be7fda01200a7fd8087cd85e631685",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     574380,
+     "007a43c43cb591d484cee9c7e021d068",
+     "59f5f8c9"
+    ],
+    [
+     "003 letter",
+     3756,
+     "24d515b525aaadf40e2e5ebf543a1046",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     9496,
+     "76b758e412b47caca6f28832effc10a9",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     3961,
+     "d4d47517d2aa45895ad9ff4d62b68aed",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     218575,
+     "e4a6d047218e07ce91ecc117bd153109",
+     "e83120f1"
+    ],
+    [
+     "008 punctuation",
+     134738,
+     "3c245da0c675219f6131bded5e60c4a6",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     52012,
+     "5276febf33e22c95ed05f4b3bb7305a3",
+     "5b60a477"
+    ],
+    [
+     "010 numbers off",
+     59036,
+     "2ec185fa6078b33c8977272adf340675",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     6178,
+     "3472f1f759ed7d9a81a62ad32a4f6880",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     14619,
+     "10233ff6095ebbacab2af866dac65534",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     9480,
+     "7e70c3046a6105d70c80af3bbd8e8272",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     9448,
+     "e7fddaeaa524d3aa8e30ea2636f140d6",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     9468,
+     "f872d1d05811ca585ea2b0221a9cca5a",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     9538,
+     "97bd09f427e860929662e8b5ceab3dca",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     9389,
+     "c6be7fda01200a7fd8087cd85e631685",
+     "f9776f93"
+    ]
+   ]
+  },
+  "pro/gala": {
+   "gala:Agnes": [
+    [
+     "001 short",
+     10604,
+     "42cdbb3820b81d7ba99200bc001fff95",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     466185,
+     "8c14ffa505c02ce8b01fa6e64f3c95d3",
+     "e956ca8d"
+    ],
+    [
+     "003 letter",
+     5355,
+     "c111dc86af1b7312f2785cd463f538e4",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     10604,
+     "42cdbb3820b81d7ba99200bc001fff95",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     4696,
+     "b2f6c8a11d825ad25bed065f399656a5",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     155851,
+     "273795a2b7db48679df35b297f17fb53",
+     "31946688"
+    ],
+    [
+     "008 punctuation",
+     131632,
+     "ab67e187f0155aec8d015288db0cd9c6",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     41104,
+     "7f921d0e71060c24d1e7c798c60bcbd3",
+     "7148c170"
+    ],
+    [
+     "010 numbers off",
+     40460,
+     "5debdce16eeeb5feddfd24ac25c1c8e0",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     7149,
+     "b7979c358e3b6a4fde6864f08730be6b",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     16330,
+     "7cad0479a4033b1fb7bf26e4a8e51454",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     10539,
+     "1871161cd15078fd7eace5e1ae3af533",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     10560,
+     "c6991149e4677831258b45af75ddef1d",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     10634,
+     "ac456dfb7a8d5b9c4d55087b9e699572",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     10666,
+     "e1db1c55d095031dfd7dbaf74456104f",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     10604,
+     "42cdbb3820b81d7ba99200bc001fff95",
+     "f9776f93"
+    ]
+   ],
+   "gala:Bruce": [
+    [
+     "001 short",
+     10482,
+     "a171d30cf1bf3a7681c9ab6e1cc32bac",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     483668,
+     "2a5f56ebd7a4e20dc15a152317bc748d",
+     "e956ca8d"
+    ],
+    [
+     "003 letter",
+     5526,
+     "9e579748e0bee9aa73e1777672b40b76",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     10482,
+     "a171d30cf1bf3a7681c9ab6e1cc32bac",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     4771,
+     "f0dd5d68ea013720f5fc2d3ceeeb4ba4",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     165055,
+     "546fea5ca93e3b35978d62faf8045084",
+     "31946688"
+    ],
+    [
+     "008 punctuation",
+     133194,
+     "56b4551d7d25331ef57f492d62e66697",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     42308,
+     "f4ecc3c53c08896420f1c97813bb5e28",
+     "7148c170"
+    ],
+    [
+     "010 numbers off",
+     41907,
+     "1f07db5983186cb325c74b3cfb741d7c",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     7281,
+     "af52a8ba6deea85dbd1c0c66193a9378",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     16511,
+     "d3646994221931c49943763b0d40df1f",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     10564,
+     "7101c355dc619bd57f784fa16927e81e",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     10747,
+     "a44ef7713c7ca032184016a7029a0b93",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     10548,
+     "1a4f569b6eee5945f720e998ecf034e9",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     10504,
+     "1abd9eb813469084ac8fe9a82a17098a",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     10482,
+     "a171d30cf1bf3a7681c9ab6e1cc32bac",
+     "f9776f93"
+    ]
+   ],
+   "gala:Victoria": [
+    [
+     "001 short",
+     10966,
+     "bbab477033215fdbe0ceaeccf5903925",
+     "f9776f93"
+    ],
+    [
+     "002 long",
+     476947,
+     "cf6ec45343e6f166c2d4b466a96f26b4",
+     "e956ca8d"
+    ],
+    [
+     "003 letter",
+     5361,
+     "aef14282f9b94bf821966294b5542f1b",
+     "e1671797"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     10966,
+     "bbab477033215fdbe0ceaeccf5903925",
+     "f9776f93"
+    ],
+    [
+     "006 letter a",
+     4728,
+     "d05873ba24b904ef77d00cd997b759f6",
+     "0cc175b9"
+    ],
+    [
+     "007 numbers",
+     164673,
+     "c5e94a44de221ebcfb14ea1c774bea48",
+     "31946688"
+    ],
+    [
+     "008 punctuation",
+     131950,
+     "09cbc7da0ee17391f6b81018ce356357",
+     "3617a08c"
+    ],
+    [
+     "009 digits mode",
+     43064,
+     "579de4c423e1b6b4a7d797f04b08608b",
+     "7148c170"
+    ],
+    [
+     "010 numbers off",
+     40688,
+     "1a130330501dbff57f1df9ae3a01841c",
+     "ef31e258"
+    ],
+    [
+     "011 rate 300",
+     7518,
+     "2822e6b68684fb5e9e102e169477a34a",
+     "f9776f93"
+    ],
+    [
+     "012 rate 60",
+     16772,
+     "99f6f4331b721441e102d698ebea161e",
+     "f9776f93"
+    ],
+    [
+     "013 pitch +60",
+     10914,
+     "bc554a468938a5fb92f8fd926ce6d550",
+     "f9776f93"
+    ],
+    [
+     "014 pitch -60",
+     11060,
+     "67f29b9eb1223ab698860095b401ef81",
+     "f9776f93"
+    ],
+    [
+     "015 inflection 0",
+     10974,
+     "4a81f3dd25d0ac24554c1783bdcc487d",
+     "f9776f93"
+    ],
+    [
+     "016 inflection 100",
+     10865,
+     "250f8f0d11e7b5beb9fd9332e370caea",
+     "f9776f93"
+    ],
+    [
+     "017 short after settings",
+     10966,
+     "bbab477033215fdbe0ceaeccf5903925",
+     "f9776f93"
+    ]
+   ]
+  },
+  "sp": {
+   "sp:Female": [
+    [
+     "018 short",
+     11916,
+     "d04ec32fc0b6eb8f3e079f1e8b1d1886",
+     "c9584038"
+    ],
+    [
+     "019 medium",
+     66510,
+     "509aaba13eabe244025e8f0d2a950f12",
+     "c5579666"
+    ],
+    [
+     "020 pitch +60",
+     11888,
+     "d028476307b531147e97075958822e60",
+     "c9584038"
+    ]
+   ],
+   "sp:Male": [
+    [
+     "001 short",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ],
+    [
+     "002 long",
+     390862,
+     "6d0a8e7f681463adcee0088c57ecfec5",
+     "9127d272"
+    ],
+    [
+     "003 letter",
+     7038,
+     "6e48de7a2a50547ac6e43f63b1b3da04",
+     "b8d5e7a5"
+    ],
+    [
+     "004 empty",
+     0,
+     "d41d8cd98f00b204e9800998ecf8427e",
+     "d41d8cd9"
+    ],
+    [
+     "005 short again",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ],
+    [
+     "006 letter a",
+     8040,
+     "5c77ce9bd44a0c9e50e72800ff3b9842",
+     "44798c71"
+    ],
+    [
+     "007 numbers",
+     152926,
+     "c3218ae02b3337a39b90951bdf3aaaea",
+     "d3c5cdeb"
+    ],
+    [
+     "008 punctuation",
+     151451,
+     "0d8acf65489b1e09955b4c55e0e148e7",
+     "0482cc64"
+    ],
+    [
+     "009 digits mode",
+     40485,
+     "d7e8c5a966a99c5c4cfca1b36c02b5ab",
+     "7415d22a"
+    ],
+    [
+     "010 numbers off",
+     37713,
+     "bdcab02b8cbdf469b41aee5e19a8cfdc",
+     "20763b65"
+    ],
+    [
+     "011 rate 300",
+     8098,
+     "e2753fc1ff629a3f4fe1e44522f3e349",
+     "c9584038"
+    ],
+    [
+     "012 rate 60",
+     30506,
+     "63201572fac7eab052aade90a3f7ce04",
+     "c9584038"
+    ],
+    [
+     "013 pitch +60",
+     11844,
+     "2d81b1dfd1d168fdb3a40c9638a04d5c",
+     "c9584038"
+    ],
+    [
+     "014 pitch -60",
+     11826,
+     "5e002094552e699e02de578dc56c66d3",
+     "c9584038"
+    ],
+    [
+     "015 inflection 0",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ],
+    [
+     "016 inflection 100",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ],
+    [
+     "017 short after settings",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ],
+    [
+     "021 short, first voice back",
+     11904,
+     "b210cb15b9fdff5c06f3e2266b4787b7",
+     "c9584038"
+    ]
+   ]
+  }
+ },
+ "library": "osp_host_x86.dll",
+ "note": "Hashes of the smoke script as the 1.2.x-era host rendered it, through the Python engines. No engine data. Rewrite only with --freeze, deliberately."
+}

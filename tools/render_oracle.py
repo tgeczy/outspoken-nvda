@@ -47,7 +47,14 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ADDON = os.path.join(ROOT, "addon", "synthDrivers", "_outspoken")
-BASELINE = os.path.join(ROOT, "tests", "baseline", "renders.json")
+#: One frozen baseline per Windows build: the 32-bit host and the 64-bit host
+#: do not render English Pro identically on longer utterances (14 of 223
+#: steps differ by a few dozen samples, and did in the 2026-08-30 binaries
+#: too), so each is held to its own August behaviour.  Which one applies
+#: follows the Python running this, since that is what picks the library.
+_BITS = 64 if sys.maxsize > 2 ** 32 else 32
+BASELINE = os.path.join(ROOT, "tests", "baseline",
+                        "renders.json" if _BITS == 64 else "renders-x86.json")
 
 # The add-on's modules first, then tools/: whichever is inserted last wins.
 sys.path.insert(0, HERE)
@@ -538,6 +545,7 @@ def main():
                           "it, through the Python engines. No engine data. Rewrite "
                           "only with --freeze, deliberately.",
                   "library": os.path.basename(os.environ.get("OSP_HOST_DLL", "")),
+                  "bits": _BITS,
                   "engines": py["engines"]}
         with open(BASELINE, "w", encoding="utf-8") as fh:
             json.dump(frozen, fh, indent=1, sort_keys=True)
