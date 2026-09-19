@@ -52,9 +52,17 @@ echo "=== libosp_host.so ==="
 # by default, which is what ctypes needs.
 "$CC" $CFLAGS -shared -I"$MUS" -I"$ROOT/src" \
     "$MUS/m68kcpu.c" "$MUS/m68kops.c" "$MUS/m68kdasm.c" \
-    "$MUS/softfloat/softfloat.c" "$ROOT/src/osp_host.c" \
-    -o "$OUT/libosp_host.so" $LDFLAGS
+    "$MUS/softfloat/softfloat.c" "$ROOT/src/osp_host.c" "$ROOT/src/osp_plat_posix.c" \
+    -o "$OUT/libosp_host.so" $LDFLAGS -lpthread
 echo "  -> build/linux/libosp_host.so"
+
+echo "=== osp_host ==="
+# The same sources as a program: serve mode, a voice listing, a file renderer.
+"$CC" $CFLAGS -I"$MUS" -I"$ROOT/src" \
+    "$MUS/m68kcpu.c" "$MUS/m68kops.c" "$MUS/m68kdasm.c" \
+    "$MUS/softfloat/softfloat.c" "$ROOT/src/osp_host.c" "$ROOT/src/osp_plat_posix.c" \
+    "$ROOT/src/osp_main.c" -o "$OUT/osp_host" $LDFLAGS -lpthread
+echo "  -> build/linux/osp_host"
 
 echo "=== osp_selftest ==="
 "$CC" $CFLAGS -I"$ROOT/src" "$ROOT/src/osp_selftest.c" \

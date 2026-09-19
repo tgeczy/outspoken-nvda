@@ -219,6 +219,23 @@ OSP_API int      osp_nrl_respell(const unsigned char *text, int len, unsigned ch
 /* How a lone letter is announced. */
 OSP_API int      osp_nrl_letter_name(const unsigned char *text, int len, unsigned char *out, int cap);
 
+/* ---- the search roots (see osp_roots.c) ------------------------------------ */
+/* rom.search_roots() minus migrate(): every folder the driver looks in for a
+ * configuration path and an add-on folder, one per line, deduplicated, in
+ * the order that decides which copy of a file wins.  Size-needed contract. */
+OSP_API int      osp_roots_default(const char *config_path, const char *addon_root,
+                                   char *out, int cap);
+
+/* ---- serve mode and the text front door (see osp_serve.c) ----------------- */
+/* UTF-8 to MacRoman as the engines want it, with `?` for what the encoding
+ * cannot carry.  Size-needed contract. */
+OSP_API int      osp_text_macroman(const char *utf8, unsigned char *out, int cap);
+/* "id<TAB>label" per voice on `out_fd`, for token registration. -> exit status */
+OSP_API int      osp_serve_list(const char *roots, int out_fd);
+/* The SAPI bridge's protocol: requests on `in_fd`, responses on `out_fd`,
+ * until the input closes. -> exit status */
+OSP_API int      osp_serve_run(const char *roots, int in_fd, int out_fd);
+
 #ifdef __cplusplus
 }
 #endif

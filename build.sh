@@ -66,14 +66,27 @@ build_one() {
         -I\"$MUS\" -I\"$ROOT/src\" \
         \"$MUS/m68kcpu.c\" \"$MUS/m68kops.c\" \"$MUS/m68kdasm.c\" \
         \"$MUS/softfloat/softfloat.c\" \"$ROOT/src/osp_host.c\" \
+        \"$ROOT/src/osp_plat_win.c\" \
         -Fo\"$OBJ/\"" > "$OBJ/compile.log" 2>&1 || {
             echo "compile failed; tail of log:"; tail -30 "$OBJ/compile.log"; exit 1; }
 
+    # osp_main.obj is the program's and must stay out of the DLL's link.
+    rm -f "$OBJ/osp_main.obj"
     eval "\"$CL\" -nologo -LD -MT \"$OBJ\"/*.obj \
-        -Fe\"$OUT/osp_host$SUF.dll\" -link $LIB" > "$OBJ/link.log" 2>&1 || {
+        -Fe\"$OUT/osp_host$SUF.dll\" -link $LIB advapi32.lib" > "$OBJ/link.log" 2>&1 || {
             echo "link failed; tail of log:"; tail -30 "$OBJ/link.log"; exit 1; }
 
     echo "  -> build/osp_host$SUF.dll"
+
+    # The same objects as a program: serve mode for the SAPI bridge, a voice
+    # listing, a file renderer.  Static, so it needs nothing beside it.
+    eval "\"$CL\" -nologo -c -O2 -MT -DNDEBUG $INC -I\"$ROOT/src\" \
+        \"$ROOT/src/osp_main.c\" -Fo\"$OBJ/\"" > "$OBJ/compile-main.log" 2>&1 || {
+            echo "osp_main compile failed; tail of log:"; tail -30 "$OBJ/compile-main.log"; exit 1; }
+    eval "\"$CL\" -nologo -MT \"$OBJ\"/*.obj \
+        -Fe\"$OUT/osp_host$SUF.exe\" -link $LIB advapi32.lib" > "$OBJ/link-exe.log" 2>&1 || {
+            echo "exe link failed; tail of log:"; tail -30 "$OBJ/link-exe.log"; exit 1; }
+    echo "  -> build/osp_host$SUF.exe"
 }
 
 # --- Musashi ---------------------------------------------------------------

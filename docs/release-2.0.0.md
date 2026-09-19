@@ -240,8 +240,27 @@ Each phase ends green on the checks named, and each is a pull request against
   utterance into the next (the first "quick brown fox" after "a, b, c, d,
   e" is 8 bytes longer than every repetition after it), in the Python
   reference too; the tests compare like positions.
-  Next: serve and CLI in C (step 2), roots in a separate translation unit
-  (step 3), and the parametrized SAPI test as the swap gate (step 4).
+* **Phase 5, steps 2 to 4 DONE 2026-09-19.** `src/osp_plat.h` with
+  `osp_plat_win.c` / `osp_plat_posix.c` (threads, the mutex, binary stdio,
+  claiming stdout, the registry, the environment; their own translation
+  units so `<windows.h>` never meets the host's names). `src/osp_roots.c`
+  is `rom.search_roots()` minus `migrate()`, diffed by
+  `tools/roots_oracle.py` (data-free, in CI). `src/osp_serve.c` speaks the
+  `OSP4`/`OSPR`/`OSPC` protocol exactly as `osp_serve.py` does -- reader
+  thread, seq-tagged cancel, fd 1 claimed before the first request,
+  streamed chunks. `src/osp_main.c` is the program: `--serve <config>`,
+  `--list <config>`, `--render`, `--capabilities`; `build.sh` makes
+  `osp_host.exe` and `osp_host_x86.exe`, `build_linux.sh` makes
+  `build/linux/osp_host`. **The swap gate is green:**
+  `tests/test_sapi_serve.py` now holds both serve hosts to the in-process
+  driver, and `tests/test_serve_hosts.py` compares the two hosts with each
+  other over the wire on every engine family, with settings changes, a
+  cancel by seq, and the listing. All byte-identical.
+* **Not done, deliberately:** `outspoken_sapi.cpp` still launches
+  `python.exe osp_serve.py`. The launch string changes to
+  `osp_host.exe --serve` only after Tomi's Tab-hold test on every engine
+  through the C host, which is his ear and not a test here. `osp_serve.py`
+  stays in the repository as the specification.
 * The text calls take MacRoman bytes and return the size needed (`> cap`
   means retry); the NRL calls answer -2 when their table is not loaded;
   `osp_engine_open` answers -100 for an engine not yet ported.

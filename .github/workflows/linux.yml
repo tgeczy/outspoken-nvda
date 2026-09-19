@@ -56,6 +56,17 @@ jobs:
           python3 -m pip install --quiet pytest
           python3 tools/settings_oracle.py build/linux/libosp_host.so
 
+      - name: Search roots agree with the driver
+        run: python3 tools/roots_oracle.py build/linux/libosp_host.so
+
+      # The program itself: it starts, says what it can do, and lists nothing
+      # from a folder with nothing in it.
+      - name: The host program runs
+        run: |
+          build/linux/osp_host --capabilities
+          build/linux/osp_host --list "$(mktemp -d)"
+          build/linux/osp_host --help > /dev/null
+
       - name: Show what was built
         run: |
           uname -m

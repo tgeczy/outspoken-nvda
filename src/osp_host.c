@@ -44,6 +44,7 @@
  * fails right here rather than in the first C caller. */
 #define OSP_HOST_BUILD
 #include "osp_host.h"
+#include "osp_plat.h"
 
 
 #include "osp_host_memory.c"
@@ -65,3 +66,7 @@
 #include "osp_engine.c"
 /* The catalogue: what the user has extracted, and the manifests to open it. */
 #include "osp_voices.c"
+/* The search roots, for the front ends that are not NVDA. */
+#include "osp_roots.c"
+/* Serve mode: the SAPI bridge protocol, and the voice listing. */
+#include "osp_serve.c"
