@@ -26,12 +26,13 @@ of a second. The voices found are exactly the same; the catalogue is still
 held to the Python reference, entry for entry, and new tests plant an
 engine where the walk must not look and where it must.
 
-The same host program is inside the SAPI installer, so the settings window's
-listing and the engine's start share the fix. The Android app is unchanged
-and stays at 2.0.0.
+The same host is inside the SAPI installer and the Android app, so the
+settings window's listing, the engine's start and the app's voice list share
+the fix; nothing else about the app changes.
 
 ## Updating
 
 Press **Check for updates** in the speech data manager (NVDA's Tools menu)
-or in the SAPI settings window, and this release installs itself. The NVDA
-add-on, the SAPI installer and the Linux tarballs are attached below.
+or in the SAPI settings window, and this release installs itself; on Android,
+Check for updates on the app's Setup page. The NVDA add-on, the SAPI installer,
+the Android APK and the Linux tarballs are attached below.
