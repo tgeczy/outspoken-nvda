@@ -29,14 +29,22 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
+#include <wchar.h>
+#include <sys/stat.h>
+#if defined(_WIN32)
+#  include <io.h>               /* _wfindfirst, for listing a folder */
+#else
+#  include <dirent.h>
+#endif
 
 #include "m68k.h"
 
-#if defined(_WIN32)
-#  define OSP_API __declspec(dllexport)
-#else
-#  define OSP_API
-#endif
+/* The exported surface is declared once, in osp_host.h, and this file is the
+ * one that defines it -- so a definition below that disagrees with the header
+ * fails right here rather than in the first C caller. */
+#define OSP_HOST_BUILD
+#include "osp_host.h"
+#include "osp_plat.h"
 
 
 #include "osp_host_memory.c"
@@ -49,3 +57,16 @@
 #include "osp_host_toolbox.c"
 #include "osp_host_runtime.c"
 #include "osp_host_api.c"
+/* The text front end: no CPU, no memory of its own, but every front end
+ * reaches it through the same library. */
+#include "osp_numbers.c"
+#include "osp_nrl.c"
+/* The engines themselves, driven from C: one file per engine behind one
+ * surface, mirroring the Python modules they were ported from. */
+#include "osp_engine.c"
+/* The catalogue: what the user has extracted, and the manifests to open it. */
+#include "osp_voices.c"
+/* The search roots, for the front ends that are not NVDA. */
+#include "osp_roots.c"
+/* Serve mode: the SAPI bridge protocol, and the voice listing. */
+#include "osp_serve.c"

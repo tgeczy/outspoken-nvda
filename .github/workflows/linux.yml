@@ -1,0 +1,132 @@
+# Build the host natively on Linux, run the checks that carry their own
+# inputs, and -- on a release, or on a dispatch that names one -- attach the
+# shipping tarballs to it.
+#
+# **No Apple or Berkeley data goes near this, and none ever can.**  The rule
+# across both repositories is ship the extractor, never the bits, and a build
+# server is exactly where that rule would be easiest to break by accident.
+# So the only engine-shaped test here is `osp_selftest`, which hand-assembles
+# a few 68000 instructions and asks the host to run them; the render oracles
+# that need a real engine stay on the machines that legitimately have one.
+# The tarball carries the host, its header and the source it was built from,
+# and nothing that was ever inside a MacinTalk installer.
+#
+# Two architectures, because the whole point of an interpreter in plain C is
+# that there is nothing to prefer: the same source, the same checks, on x86-64
+# and on 64-bit ARM.
+name: linux
+
+on:
+  push:
+    branches: [main, "tgeczy/**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach the tarballs to this release (e.g. v2.0.0); blank builds only"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+jobs:
+  build:
+    # Ubuntu 22.04 / glibc 2.35 is the runtime baseline the sibling project
+    # settled on; ubuntu-latest links newer glibc symbols that refuse to load
+    # on a 22.04 machine.
+    runs-on: ${{ matrix.runner }}
+    # Only the attach step writes anything, and only to a release.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    name: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the host
+        run: sh build_linux.sh
+
+      - name: Self-test
+        run: build/linux/osp_selftest
+
+      # The text front end's oracle: the C rules against the Python they were
+      # ported from, over a generated corpus, in both languages and both
+      # styles.  Pure text, so it needs no engine data either.
+      - name: Number rules agree with the Python reference
+        run: python3 tools/numbers_oracle.py build/linux/libosp_host.so
+
+      # The settings arithmetic -- rate curve, pitch scale, the widening with
+      # volume folded in -- against the driver's own methods.  Needs pytest
+      # only for the NVDA stand-ins the driver imports.
+      - name: Settings arithmetic agrees with the driver
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 tools/settings_oracle.py build/linux/libosp_host.so
+
+      - name: Search roots agree with the driver
+        run: python3 tools/roots_oracle.py build/linux/libosp_host.so
+
+      # The program itself: it starts, says what it can do, and lists nothing
+      # from a folder with nothing in it.
+      - name: The host program runs
+        run: |
+          build/linux/osp_host --capabilities
+          build/linux/osp_host --list "$(mktemp -d)"
+          build/linux/osp_host --help > /dev/null
+
+      - name: Show what was built
+        run: |
+          uname -m
+          ls -l build/linux
+          file build/linux/libosp_host.so build/linux/osp_host || true
+
+      # What a Linux user downloads: the program, the library and its header,
+      # the licences, and the source tree it was built from (the interpreter
+      # is vendored in it).  No engine data exists here to include.
+      - name: Package the tarball
+        run: |
+          out="build/outspoken-linux-${{ matrix.arch }}"
+          mkdir -p "$out/include" "$out/sources"
+          cp build/linux/osp_host build/linux/libosp_host.so "$out/"
+          cp src/osp_host.h "$out/include/"
+          cp docs/linux.md "$out/README.md"
+          cp LICENSE THIRD_PARTY_LICENSES.md "$out/"
+          git archive --format=tar.gz -o "$PWD/$out/sources/outspoken-nvda.tar.gz" HEAD
+          tar -czf "build/outspoken-linux-${{ matrix.arch }}.tar.gz" -C build \
+            "outspoken-linux-${{ matrix.arch }}"
+          ls -l build/*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: outspoken-linux-${{ matrix.arch }}
+          path: build/outspoken-linux-${{ matrix.arch }}.tar.gz
+
+      # Attach to the release named by the dispatch, or to the one just
+      # published, as outspoken-linux-<arch>-<version>.tar.gz.  The published
+      # event is the safety net: it never replaces a tarball the dispatch
+      # already attached, because the release is public by then.
+      - name: Attach to the release
+        if: >-
+          github.event_name == 'release' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.release_tag }}
+        run: |
+          version="${TAG#v}"
+          asset="outspoken-linux-${{ matrix.arch }}-${version}.tar.gz"
+          if [ "${{ github.event_name }}" = release ] &&
+             gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$asset"; then
+            echo "$asset is already on $TAG; leaving it alone"
+            exit 0
+          fi
+          cp "build/outspoken-linux-${{ matrix.arch }}.tar.gz" "build/$asset"
+          gh release upload "$TAG" "build/$asset" --clobber
+          echo "attached $asset to $TAG"

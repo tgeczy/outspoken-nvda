@@ -97,8 +97,15 @@ def find(roots):
     for root in roots:
         if not os.path.isdir(root):
             continue
-        for dirpath, _dirs, names in os.walk(root):
-            for n in names:
+        for dirpath, dirs, names in os.walk(root):
+            # Sorted, so the walk is the same on every file system. Left to
+            # os.walk's order, ext4 visited macintalk3 before macintalk2 and
+            # the first ttss_0.bin found -- MacinTalk 3's -- was handed to
+            # MacinTalk 2. NTFS happened to list them the other way round.
+            # The host's catalogue (osp_voices.c) walks sorted for the same
+            # reason, and the two are held to each other.
+            dirs.sort()
+            for n in sorted(names):
                 files.setdefault(n, os.path.join(dirpath, n))
     if not all(r in files for r in REQUIRED):
         return {}, []

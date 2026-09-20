@@ -1,8 +1,9 @@
 ﻿param([string]$OutputRoot = "C:\outspoken")
-# Stage the outSPOKEN SAPI engine: both DLL bitnesses, the serve bridge, the
-# driver package it serves (our own code, MIT -- the ROMs are never here),
-# and the embeddable Python that runs it.  Template: panthera-speech's
-# sapi/build.ps1.
+# Stage the outSPOKEN SAPI engine: both DLL bitnesses, the native host that
+# serves speech (both widths, from build/ -- run `sh build.sh` first), the
+# extractor with the driver package it imports (our own code, MIT -- the
+# ROMs are never here), and the embeddable Python that runs the extractor.
+# Template: panthera-speech's sapi/build.ps1.
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $msvc = Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC" -Directory | Sort-Object Name | Select-Object -Last 1
@@ -13,9 +14,23 @@ New-Item -ItemType Directory -Force $stage,(Join-Path $stage "x86"),(Join-Path $
 foreach ($arch in "x86","x64") {
   $cl = Join-Path $msvc.FullName "bin\Hostx64\$arch\cl.exe"
   $out = Join-Path $stage $arch
-  & $cl /nologo /EHsc /O2 /MT /LD /DUNICODE /D_UNICODE "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "outspoken_sapi.cpp") "/Fe$out\outspoken_sapi.dll" "/Fo$out\" /link "/DEF:$PSScriptRoot\outspoken_sapi.def" "/LIBPATH:$($msvc.FullName)\lib\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$arch" sapi.lib ole32.lib advapi32.lib
+  # settings.cpp beside the COM adapter: the two settings files and their
+  # registry fallback, Panthera's reader carried over.  shell32 for the
+  # known-folder lookup.
+  & $cl /nologo /EHsc /O2 /MT /LD /DUNICODE /D_UNICODE "/I$PSScriptRoot" "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "outspoken_sapi.cpp") (Join-Path $PSScriptRoot "settings.cpp") "/Fe$out\outspoken_sapi.dll" "/Fo$out\" /link "/DEF:$PSScriptRoot\outspoken_sapi.def" "/LIBPATH:$($msvc.FullName)\lib\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$arch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$arch" sapi.lib ole32.lib advapi32.lib shell32.lib
   if ($LASTEXITCODE) { throw "$arch SAPI DLL build failed ($LASTEXITCODE)" }
 }
+# The settings reader ships in the DLL, so its test links the same file:
+# the format, the order of the sources, the typed fall-through, a rewrite
+# reaching the next lookup -- against scratch files and a redirected
+# registry, so nobody's settings are touched.
+$testCl = Join-Path $msvc.FullName "bin\Hostx64\x64\cl.exe"
+$settingsDir = Join-Path $stage "settings_test"
+New-Item -ItemType Directory -Force $settingsDir | Out-Null
+& $testCl /nologo /EHsc /O2 /MT /DUNICODE /D_UNICODE "/I$PSScriptRoot" "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "settings_test.cpp") (Join-Path $PSScriptRoot "settings.cpp") "/Fe$settingsDir\settings_test.exe" "/Fo$settingsDir\" /link "/LIBPATH:$($msvc.FullName)\lib\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\x64" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\x64" ole32.lib advapi32.lib shell32.lib
+if ($LASTEXITCODE) { throw "settings test build failed ($LASTEXITCODE)" }
+& "$settingsDir\settings_test.exe"
+if ($LASTEXITCODE) { throw "the SAPI settings reader misbehaves" }
 # The console-free way into the settings dialog: a GUI-subsystem launcher,
 # so no console ever flashes and steals focus.  settings.cmd stays for
 # anyone at a command line.
@@ -25,11 +40,20 @@ if ($LASTEXITCODE) { throw "settings launcher build failed ($LASTEXITCODE)" }
 Set-Content -Encoding ASCII (Join-Path $stage "settings.cmd") '@echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0settings.ps1"'
 
-# The serve bridge and the driver it serves.  This is the whole point: the
-# same modules NVDA runs, not a port -- see tests/test_sapi_serve.py.
+# The native host, which the SAPI DLL launches with --serve.  This is the
+# whole point: the same engine code NVDA loads as a DLL, not a port -- see
+# tests/test_sapi_serve.py and tests/test_serve_hosts.py.  Both widths, so
+# a 32-bit Windows gets a host too; the DLL takes whichever is installed.
+foreach ($exe in "osp_host.exe","osp_host_x86.exe") {
+  $built = Join-Path $repo "build\$exe"
+  if (!(Test-Path $built)) { throw "$built is missing: run `sh build.sh` first" }
+  Copy-Item $built $stage
+}
+# The serve protocol's specification, kept beside the host that implements it.
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage
 Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
+Copy-Item (Join-Path $PSScriptRoot "settings_common.ps1") $stage
 # The command-line extractor, staged at the root where its fallback import
 # path finds the driver tree at synthDrivers\_outspoken -- the settings
 # window's Extract button runs it with the bundled Python, so a standalone
@@ -37,10 +61,15 @@ Copy-Item (Join-Path $PSScriptRoot "settings.ps1") $stage
 # without NVDA, a Python install, or an execution-policy change.
 Copy-Item (Join-Path $repo "tools\extract_rom.py") $stage
 $drv = Join-Path $stage "synthDrivers"
+# Fresh every time: a stage that is only ever added to keeps whatever an
+# earlier build left in it, and a three-week-old engine DLL sitting beside
+# the driver is exactly the trap this project has already fallen into once.
+if (Test-Path $drv) { Remove-Item -Recurse -Force $drv }
 New-Item -ItemType Directory -Force $drv,(Join-Path $drv "_outspoken") | Out-Null
 Copy-Item (Join-Path $repo "addon\synthDrivers\outspoken.py") $drv
 Copy-Item (Join-Path $repo "addon\synthDrivers\_outspoken\*.py") (Join-Path $drv "_outspoken")
-Copy-Item (Join-Path $repo "addon\synthDrivers\_outspoken\*.dll") (Join-Path $drv "_outspoken")
+# No DLL here: the extractor is pure Python, and speech comes from the host
+# program above, so nothing in this tree runs 68000 code.
 Copy-Item -Recurse -Force (Join-Path $repo "addon\synthDrivers\_outspoken\_machfs") (Join-Path $drv "_outspoken\_machfs")
 Get-ChildItem -Recurse (Join-Path $drv "_outspoken") -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 # Embeddable Python, the portable lesson from day one.  The ._pth must name

@@ -101,6 +101,15 @@ This maps onto NVDA cleanly: `voice` → csCode 3, `rate` → csCode 2,
 `pitch` → csCode 4. Note the NVDA rate/pitch sliders are 0–100 and will need
 scaling into 0–4096 and 65–500.
 
+## `Prime` allocates, and the host has to give it back
+
+Every utterance, `Prime` takes one block with `_NewPtr` -- 3,688 bytes for a
+forty-character sentence, more for longer text -- and returns it with
+`_DisposePtr` when it is done. The host's dispose was a no-op until 2.0, so
+the 512 KB heap filled after 123 short utterances and the driver spun for
+seven seconds and then fell silent for good. See `docs/host-memory.md` for
+the mechanism, the numbers and the fix.
+
 ## `Prime` needs low memory `$012F` set to 0
 
 The first thing `Prime` does after checking `dCtlStorage`:

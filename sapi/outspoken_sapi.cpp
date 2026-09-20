@@ -7,13 +7,16 @@
  * the seam when neither side brought one.
  *
  * The synthesis path is deliberately not a port.  This DLL launches the
- * embeddable Python installed beside it, running sapi/osp_serve.py, which
- * serves the SAME driver modules the NVDA add-on runs -- NRL rules,
- * MacinTalk 2 command building, number reading, the 8-to-16 widening --
- * so the SAPI voice is byte-identical to the NVDA voice by construction,
- * and tests/test_sapi_serve.py asserts exactly that.  There is no text
- * processing here at all: the driver on the other side of the pipe owns
- * every decision about how speech sounds.
+ * native host installed beside it, `osp_host.exe --serve`, which is the
+ * SAME engine code the NVDA add-on loads as a DLL -- NRL rules, the
+ * Component Manager glue, number reading, the 8-to-16 widening, all of it
+ * in src/ -- so the SAPI voice is byte-identical to the NVDA voice by
+ * construction, and tests/test_sapi_serve.py asserts exactly that.  Until
+ * 2.0 the child was an embeddable Python running sapi/osp_serve.py over
+ * the driver modules; that script stays as the protocol's specification
+ * and tests/test_serve_hosts.py holds the two hosts to each other.  There
+ * is no text processing here at all: the host on the other side of the
+ * pipe owns every decision about how speech sounds.
  *
  * The host stays resident: 22 ms warm to first PCM against 131 cold,
  * measured.  An abort kills it -- instant cancel -- and the next Speak
@@ -24,6 +27,7 @@
 #include <sapi.h>
 #include <sapiddk.h>
 #include <olectl.h>
+#include "settings.h"
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -63,15 +67,12 @@ static const DWORD NATIVE_RATE = 22254;
  * way, because a diagnostic nobody turns off is a disk that fills. */
 static const DWORD LOG_CAP = 4u * 1024u * 1024u;
 
+/* Since 2.0 every setting comes through settings.cpp: this user's
+ * settings.toml, the machine's, then HKCU and HKLM as before, one typed
+ * value at a time -- Panthera's model, so the sign-in screen speaks with
+ * the settings its owner saved. */
 static int diagLevel() {
-    HKEY k; DWORD v = 0, n = sizeof v, t;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
-                       KEY_READ, &k)) {
-        if (RegQueryValueExW(k, L"Diagnostics", 0, &t, (BYTE*)&v, &n)
-            || t != REG_DWORD) v = 0;
-        RegCloseKey(k);
-    }
-    return (int)v;
+    return (int)outspoken_sapi::setting_dword(L"Diagnostics", 0);
 }
 /* And clear up after 1.1.0, which wrote without asking.
  *
@@ -149,8 +150,8 @@ static bool exact(HANDLE h, void *p, DWORD n, bool write) {
 static std::wstring module_dir() {
     wchar_t p[MAX_PATH]; GetModuleFileNameW(g_module,p,MAX_PATH);
     wchar_t *s=wcsrchr(p,L'\\'); if(s)*s=0;
-    /* The DLL lives in x86\ or x64\; the serve script and Python live one
-     * level up, shared by both bitnesses. */
+    /* The DLL lives in x86\ or x64\; the host program lives one level up,
+     * shared by both bitnesses. */
     std::wstring d=p; size_t slash=d.rfind(L'\\');
     if(slash!=std::wstring::npos){
         std::wstring leaf=d.substr(slash+1);
@@ -175,6 +176,12 @@ static CRITICAL_SECTION g_hostLock;
 static bool g_lockReady;
 static HANDLE g_proc, g_in, g_out;
 static unsigned g_seq;
+/* The command line the resident host was started with.  The settings it
+ * carries -- inflection, how numbers are read -- are read fresh per Speak,
+ * and a host started under other values is replaced rather than kept:
+ * Panthera's rule, that a settings change must respawn the host and never
+ * be quietly ignored by one that read its arguments at startup. */
+static std::wstring g_hostCmd;
 
 static void host_drop() {
     if(g_proc){TerminateProcess(g_proc,0);CloseHandle(g_proc);g_proc=0;}
@@ -200,14 +207,7 @@ static bool host_alive() {
 static const unsigned MAX_CHUNK_FRAMES = NATIVE_RATE * 10u;
 
 static DWORD read_timeout_ms() {
-    HKEY k; DWORD v = 30000, n = sizeof v, t;
-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\outSPOKEN SAPI", 0,
-                       KEY_READ, &k)) {
-        DWORD got = 0; n = sizeof got;
-        if (!RegQueryValueExW(k, L"ReadTimeoutMs", 0, &t, (BYTE*)&got, &n)
-            && t == REG_DWORD) v = got;
-        RegCloseKey(k);
-    }
+    DWORD v = outspoken_sapi::setting_dword(L"ReadTimeoutMs", 30000);
     return v < 1000 ? 1000 : v;
 }
 
@@ -255,12 +255,19 @@ struct CsLock {
     CsLock(CRITICAL_SECTION *c):cs(c){EnterCriticalSection(cs);}
     ~CsLock(){LeaveCriticalSection(cs);}
 };
-static bool host_ensure(const std::wstring &dataRoot) {
+static bool host_ensure(const std::wstring &dataRoot, DWORD inflection, const std::wstring &numbers) {
     sweep_logs();
-    if(host_alive())return true;
     std::wstring base=module_dir();
-    std::wstring cmd=L"\""+base+L"\\python\\python.exe\" \""+base+
-                     L"\\osp_serve.py\" \""+dataRoot+L"\"";
+    /* The 64-bit host where the installer put one, else the 32-bit one:
+     * a 32-bit Windows gets only the latter, and either serves both DLL
+     * bitnesses -- the child is its own process. */
+    std::wstring host=base+L"\\osp_host.exe";
+    if(GetFileAttributesW(host.c_str())==INVALID_FILE_ATTRIBUTES)
+        host=base+L"\\osp_host_x86.exe";
+    wchar_t infl[16]; swprintf_s(infl,L"%u",(unsigned)inflection);
+    std::wstring cmd=L"\""+host+L"\" --serve \""+dataRoot+L"\" --inflection "+infl+L" --numbers "+numbers;
+    if(host_alive()&&cmd==g_hostCmd)return true;
+    host_drop();
     /* A megabyte of buffer each way against the four-kilobyte default: a
      * request larger than the buffer would block the writer until the host
      * read it, and the response side never has to stall the serve over a
@@ -269,10 +276,10 @@ static bool host_ensure(const std::wstring &dataRoot) {
     if(!CreatePipe(&inR,&inW,&sa,1<<20)||!CreatePipe(&outR,&outW,&sa,1<<20))return false;
     SetHandleInformation(inW,HANDLE_FLAG_INHERIT,0);SetHandleInformation(outR,HANDLE_FLAG_INHERIT,0);
     /* The serve process never gets a pipe for its stderr.  A resident child
-     * that writes a traceback into a pipe nobody drains stops dead when the
+     * that writes diagnostics into a pipe nobody drains stops dead when the
      * buffer fills, and that would present as speech ending for good; NUL
      * discards and cannot block.  With diagnostics on it goes to a file
-     * instead, which is where a Python traceback is worth having. */
+     * instead, which is where the host's own complaints are worth having. */
     HANDLE errH=INVALID_HANDLE_VALUE;
     {
         SECURITY_ATTRIBUTES esa={sizeof(esa),0,TRUE};
@@ -294,7 +301,7 @@ static bool host_ensure(const std::wstring &dataRoot) {
     if(errH!=INVALID_HANDLE_VALUE)CloseHandle(errH);
     if(!made){CloseHandle(inW);CloseHandle(outR);return false;}
     CloseHandle(pi.hThread);
-    g_proc=pi.hProcess;g_in=inW;g_out=outR;
+    g_proc=pi.hProcess;g_in=inW;g_out=outR;g_hostCmd=cmd;
     return true;
 }
 
@@ -387,7 +394,15 @@ public:
         unsigned long long total=0;
         unsigned seq=++g_seq;
         if(!text.empty()){
-            ok=host_ensure(root);
+            /* The two engine settings the NVDA driver has and SAPI's own
+             * request cannot carry, read fresh so a change in the settings
+             * program reaches the next thing spoken.  The number style is
+             * matched against its vocabulary here, before it reaches a
+             * command line: the machine file is one any account can write. */
+            DWORD infl=outspoken_sapi::setting_dword(L"Inflection",50); if(infl>100)infl=100;
+            std::wstring numbers=outspoken_sapi::setting_string(L"NumberStyle",L"words");
+            if(numbers!=L"digits")numbers=L"words";
+            ok=host_ensure(root,infl,numbers);
             ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
             unsigned magic=0;status=-1;
             /* Response reads wait rather than block -- exact_wait watches

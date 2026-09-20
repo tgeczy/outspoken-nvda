@@ -171,7 +171,10 @@ def search_roots():
             value, kind = winreg.QueryValueEx(key, "DataPath")
             if kind == winreg.REG_SZ and value:
                 roots.append(value)
-    except OSError:
+    except (OSError, ImportError):
+        # ImportError too: the engine tests now run on the Linux box, where
+        # there is no registry and no winreg, and a missing key and a
+        # missing module mean the same thing here -- no SAPI data path.
         pass
     #: The machine-wide DataPath, from **both registry views**, because
     #: `HKLM\Software` is redirected under WOW64 while `HKCU\Software` is
@@ -245,8 +248,11 @@ def find():
     for root in search_roots():
         if not os.path.isdir(root):
             continue
-        for dirpath, _dirs, names in os.walk(root):
-            for n in names:
+        for dirpath, dirs, names in os.walk(root):
+            # Sorted, so "first found" means the same on every file system;
+            # see macintalk2.find for the case that made it matter.
+            dirs.sort()
+            for n in sorted(names):
                 if n in FILES and n not in found:
                     found[n] = os.path.join(dirpath, n)
     return found, [n for n in FILES if n not in found]

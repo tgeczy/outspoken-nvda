@@ -1,0 +1,195 @@
+{
+ "feeds": {
+  "cami:Carlos": {
+   "adjacent": [
+    54330,
+    "6a7237f1a97560bbd31335b2098c0f49"
+   ],
+   "break": [
+    49078,
+    "ccc3452316b22ce059cd12cb0bf2d622"
+   ],
+   "empty": [
+    0,
+    "d41d8cd98f00b204e9800998ecf8427e"
+   ],
+   "index": [
+    32450,
+    "2768d6789cdce6a2309fed36c1b62d84"
+   ],
+   "pitch": [
+    42348,
+    "4942b3047d0e19e2088e72a3b4a7fcf0"
+   ],
+   "rate": [
+    31828,
+    "a058093e16cae157a4914262f6785c39"
+   ],
+   "spelling": [
+    57684,
+    "ef34457eefc53c0fd689cc7ffae021c9"
+   ],
+   "text": [
+    203812,
+    "f61078ded96af4a345f6d2c7bf59c194"
+   ],
+   "volume": [
+    58488,
+    "94ca7455f03d42a86297a85f19648b4a"
+   ]
+  },
+  "gala:Bruce": {
+   "adjacent": [
+    43540,
+    "16e0430d006c80fc1ccafbb8b406697d"
+   ],
+   "break": [
+    50582,
+    "bce1a123005debce3da1357b0f4d9bdd"
+   ],
+   "empty": [
+    0,
+    "d41d8cd98f00b204e9800998ecf8427e"
+   ],
+   "index": [
+    34160,
+    "5e713adab47fb3c838005ee94b7c47e0"
+   ],
+   "pitch": [
+    44856,
+    "9406c318fe01d40ff3e9bbdc8147812f"
+   ],
+   "rate": [
+    32610,
+    "539287110e1e4dfe2babbd2c4b84eae7"
+   ],
+   "spelling": [
+    60794,
+    "a9be7250c84ef32da15e8015c598e857"
+   ],
+   "text": [
+    173834,
+    "82f24986a397d6d22076eaeae5c0adee"
+   ],
+   "volume": [
+    63082,
+    "a71522585dace833f41e8ce01af14bff"
+   ]
+  },
+  "male": {
+   "adjacent": [
+    39512,
+    "0d7ff7e13673b3f7a5a71aa31bfcf23c"
+   ],
+   "break": [
+    51598,
+    "f1f0a5940a3871a4ac7fd176760604f4"
+   ],
+   "empty": [
+    0,
+    "d41d8cd98f00b204e9800998ecf8427e"
+   ],
+   "index": [
+    31064,
+    "99953c551d8498e716e0b8006bfa46ed"
+   ],
+   "pitch": [
+    51578,
+    "9bce0608a4396ed64360922d0009558b"
+   ],
+   "rate": [
+    32896,
+    "a4b11811ad345b2281c6f0eedae4c1c9"
+   ],
+   "spelling": [
+    67292,
+    "ca2c14930a04e293c65c077c321fe677"
+   ],
+   "text": [
+    128474,
+    "88d00dba50c8a8812d017a973d19dc27"
+   ],
+   "volume": [
+    65846,
+    "193d9ebc6752e2ec8a79e0e346991669"
+   ]
+  },
+  "mtk2:Ben": {
+   "adjacent": [
+    35768,
+    "ce0588ca501872a8c2c4b593e654b70a"
+   ],
+   "break": [
+    43440,
+    "8fcd5f4150cf26d0f8d6f2f91aafed6f"
+   ],
+   "empty": [
+    0,
+    "d41d8cd98f00b204e9800998ecf8427e"
+   ],
+   "index": [
+    24632,
+    "2f23e20b4571524239e022a679f464e8"
+   ],
+   "pitch": [
+    38132,
+    "d74e6f41736fe7a00fc7222cb54020b2"
+   ],
+   "rate": [
+    22802,
+    "03fd5fcbb38dffdd308785671a9c0a8a"
+   ],
+   "spelling": [
+    50722,
+    "d32667d0a7773ed93f928e7a54384fb8"
+   ],
+   "text": [
+    141284,
+    "4a4725307ae866c566ab479ddf8c8a33"
+   ],
+   "volume": [
+    51258,
+    "96561f7f655a2da621a4c4c10ec01697"
+   ]
+  },
+  "mtk3:Fred": {
+   "adjacent": [
+    44960,
+    "ae9b75a1284ae6715b3f19e6bba97e01"
+   ],
+   "break": [
+    61380,
+    "e91b2ed3880948ef828697545e03c7cc"
+   ],
+   "empty": [
+    0,
+    "d41d8cd98f00b204e9800998ecf8427e"
+   ],
+   "index": [
+    35328,
+    "cba06d4ab4bc0e4522a1b924ccb38697"
+   ],
+   "pitch": [
+    63396,
+    "4e4e09fe8eb5b17faa817bd92eac9aab"
+   ],
+   "rate": [
+    41532,
+    "2b3e252f1b2d8602b8175aa899742f10"
+   ],
+   "spelling": [
+    91512,
+    "a4c0bead7fc764d71df805d34f5336c6"
+   ],
+   "text": [
+    156988,
+    "dfddc08eeeda13e922e4324b1d1bcfaa"
+   ],
+   "volume": [
+    79760,
+    "8232eb0b5d624ff416082e335e63df9e"
+   ]
+  }
+ },
+ "note": "Bytes the driver fed the player, per voice and sequence, on the 32-bit host. Rewrite only with --freeze, deliberately; see the module docstring for what it was checked against."
+}

@@ -773,10 +773,18 @@ static int serve_memory_trap(unsigned short word, unsigned *d0_out, unsigned *a0
         *a0_out = TRAPADDR_BASE + ((d0 & 0x0FFFu) * 4u);
         *d0_out = 0;
         return 1;
+    case 0xA023:                       /* _DisposeHandle(h)                */
+        heap_dispose_handle(a0);
+        *d0_out = 0; *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
+    case 0xA01F:                       /* _DisposePtr(p)                   */
+        heap_free(a0);
+        *d0_out = 0; *a0_out = a0;
+        m68k_write_memory_16(MEM_ERR_ADDR, 0);
+        return 1;
     case 0xA029:                       /* _HLock   -- nothing moves here   */
     case 0xA02A:                       /* _HUnlock                         */
-    case 0xA023:                       /* _DisposeHandle                   */
-    case 0xA01F:                       /* _DisposePtr                      */
     case 0xA049:                       /* _HPurge                          */
     case 0xA04A:                       /* _HNoPurge                        */
     case 0xA036:                       /* _MoreMasters                     */

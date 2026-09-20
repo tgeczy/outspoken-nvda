@@ -27,13 +27,37 @@ ROOT = os.path.dirname(HERE)
 #: `OSError: [WinError 193] %1 is not a valid Win32 application`, which is
 #: exactly what several other synthesizers in this user's log are dying of.
 _BITS = 64 if sys.maxsize > 2 ** 32 else 32
-_NAME = "osp_host.dll" if _BITS == 64 else "osp_host_x86.dll"
+if os.name == "nt":
+    _NAME = "osp_host.dll" if _BITS == 64 else "osp_host_x86.dll"
+else:
+    # Off Windows there is one library and no width to choose: Musashi is an
+    # interpreter in plain C and the host around it is 64-bit clean, so
+    # build_linux.sh produces one .so for whatever the machine is.
+    _NAME = "libosp_host.so"
 
-# Deployed inside the add-on the DLL sits beside this file; in the repo it
-# lives under build/. Checking both lets one module serve both places.
+# Deployed inside the add-on the DLL sits beside this file; in the repository
+# it lives under build/, three levels up from here.  Checking both lets one
+# module serve both places -- and lets tools/osp.py be a re-export of this
+# one rather than a second copy that drifts.
+_REPO = os.path.dirname(os.path.dirname(ROOT))
 _CANDIDATES = [os.path.join(HERE, _NAME),
-               os.path.join(ROOT, "build", _NAME)]
-DLL = next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
+               os.path.join(_REPO, "build", _NAME),
+               os.path.join(_REPO, "build", "linux", _NAME)]
+# In the repository -- recognised by build.sh sitting where the repository
+# root would be -- the build output comes FIRST, so a probe run after
+# `sh build.sh` sees what was just built and not a copy deployed beside the
+# module weeks ago.  Inside NVDA there is no build.sh and the copy beside
+# the module is the only one that counts.
+if os.path.isfile(os.path.join(_REPO, "build.sh")):
+    _CANDIDATES = _CANDIDATES[1:] + _CANDIDATES[:1]
+#: `OSP_HOST_DLL` names the library outright and wins over the search.  The
+#: search prefers a copy beside this module, which is right inside NVDA and
+#: wrong in the repository, where such a copy is whatever somebody deployed
+#: last -- the tests once ran a whole day against a three-week-old binary
+#: that way while build/ held the one under test.  conftest points this at
+#: build/; the tools honour it too.
+DLL = os.environ.get("OSP_HOST_DLL") or \
+    next((c for c in _CANDIDATES if os.path.isfile(c)), _CANDIDATES[-1])
 
 # m68k_register_t, in declaration order
 (D0, D1, D2, D3, D4, D5, D6, D7,
@@ -554,3 +578,218 @@ class Host(object):
 def driver_entries(image):
     """(open, prime, control, status, close) from the DRVR header."""
     return struct.unpack(">HHHHH", image[8:18])
+
+
+# ---------------------------------------------------------------------------
+# The engines as the host drives them (2.0).
+#
+# Everything above is the low-level view -- registers, memory, resources,
+# component calls -- that the probes and the Python engine modules use.  From
+# 2.0 the driver no longer drives an engine from Python at all: it opens one
+# by manifest, hands it text, and pulls audio, and the C in src/osp_engine*.c
+# does what engine.py, macintalk2.py, macintalk3.py and macintalkpro.py did.
+# Those modules stay as the specification the C is held to (tools/
+# render_oracle.py); they stop running at speech time.
+# ---------------------------------------------------------------------------
+
+class HostEngine(object):
+    """One open engine in the host, and the driver's settings on top of it.
+
+    One engine per process, as always; opening another closes this one in
+    the host.  Every call here runs on the thread that is rendering, except
+    `stop()`, which is the one cross-thread call the host allows (the 1984
+    driver's flag; a no-op elsewhere by design) and `cancel()`, which only
+    marks the utterance being pulled as abandoned.
+    """
+
+    NUMBERS = {None: 0, "off": 0, "words": 1, "digits": 2}
+
+    def __init__(self, dll=None):
+        path = dll or DLL
+        if not os.path.isfile(path):
+            raise RuntimeError("%s not found -- run `sh build.sh`" % path)
+        self.dll = path
+        L = self.lib = ctypes.CDLL(path)
+        L.osp_engine_open.argtypes = [ctypes.c_char_p]
+        L.osp_engine_open.restype = ctypes.c_int
+        L.osp_engine_error.restype = ctypes.c_char_p
+        L.osp_engine_select.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_select.restype = ctypes.c_int
+        L.osp_engine_set_numbers.argtypes = [ctypes.c_int]
+        L.osp_engine_translate.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                           ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_translate.restype = ctypes.c_int
+        L.osp_engine_speak_start.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_speak_start.restype = ctypes.c_int
+        L.osp_engine_pull.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_pull.restype = ctypes.c_int
+        L.osp_engine_speak.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_speak.restype = ctypes.c_int
+        L.osp_engine_pcm.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        L.osp_engine_pcm.restype = ctypes.c_int
+        for n in ("osp_set_rate", "osp_set_pitch", "osp_set_volume",
+                  "osp_set_volume_offset", "osp_set_inflection"):
+            getattr(L, n).argtypes = [ctypes.c_int]
+        L.osp_apply_settings.argtypes = [ctypes.c_int, ctypes.c_int]
+        L.osp_pcm_widen.argtypes = [ctypes.c_char_p, ctypes.c_int,
+                                    ctypes.POINTER(ctypes.c_short), ctypes.c_int]
+        L.osp_pcm_widen.restype = ctypes.c_int
+        L.osp_catalogue_scan.argtypes = [ctypes.c_char_p]
+        L.osp_catalogue_scan.restype = ctypes.c_int
+        L.osp_catalogue_count.restype = ctypes.c_int
+        for n in ("osp_catalogue_entry", "osp_catalogue_manifest",
+                  "osp_catalogue_skipped"):
+            getattr(L, n).argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+            getattr(L, n).restype = ctypes.c_int
+        L.osp_catalogue_skipped_count.restype = ctypes.c_int
+        self.open_entry = None
+        self._buf = ctypes.create_string_buffer(1 << 16)
+        self._wide = (ctypes.c_short * (1 << 16))()
+
+    # -- the catalogue -----------------------------------------------------
+    def _text(self, fn, i):
+        cap = 4096
+        for _ in range(3):
+            buf = ctypes.create_string_buffer(cap)
+            n = fn(i, buf, cap)
+            if n < 0:
+                raise RuntimeError("catalogue call %s failed: %d" % (fn.__name__, n))
+            if n < cap:
+                return buf.raw[:n].decode("utf-8")
+            cap = n + 1
+        raise RuntimeError("catalogue kept asking for a bigger buffer")
+
+    def catalogue(self, roots):
+        """Scan `roots` (a list of folders). -> [entry dict], [(folder, why)]
+
+        An entry carries what NVDA's list wants -- `id`, `label`, `kind`,
+        `creator`, `voice_id`, `name`, `language`, `gender`, `folder` -- and
+        its `index` in the host's list, which is what opens it.
+        """
+        n = self.lib.osp_catalogue_scan("\n".join(roots).encode("utf-8"))
+        if n < 0:
+            raise RuntimeError("osp_catalogue_scan failed")
+        keys = ("id", "label", "kind", "creator", "voice_id", "name",
+                "language", "gender", "folder")
+        entries = []
+        for i in range(n):
+            fields = self._text(self.lib.osp_catalogue_entry, i).split("\t")
+            e = dict(zip(keys, fields))
+            e["voice_id"] = int(e["voice_id"])
+            e["gender"] = int(e["gender"])
+            e["index"] = i
+            entries.append(e)
+        skipped = [tuple(self._text(self.lib.osp_catalogue_skipped, i).split("\t", 1))
+                   for i in range(self.lib.osp_catalogue_skipped_count())]
+        return entries, skipped
+
+    def manifest(self, index):
+        return self._text(self.lib.osp_catalogue_manifest, index)
+
+    # -- the engine --------------------------------------------------------
+    def open(self, entry):
+        """Open the engine an entry belongs to, with that voice selected.
+
+        The catalogue must have been scanned in this process, since the
+        manifest is read from it.  Raises with the host's reason.
+        """
+        r = self.lib.osp_engine_open(self.manifest(entry["index"]).encode("utf-8"))
+        if r != 0:
+            self.open_entry = None
+            raise RuntimeError("%s: %s (%d)" % (
+                entry["id"], (self.lib.osp_engine_error() or b"").decode("utf-8", "replace"), r))
+        self.open_entry = entry
+
+    def select(self, entry):
+        """Switch voice within the open engine. -> True if it took."""
+        ok = bool(self.lib.osp_engine_select(entry["creator"].encode("mac_roman"),
+                                             entry["voice_id"]))
+        if ok:
+            self.open_entry = entry
+        return ok
+
+    def close(self):
+        self.lib.osp_engine_close()
+        self.open_entry = None
+
+    # -- settings, on the driver's own scales --------------------------------
+    def settings(self, rate, pitch, inflection):
+        self.lib.osp_set_rate(int(rate))
+        self.lib.osp_set_pitch(int(pitch))
+        self.lib.osp_set_inflection(int(inflection))
+
+    def apply(self, radj=0, padj=0):
+        """Push rate, inflection and pitch at the engine, with the
+        RateCommand and PitchCommand offsets in force."""
+        self.lib.osp_apply_settings(int(radj), int(padj))
+
+    def volume(self, percent, vadj=0):
+        self.lib.osp_set_volume(int(percent))
+        self.lib.osp_set_volume_offset(int(vadj))
+
+    def numbers(self, mode):
+        self.lib.osp_engine_set_numbers(self.NUMBERS.get(mode, 1))
+
+    # -- text and audio ----------------------------------------------------
+    def translate(self, text):
+        """The engine's own text preparation. -> MacRoman bytes"""
+        raw = text.encode("mac_roman", "replace")
+        cap = len(raw) * 16 + 64
+        for _ in range(2):
+            buf = ctypes.create_string_buffer(cap)
+            n = self.lib.osp_engine_translate(raw, len(raw), buf, cap)
+            if n < 0:
+                raise RuntimeError("osp_engine_translate failed: %d" % n)
+            if n <= cap:
+                return buf.raw[:n]
+            cap = n
+        raise RuntimeError("osp_engine_translate kept asking for a bigger buffer")
+
+    def speak(self, prepared):
+        """The whole utterance at once. -> 8-bit PCM bytes
+
+        What the driver did until 2.0 and what the tests measure against;
+        the driver itself pulls (`speak_start`/`pull`), and the pieces
+        concatenate to exactly this.
+        """
+        n = self.lib.osp_engine_speak(prepared, len(prepared))
+        if n < 0:
+            raise RuntimeError("osp_engine_speak failed: %d (%s)"
+                               % (n, self.lib.osp_engine_error()))
+        if n == 0:
+            return b""
+        buf = ctypes.create_string_buffer(n)
+        got = self.lib.osp_engine_pcm(buf, n)
+        return buf.raw[:max(0, min(got, n))]
+
+    def speak_start(self, prepared):
+        """-> True when there is audio to pull."""
+        r = self.lib.osp_engine_speak_start(prepared, len(prepared))
+        if r < 0:
+            raise RuntimeError("osp_engine_speak_start failed: %d" % r)
+        return r == 0
+
+    def pull(self):
+        """-> the next piece of 8-bit PCM, or b"" when the utterance is over.
+
+        Each pull renders one round of the engine on this thread; the pieces
+        concatenate to exactly the blocking render.
+        """
+        n = self.lib.osp_engine_pull(self._buf, len(self._buf))
+        return self._buf.raw[:n] if n > 0 else b""
+
+    def cancel(self):
+        """Abandon the utterance being pulled; the next pull answers b""."""
+        self.lib.osp_engine_cancel()
+
+    def stop(self):
+        """The one cross-thread call: the 1984 driver's stop flag."""
+        self.lib.osp_engine_stop()
+
+    def widen(self, pcm8):
+        """8-bit unsigned -> 16-bit signed little-endian, volume folded in."""
+        n = len(pcm8)
+        if n > len(self._wide):
+            self._wide = (ctypes.c_short * n)()
+        got = self.lib.osp_pcm_widen(pcm8, n, self._wide, len(self._wide))
+        return ctypes.string_at(ctypes.addressof(self._wide), got * 2)

@@ -34,7 +34,12 @@ DLLS = [("osp_host.dll", "synthDrivers/_outspoken/osp_host.dll", 64),
 
 #: Anything matching these must never be packaged. Extensions catch the bulk;
 #: the names catch a file someone renamed without thinking.
-FORBIDDEN_EXT = (".bin", ".rsrc", ".hfv", ".dsk", ".img", ".wav", ".sit")
+#: `.exe` is refused for a different reason: NVDA drops every program from an
+#: add-on on the secure screens, and outSPOKEN stays alive there precisely
+#: because it is a DLL loaded in-process.  The host program (`osp_host.exe`)
+#: belongs to the SAPI installer and the Linux tarball, never to the add-on.
+FORBIDDEN_EXT = (".bin", ".rsrc", ".hfv", ".dsk", ".img", ".wav", ".sit",
+                 ".exe")
 FORBIDDEN_NAME = ("drvr", "talk", "rulz", "dict", "phnm", "cecy", "ttv",
                   "ttsr", "ttsd", "ttss", "gtse", "gtss", "outspoken.bin",
                   "cmudict")
@@ -61,7 +66,10 @@ MIN_OS = (6, 1)                      # Windows 7
 #: the C runtime statically, so a `vcruntime140.dll` or an `api-ms-win-crt-*`
 #: appearing here means the build switched to `/MD` and would fail on any
 #: machine without the exact Visual C++ redistributable installed.
-ALLOWED_IMPORTS = {"kernel32.dll"}
+#: `advapi32.dll` arrived with 2.0's search roots (`src/osp_roots.c` reads
+#: the registry the way `rom.search_roots()` does); it has shipped with
+#: every Windows since NT 3.1 and is as much a given as kernel32.
+ALLOWED_IMPORTS = {"kernel32.dll", "advapi32.dll"}
 
 
 def pe_info(path):

@@ -284,20 +284,22 @@ def test_cancel_always_stops_the_player(driver, rom_files):
 # *which thread* makes each call, and that is a property of the driver alone.
 
 
-class _StubVoice(object):
-    def __init__(self, name, vid):
-        self.name, self.id, self.creator = name, vid, "mtk2"
+def _stubEntry(name, vid, index):
+    """A catalogue entry as the host hands them out."""
+    return {"id": "mtk2:%s" % name, "label": "%s (MacinTalk 2)" % name,
+            "kind": "mtk2", "creator": "mtk2", "voice_id": vid, "name": name,
+            "language": "en", "gender": 1, "folder": "", "index": index}
 
 
 class _StubEngine(object):
-    """Records the thread every call arrives on, and nothing else."""
+    """The host's engine interface (`osp.HostEngine`), recording the thread
+    every call arrives on, what was said and at what pitch."""
 
-    number_mode = "words"
-
-    def __init__(self, files=None, allvoices=None, voice=None):
+    def __init__(self, entries):
         import threading
         self._threading = threading
-        self.voice = voice
+        self._entries = entries
+        self.open_entry = None
         self.calls = []                  # [(name, thread ident)]
         #: What actually reached the engine, so a test can ask what was said
         #: and at what pitch rather than only which thread asked.
@@ -305,37 +307,63 @@ class _StubEngine(object):
         self.pitches = []
         self.inflections = []
         self.closed = False
+        self._pending = b""
+
+    @property
+    def voice(self):
+        return self.open_entry
 
     def _note(self, what):
         self.calls.append((what, self._threading.get_ident()))
 
-    def select(self, voice):
+    def catalogue(self, roots):
+        return list(self._entries), []   # a folder scan, not a CPU call
+
+    def open(self, entry):
+        self._note("open")
+        self.open_entry = entry
+
+    def select(self, entry):
         self._note("select")
-        self.voice = voice
+        self.open_entry = entry
         return True
 
-    def set_rate(self, rate):
-        self._note("set_rate")
+    def settings(self, rate, pitch, inflection):
+        self._note("settings")
+        self.inflections.append(inflection)
 
-    def set_voice(self, hz):
-        self._note("set_voice")          # the 1984 engine's absolute hertz
+    def apply(self, radj=0, padj=0):
+        self._note("apply")
+        self.pitches.append(padj)
 
-    def set_pitch(self, tenths):
-        self._note("set_pitch")          # what the Speech Manager engines take
-        self.pitches.append(tenths)
+    def volume(self, percent, vadj=0):
+        self._note("volume")
 
-    def set_inflection(self, percent):
-        self._note("set_inflection")     # a no-op on the 1984 engine
-        self.inflections.append(percent)
+    def numbers(self, mode):
+        self._note("numbers")
 
     def translate(self, text):
+        self._note("translate")
         return text
 
-    def speak(self, text):
+    def speak_start(self, prepared):
         self._note("speak")
-        self.spoken.append(text)
+        self.spoken.append(prepared)
         time.sleep(0.05)                 # long enough to be raced
-        return b"\x80\x90" * 400
+        self._pending = b"\x80\x90" * 400
+        return True
+
+    def pull(self):
+        self._note("pull")
+        piece, self._pending = self._pending, b""
+        return piece
+
+    def cancel(self):
+        self._note("cancel")
+        self._pending = b""
+
+    def widen(self, pcm8):
+        return bytes(len(pcm8) * 2)
 
     def stop(self):
         self._note("stop")               # allowed from the main thread
@@ -343,34 +371,23 @@ class _StubEngine(object):
     def close(self):
         self._note("close")
         self.closed = True
+        self.open_entry = None
 
 
 @pytest.fixture
 def stubbed(monkeypatch):
-    """A driver whose MacinTalk 2 engine is a stub, with two voices."""
-    import sys
-    import types
+    """A driver whose host is a stub, with two MacinTalk 2 voices.
+
+    One stub, as there is one host: `_host()` answers the same object every
+    time, and `built` has it once."""
     import outspoken
 
-    a, b = _StubVoice("Alpha", 1), _StubVoice("Beta", 2)
-    built = []
-
-    def _engine(files, allvoices, voice=None):
-        eng = _StubEngine(files, allvoices, voice)
-        built.append(eng)
-        return eng
-
-    fake = types.ModuleType("macintalk2")
-    fake.Engine = _engine
-    fake.find = lambda roots: ({}, [a, b])
-    fake.usable = lambda roots: True
-    monkeypatch.setitem(sys.modules, "macintalk2", fake)
+    a, b = _stubEntry("Alpha", 1, 0), _stubEntry("Beta", 2, 1)
+    built = [_StubEngine([a, b])]
+    monkeypatch.setattr(outspoken, "_host", lambda: built[0])
+    monkeypatch.setattr(outspoken, "_whyNot", lambda: [])
 
     d = outspoken.SynthDriver()
-    # Set the catalogue directly. `_catalogue()` caches into this, so the
-    # driver never scans the ROM folder and the test does not need one.
-    d._voiceCatalogue = [("mtk2:Alpha", "Alpha (MacinTalk 2)", "mtk2", a),
-                         ("mtk2:Beta", "Beta (MacinTalk 2)", "mtk2", b)]
     d._voiceId = "mtk2:Alpha"
     try:
         yield d, built, a, b
@@ -679,7 +696,7 @@ def test_changing_pro_voice_rebuilds_and_still_speaks(pro_driver):
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < 20.0:
             eng = pro_driver._engine
-            if eng is not None and getattr(eng.voice, "name", None) == want:
+            if eng is not None and (eng.open_entry or {}).get("name") == want:
                 break
             time.sleep(0.01)
         else:

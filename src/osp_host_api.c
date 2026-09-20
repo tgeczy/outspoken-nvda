@@ -73,6 +73,7 @@ OSP_API int osp_init(unsigned ram_size)
     g_dt_proc = g_dt_parm = 0;
     g_ioc_n = 0; g_in_ioc = 0; g_ioc_runs = 0; g_ioc_dropped = 0;
     g_heap_base = g_heap_end = g_heap_next = 0;
+    heap_forget_all();
     g_mem_traps = 0;
     return 0;
 }
@@ -156,6 +157,7 @@ OSP_API void osp_heap_init(unsigned base, unsigned size)
     unsigned i;
     g_heap_base = g_heap_next = base;
     g_heap_end = base + size;
+    heap_forget_all();
     /* A real Mac heap starts as whatever was there before -- garbage, not
      * zeros -- and code reads into free space at its peril.  MacinTalk Pro's
      * Spanish front-end does exactly that: it scans one word past a control
@@ -181,6 +183,17 @@ OSP_API void osp_heap_init(unsigned base, unsigned size)
 }
 OSP_API void osp_enable_mem_traps(int on) { g_mem_traps = on ? 1 : 0; }
 OSP_API unsigned osp_heap_used(void) { return g_heap_next - g_heap_base; }
+/* How many blocks the heap is tracking; at MAX_BLOCKS a dispose can no
+ * longer find its block and the old leak quietly returns, so a caller can
+ * ask.  Diagnosis only. */
+OSP_API int osp_heap_blocks(void) { return g_block_count; }
+OSP_API int osp_heap_block(int i, unsigned *addr, unsigned *size, int *state)
+{
+    if (i < 0 || i >= g_block_count) return 0;
+    *addr = g_blocks[i].addr; *size = g_blocks[i].size;
+    *state = g_blocks[i].pinned ? 2 : g_blocks[i].free ? 1 : 0;
+    return 1;
+}
 
 /* Load a resource into emulated memory and register it under (type, id).
  * Returns the Handle, or 0 if the heap or the table is full.
@@ -202,6 +215,8 @@ OSP_API unsigned osp_add_resource(unsigned type, int id,
     if (!mp) return 0;
     m68k_write_memory_32(mp, blk);
     note_handle(mp, (unsigned)len);
+    heap_pin(blk);                 /* a resource is the server's, not the engine's to free */
+    heap_pin(mp);
     g_res[g_res_count].type = type;
     g_res[g_res_count].id = (short)id;
     g_res[g_res_count].handle = mp;

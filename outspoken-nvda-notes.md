@@ -11,6 +11,16 @@ and initialises itself exactly as the static analysis predicted** — see
 "First execution" below. The sound model is settled (`docs/sound-model.md`) and
 the driver API is mapped (`docs/driver-api.md`).
 
+## The heap leak — 2026-09-19
+
+The host's `_DisposePtr` and `_DisposeHandle` did nothing, so the 1984 driver
+(one block per utterance) and MacinTalk Pro (~57 KB per utterance) filled
+their heaps and went silent after about 120 utterances on one voice, seven
+seconds per utterance, in every release up to 1.2.3. Found by the 2.0 render
+oracle's full grid, which speaks hundreds of utterances on one engine; fixed
+in the host with real dispose and a heap top that rolls back over freed
+blocks, so no render changed. `docs/host-memory.md` has the whole story.
+
 ## First execution — 2026-08-15
 
 `py -3 tools/probe_open.py`:

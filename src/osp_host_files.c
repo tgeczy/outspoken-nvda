@@ -27,6 +27,7 @@ static int      g_mem_traps;
  * materialises a resource map and so needs both before then. */
 static unsigned heap_alloc(unsigned size);
 static void note_handle(unsigned mp, unsigned size);
+static void heap_pin(unsigned addr);
 
 #define TOP_MAP_HNDL  0x0A50u
 #define CUR_MAP_ADDR  0x0A5Au     /* CurMap, the current file's refNum */
@@ -153,6 +154,8 @@ static unsigned file_map_handle(int idx)
     if (!mp) return 0;
     m68k_write_memory_32(mp, blk);
     note_handle(mp, mLen);
+    heap_pin(blk);                 /* the file's resource map is the server's, */
+    heap_pin(mp);                  /* never an engine's to dispose of         */
     f->map = mp;
     return mp;
 }
@@ -293,6 +296,35 @@ static int      g_snap_halt;
  * byte-for-byte the same; see the note by _X2Fix for the other half of this. */
 static int g_alloc_dirty = 0;
 
+/* Every block the heap has handed out, in order, so that _DisposePtr and
+ * _DisposeHandle can give memory back.
+ *
+ * **They did not, and the engines leaked their whole heap.**  Measured
+ * 2026-09-19 with the render oracle's full grid: the 1984 driver allocates
+ * one block per utterance -- 3,688 bytes for a forty-character sentence --
+ * and disposes of it afterwards, and MacinTalk Pro allocates and disposes
+ * about 57 KB per utterance.  With dispose a no-op the 512 KB heap was full
+ * after 123 short utterances and Pro's 10 MB after about 140, at which point
+ * _NewPtr answered memFullErr, the engine spun until its instruction budget
+ * -- seven seconds of nothing -- and every utterance after it was silent.
+ * MacinTalk 2 and 3 allocate nothing per utterance and never noticed.
+ *
+ * The fix is deliberately the smallest one: a freed block is marked free,
+ * and the top of the heap rolls back over every free block at the end.  No
+ * block is ever handed out at an address it would not have had before, so
+ * the render oracle's frozen baselines still hold to the byte; the heap
+ * simply returns to its post-Open level once an utterance's blocks are all
+ * gone, however they were freed.  A free block in the middle stays where it
+ * is until everything above it is free too -- reuse there would change
+ * addresses, and nothing measured needs it.  Blocks that belong to a
+ * registered resource or file are pinned and never freed, so an engine that
+ * disposes of a resource Handle cannot pull the resource server's memory
+ * out from under it. */
+#define MAX_BLOCKS 16384
+typedef struct { unsigned addr, size; unsigned char free, pinned; } BlockRec;
+static BlockRec g_blocks[MAX_BLOCKS];
+static int      g_block_count;
+
 static unsigned heap_alloc(unsigned size)
 {
     unsigned p, i;
@@ -304,7 +336,47 @@ static unsigned heap_alloc(unsigned size)
         for (i = 0; i < size; i++) g_ram[p + i] = (i & 2u) ? 0xA5 : 0x00;
     else
         memset(g_ram + p, 0, size);
+    if (g_block_count < MAX_BLOCKS) {
+        g_blocks[g_block_count].addr = p;
+        g_blocks[g_block_count].size = size;
+        g_blocks[g_block_count].free = 0;
+        g_blocks[g_block_count].pinned = 0;
+        g_block_count++;
+    }
     return p;
+}
+
+/* Give a block back.  Unknown addresses -- a block we did not hand out, or
+ * one already freed -- are ignored, as a real Memory Manager would at best
+ * report them.  -> 1 if a block was freed. */
+static int heap_free(unsigned addr)
+{
+    int i;
+    if (!addr) return 0;
+    for (i = g_block_count - 1; i >= 0; i--) {
+        if (g_blocks[i].addr != addr) continue;
+        if (g_blocks[i].free || g_blocks[i].pinned) return 0;
+        g_blocks[i].free = 1;
+        while (g_block_count > 0 && g_blocks[g_block_count - 1].free) {
+            g_block_count--;
+            g_heap_next = g_blocks[g_block_count].addr;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Never free this block: it is the resource server's or the file server's. */
+static void heap_pin(unsigned addr)
+{
+    int i;
+    for (i = g_block_count - 1; i >= 0; i--)
+        if (g_blocks[i].addr == addr) { g_blocks[i].pinned = 1; return; }
+}
+
+static void heap_forget_all(void)
+{
+    g_block_count = 0;
 }
 
 /* A Mac handle is a pointer to a pointer.  We allocate the block, then a
@@ -349,6 +421,25 @@ static unsigned heap_new_handle(unsigned size)
     m68k_write_memory_32(mp, blk);
     note_handle(mp, size);
     return mp;
+}
+
+/* _DisposeHandle: the block the master pointer names, then the master
+ * pointer itself -- in that order, which is also the order the top rolls
+ * back in.  A pinned block (a resource's) leaves both alone. */
+static void heap_dispose_handle(unsigned mp)
+{
+    unsigned blk;
+    int i;
+    if (!mp) return;
+    for (i = g_block_count - 1; i >= 0; i--)
+        if (g_blocks[i].addr == mp) {
+            if (g_blocks[i].pinned) return;
+            break;
+        }
+    if (i < 0) return;                       /* not a Handle we made */
+    blk = m68k_read_memory_32(mp);
+    heap_free(blk);
+    heap_free(mp);
 }
 
 /* Case- and diacritic-insensitive enough for the comparisons this driver makes.
