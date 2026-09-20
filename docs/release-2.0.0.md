@@ -1,8 +1,8 @@
 # outSPOKEN 2.0.0 — the host becomes the engine
 
-**Draft. Nothing here has shipped.** This is the plan for the release, written
-before the work so the work has something to be measured against, and kept
-current as it lands. The `<!-- HANDOVER -->` block at the end says where things
+**Shipped: 2.0.0 was published on 2026-09-20.** This was the plan for the
+release, written before the work so the work had something to be measured
+against, and kept current as it landed; it stays as the record. The `<!-- HANDOVER -->` block at the end says where things
 stand for whoever picks it up next — the other agent reads it too.
 
 ## What earns the major number
