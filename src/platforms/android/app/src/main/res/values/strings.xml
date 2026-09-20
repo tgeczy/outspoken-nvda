@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">outSPOKEN</string>
-    <string name="engine_name">outSPOKEN</string>
+    <string name="app_name">Outspoken TTS</string>
+    <string name="engine_name">Outspoken TTS</string>
 </resources>
