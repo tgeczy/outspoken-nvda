@@ -1,7 +1,7 @@
-﻿param([switch]$Register,[switch]$Unregister,[string]$DataRoot,
+param([switch]$Register,[switch]$RegisterServer,[switch]$Unregister,[string]$DataRoot,
       [switch]$Move,[string]$MoveFrom,[string]$MoveTo,[string]$MirrorSettings)
-# Voice tokens for the outSPOKEN SAPI engine: one per voice the serve
-# bridge enumerates from the data root, in both registry views.
+# Voice tokens for the outSPOKEN SAPI engine: one per voice the host
+# enumerates from the data root, in both registry views.
 #
 # Written in PowerShell 2.0's dialect on purpose: stock Windows 7 has no
 # newer engine, and this script runs from the installer, where "update
@@ -9,27 +9,49 @@
 # OpenBaseKey (needs the .NET 4 runtime 2.0 may not host), and the 32-bit
 # view reached the old way: on a 64-bit OS the Wow6432Node path IS the
 # 32-bit view, written directly.
+#
+# Three elevated jobs: -Register (the COM classes, then every voice the
+# data provides, from a root this script resolves), -RegisterServer (the
+# COM classes only -- what an installer upgrade runs, because which voices
+# are registered, from where, is a choice the person already made and even
+# an empty choice is one to keep), and -Unregister.  -Move carries the data
+# to the machine-wide folder and re-registers from there.
 $ErrorActionPreference = 'Stop'
 $stage = Split-Path -Parent $MyInvocation.MyCommand.Path
 $clsid = '{a1f4055c-b6c2-4c27-ab6a-af54c409a309}'
 $prefKey = 'HKCU:\Software\outSPOKEN SAPI'
+$machinePrefPaths = @('HKLM:\SOFTWARE\outSPOKEN SAPI', 'HKLM:\SOFTWARE\Wow6432Node\outSPOKEN SAPI')
 # The settings files: every elevated trip grants the machine folder and
 # carries this person's settings into the machine file, so the sign-in
 # screen speaks with them.  See settings_common.ps1.
 . (Join-Path $stage 'settings_common.ps1')
 
-# The Panthera resolution order, mirrored: an explicit choice, then the
-# remembered one, then NVDA's own config (an NVDA-first user's ROMs are
-# already there), then the standalone default.
-if (-not $DataRoot) {
-    try { $DataRoot = (Get-ItemProperty -Path $prefKey -Name DataPath -ErrorAction Stop).DataPath } catch {}
-}
-if (-not $DataRoot) {
+# Where the voices are registered from, when the caller did not say.  The
+# Panthera resolution order: an explicit choice; the remembered one, in
+# HKCU -- which, elevated, may be the administrator's hive and not the
+# person's, so the settings window passes -DataRoot itself; the folder set
+# for the machine, both views, which is what a previous registration wrote
+# and what an installer run under another account can still see; NVDA's
+# own config (an NVDA-first user's ROMs are already there); then the
+# standalone default.
+function Resolve-InstallDataRoot([string]$explicit) {
+    if ($explicit) { return $explicit }
+    try {
+        $remembered = (Get-ItemProperty -Path $prefKey -Name DataPath -ErrorAction Stop).DataPath
+        if ($remembered) { return $remembered }
+    } catch {}
+    foreach ($prefPath in $machinePrefPaths) {
+        try {
+            $machine = (Get-ItemProperty -Path $prefPath -Name DataPath -ErrorAction Stop).DataPath
+            if ($machine) { return $machine }
+        } catch {}
+    }
     $nvda = Join-Path $env:APPDATA 'nvda'
     if ((Test-Path (Join-Path $nvda 'macintalk\outspoken')) -or
-        (Test-Path (Join-Path $nvda 'outspoken-roms'))) { $DataRoot = $nvda }
-    else { $DataRoot = Join-Path $env:APPDATA 'outspoken-data' }
+        (Test-Path (Join-Path $nvda 'outspoken-roms'))) { return $nvda }
+    return (Join-Path $env:APPDATA 'outspoken-data')
 }
+
 # Remembered machine-wide, in **both registry views**, because HKLM\Software
 # is redirected under WOW64 and a value in one view alone is invisible to
 # half the programs on the machine.  Machine-wide rather than HKCU on
@@ -38,12 +60,13 @@ if (-not $DataRoot) {
 # write here lands in the *administrator's* hive -- remembered for the wrong
 # person, invisible to the right one.  The settings window writes the
 # per-user preference itself, unelevated, where HKCU means what it says.
-foreach ($prefPath in @('HKLM:\SOFTWARE\outSPOKEN SAPI',
-                        'HKLM:\SOFTWARE\Wow6432Node\outSPOKEN SAPI')) {
-    if (($prefPath -like '*Wow6432Node*') -and
-        -not (Test-Path 'HKLM:\SOFTWARE\Wow6432Node')) { continue }
-    New-Item -Path $prefPath -Force | Out-Null
-    Set-ItemProperty -Path $prefPath -Name DataPath -Value $DataRoot
+function Set-MachineDataPath([string]$root) {
+    foreach ($prefPath in $machinePrefPaths) {
+        if (($prefPath -like '*Wow6432Node*') -and
+            -not (Test-Path 'HKLM:\SOFTWARE\Wow6432Node')) { continue }
+        New-Item -Path $prefPath -Force | Out-Null
+        Set-ItemProperty -Path $prefPath -Name DataPath -Value $root
+    }
 }
 
 #: Both registry views, as plain paths.  A 64-bit OS shows the 32-bit view
@@ -60,6 +83,44 @@ function Remove-Tokens {
             if ($key.PSChildName -like 'Outspoken_*') {
                 Remove-Item -Path $key.PSPath -Recurse -Force
             }
+        }
+    }
+}
+
+# One token per voice the host lists from `$root`, in both views, replacing
+# whatever tokens were there.  The host is the one authority on which
+# voices the data provides; registering with no data present is a clean
+# no-op.  The 64-bit host where there is one, else the 32-bit one (a 32-bit
+# Windows).
+function Add-Tokens([string]$root) {
+    $host_exe = Join-Path $stage 'osp_host.exe'
+    if (-not (Test-Path $host_exe)) { $host_exe = Join-Path $stage 'osp_host_x86.exe' }
+    $listing = & $host_exe --list $root 2>$null
+    Remove-Tokens
+    foreach ($tokenRoot in $tokenRoots) {
+        foreach ($line in @($listing)) {
+            if ($line -notmatch "`t") { continue }
+            $parts = $line -split "`t",2
+            $id = $parts[0]; $name = $parts[1]
+            $keyPath = Join-Path $tokenRoot ('Outspoken_' + ($id -replace '[^A-Za-z0-9]','_'))
+            New-Item -Path $keyPath -Force | Out-Null
+            Set-ItemProperty -Path $keyPath -Name '(default)' -Value "$name (outSPOKEN)"
+            Set-ItemProperty -Path $keyPath -Name 'CLSID' -Value $clsid
+            Set-ItemProperty -Path $keyPath -Name 'VoiceId' -Value $id
+            Set-ItemProperty -Path $keyPath -Name 'DataPath' -Value $root
+            $attrPath = Join-Path $keyPath 'Attributes'
+            New-Item -Path $attrPath -Force | Out-Null
+            Set-ItemProperty -Path $attrPath -Name 'Name' -Value $name
+            Set-ItemProperty -Path $attrPath -Name 'Vendor' -Value 'outSPOKEN'
+            # Spanish voices say so: SAPI clients filter and group by this,
+            # and a Carlos advertised as US English is a voice Spanish
+            # speakers' tooling never offers them.  80A is Mexican Spanish,
+            # which is what the cami engine is -- sold on Mexican floppies,
+            # named for it.  Everything else stays US English as before.
+            $language = '409'
+            if ($id -like 'cami:*') { $language = '80A' }
+            Set-ItemProperty -Path $attrPath -Name 'Language' -Value $language
+            Set-ItemProperty -Path $attrPath -Name 'Gender' -Value 'Neutral'
         }
     }
 }
@@ -119,47 +180,25 @@ if ($Move) {
     exit 0
 }
 
-if ($Register) {
-    Grant-SettingsFolder
-    Set-MachineSettings $MirrorSettings
+if ($Register -or $RegisterServer) {
     & $reg32 /s (Join-Path $stage 'x86\outspoken_sapi.dll')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
     if ($wow) {
         & "$env:SystemRoot\System32\regsvr32.exe" /s (Join-Path $stage 'x64\outspoken_sapi.dll')
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
-    # The host is the one authority on which voices the data provides;
-    # registering with no data present is a clean no-op.  The 64-bit host
-    # where there is one, else the 32-bit one (a 32-bit Windows).
-    $host_exe = Join-Path $stage 'osp_host.exe'
-    if (-not (Test-Path $host_exe)) { $host_exe = Join-Path $stage 'osp_host_x86.exe' }
-    $listing = & $host_exe --list $DataRoot 2>$null
-    Remove-Tokens
-    foreach ($root in $tokenRoots) {
-        foreach ($line in @($listing)) {
-            if ($line -notmatch "`t") { continue }
-            $parts = $line -split "`t",2
-            $id = $parts[0]; $name = $parts[1]
-            $keyPath = Join-Path $root ('Outspoken_' + ($id -replace '[^A-Za-z0-9]','_'))
-            New-Item -Path $keyPath -Force | Out-Null
-            Set-ItemProperty -Path $keyPath -Name '(default)' -Value "$name (outSPOKEN)"
-            Set-ItemProperty -Path $keyPath -Name 'CLSID' -Value $clsid
-            Set-ItemProperty -Path $keyPath -Name 'VoiceId' -Value $id
-            Set-ItemProperty -Path $keyPath -Name 'DataPath' -Value $DataRoot
-            $attrPath = Join-Path $keyPath 'Attributes'
-            New-Item -Path $attrPath -Force | Out-Null
-            Set-ItemProperty -Path $attrPath -Name 'Name' -Value $name
-            Set-ItemProperty -Path $attrPath -Name 'Vendor' -Value 'outSPOKEN'
-            # Spanish voices say so: SAPI clients filter and group by this,
-            # and a Carlos advertised as US English is a voice Spanish
-            # speakers' tooling never offers them.  80A is Mexican Spanish,
-            # which is what the cami engine is -- sold on Mexican floppies,
-            # named for it.  Everything else stays US English as before.
-            $language = '409'
-            if ($id -like 'cami:*') { $language = '80A' }
-            Set-ItemProperty -Path $attrPath -Name 'Language' -Value $language
-            Set-ItemProperty -Path $attrPath -Name 'Gender' -Value 'Neutral'
-        }
+    Grant-SettingsFolder
+    Set-MachineSettings $MirrorSettings
+    # An installer upgrade refreshes the COM classes and stops here: which
+    # voices are registered, and from which folder, is a choice the person
+    # already made -- a deliberate unregister, a folder they browsed to --
+    # and rebuilding the tokens from whatever the elevated account can see
+    # is how Panthera's 3.2.0 lost people's choices until its r2.  Even an
+    # empty choice is one to keep.
+    if ($Register) {
+        $DataRoot = Resolve-InstallDataRoot $DataRoot
+        Set-MachineDataPath $DataRoot
+        Add-Tokens $DataRoot
     }
     exit 0
 }
@@ -171,4 +210,4 @@ if ($Unregister) {
     }
     exit 0
 }
-Write-Host 'Use -Register or -Unregister (optionally -DataRoot <folder>).'
+Write-Host 'Use -Register, -RegisterServer or -Unregister (optionally -DataRoot <folder>).'

@@ -28,7 +28,10 @@ plain C, with the 68000 interpreter (Karl Stenerud's Musashi) compiled in.
   user and one for the machine, so the Windows sign-in screen speaks with the
   settings you saved. The move of your voice data into a folder every account
   can read, and the warning when the voices point at a folder that has gone,
-  were already there and are unchanged.
+  were already there and are unchanged. And an installer upgrade now leaves
+  your registered voices exactly as they were: it refreshes the engine and
+  stops, rather than registering afresh from whatever folder the elevated
+  account happened to see, the fault Panthera's 3.2.0 r2 fixed the same day.
 * **Linux**, for the first time: `osp_host` renders any voice to a WAV file,
   lists what you have extracted, or serves speech over a pipe for whatever
   front end you build on it; `libosp_host.so` is the same engine as a

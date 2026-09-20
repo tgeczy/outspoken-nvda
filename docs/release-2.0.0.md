@@ -367,6 +367,19 @@ Each phase ends green on the checks named, and each is a pull request against
   folder and mirroring this person's settings into the machine file,
   `installer.iss` `[Dirs]` users-modify. `tests/test_serve_hosts.py` holds
   both hosts to the flags. The sign-in screen itself is untested from here.
+  Later the same night, Tomi pointed at Panthera's `a086aa9` (its 3.2.0
+  r2, on `main` after the tag): an installer upgrade rebuilt every voice
+  token from whatever data the elevated account could see. Ours had the
+  same fault and a second one -- the elevated register never read the
+  machine-wide DataPath it wrote. Ported: `installer.iss` snapshots its
+  uninstall key in both views in `InitializeSetup` and runs
+  `register.ps1 -RegisterServer` (COM classes only) on an upgrade,
+  `-Register` on a fresh install; `register.ps1` resolves its root through
+  HKCU, then the machine HKLM (both views), then NVDA's folder, and its
+  token pass is a function the upgrade path skips.
+  `tests/test_sapi_installer_upgrade.py` is Panthera's isolated Inno probe
+  with our script: five cases, both views, empty and custom selections
+  kept on an upgrade, registered afresh on a first install.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync

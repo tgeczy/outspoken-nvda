@@ -65,10 +65,38 @@ Name: "{commonappdata}\outSPOKEN SAPI"; Permissions: users-modify
 Name: "{autoprograms}\outSPOKEN SAPI settings"; Filename: "{app}\outspoken_settings.exe"; WorkingDir: "{app}"
 
 [Run]
-; Registering with no data present is a clean no-op: the serve bridge lists
-; the voices the data root actually provides, and tokens follow the data.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -Register"; StatusMsg: "Registering outSPOKEN voices from your speech data..."; Flags: runhidden
+; On a fresh install the register pass does everything in order: regsvr32
+; for both registry views, then one token per voice the host lists from the
+; resolved data root.  Registering with no data present is a clean no-op.
+; On an upgrade only the COM classes are refreshed: which voices are
+; registered, and from which folder, is a choice the person already made --
+; a deliberate unregister, a folder they browsed to -- and rebuilding the
+; tokens from whatever the elevated account can see is how Panthera's 3.2.0
+; lost people's choices until its r2.  Even zero voices is a choice to keep.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -RegisterServer"; StatusMsg: "Updating SAPI components..."; Flags: runhidden; Check: IsUpgrade
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -Register"; StatusMsg: "Registering outSPOKEN voices from your speech data..."; Flags: runhidden; Check: not IsUpgrade
 Filename: "{app}\outspoken_settings.exe"; Description: "Open outSPOKEN SAPI settings"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\register.ps1"" -Unregister"; RunOnceId: "UnregisterOutspoken"; Flags: runhidden
+
+[Code]
+const
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{4D6071E1-B142-4F49-8C5C-97C661EA748B}_is1';
+var
+  ExistingInstall: Boolean;
+
+function InitializeSetup: Boolean;
+begin
+  { Snapshot before Setup writes its own uninstall key.  Checking in [Run]
+    would mistake a first install for an upgrade.  Read both registry views. }
+  ExistingInstall := RegKeyExists(HKLM32, UninstallKey);
+  if IsWin64 then
+    ExistingInstall := ExistingInstall or RegKeyExists(HKLM64, UninstallKey);
+  Result := True;
+end;
+
+function IsUpgrade: Boolean;
+begin
+  Result := ExistingInstall;
+end;
