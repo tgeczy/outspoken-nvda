@@ -122,18 +122,50 @@ static int eng_isfile(const char *path)
 
 /* ---- walking --------------------------------------------------------------- */
 
-/* os.walk, top-down, in sorted order.  `fn` sees each folder with its
- * sorted listing and returns nonzero to stop the whole walk. */
+#include <ctype.h>
+
+/* Folders the walk never enters.  The roots include NVDA's whole
+ * configuration folder, and under it sit things that can never hold this
+ * project's engines and are enormous: every add-on's Python tree, and the
+ * shared `macintalk` folder's Panthera generations -- gigabytes of voice
+ * files.  Walking them cost 3-5 s at every synthesizer load on Tomi's Rog
+ * Ally (2.0.0, the first release with this walk; the Python catalogue it
+ * replaced looked only at fixed subfolders), and 643 ms for the add-ons
+ * alone on the development machine.  The backups the data managers keep
+ * are skipped for a different reason: an old extraction there would win
+ * "first found" over the live one.  Compared without regard to case,
+ * because Windows names have none. */
+static const char *const VC_SKIP_DIRS[] = {
+    "addons", "profiles", "speechdicts", "scratchpad", "updates",
+    "tiger", "leopard", "snowleopard", "lion",
+    ".git", "__pycache__", NULL
+};
+
+static int vc_skip_dir(const char *name)
+{
+    char low[ENG_PATH];
+    size_t n = strlen(name), i;
+    if (n >= sizeof low) return 0;
+    for (i = 0; i <= n; i++) low[i] = (char)tolower((unsigned char)name[i]);
+    for (i = 0; VC_SKIP_DIRS[i]; i++) if (!strcmp(low, VC_SKIP_DIRS[i])) return 1;
+    return n > 8 && !strcmp(low + n - 8, "-backups");
+}
+
+/* os.walk, top-down, in sorted order, pruned (above) and no deeper than the
+ * layouts need -- `outspoken-data/outspoken/macintalk/outspoken/voices/Bruce`
+ * is five levels.  `fn` sees each folder with its sorted listing and
+ * returns nonzero to stop the whole walk. */
 static int vc_walk(const char *dir, int depth,
                    int (*fn)(const char *dir, const EngDir *listing, void *ctx), void *ctx)
 {
     EngDir d;
     int i, stop = 0;
-    if (depth > 16) return 0;
+    if (depth > 6) return 0;
     if (eng_listdir(dir, &d) != 0) return 0;
     stop = fn(dir, &d, ctx);
     for (i = 0; i < d.n && !stop; i++) {
         char sub[ENG_PATH];
+        if (vc_skip_dir(d.names[i])) continue;
         vc_join(sub, sizeof sub, dir, d.names[i]);
         if (sub[0] && eng_isdir(sub)) stop = vc_walk(sub, depth + 1, fn, ctx);
     }

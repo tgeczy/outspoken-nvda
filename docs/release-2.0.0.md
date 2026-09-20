@@ -389,6 +389,15 @@ Each phase ends green on the checks named, and each is a pull request against
   `tests/test_sapi_installer_upgrade.py` is Panthera's isolated Inno probe
   with our script: five cases, both views, empty and custom selections
   kept on an upgrade, registered afresh on a first install.
+* **2.0.1, the same morning:** Tomi heard 3-5 s at every synthesizer load in
+  NVDA on the Rog Ally, nowhere else. The host's catalogue walked every
+  folder under each root, and one root is NVDA's whole configuration
+  folder -- with Panthera's generations under the shared `macintalk` and
+  every add-on's tree. `vc_walk` now prunes those names and the backup
+  folders, and stops at depth 6; here 715 ms -> 52 ms for the full scan,
+  643 -> 33 ms for the configuration folder. `tests/test_catalogue_c.py`
+  plants an engine where the walk must not look. Add-on and SAPI installer
+  re-released as 2.0.1; the APK stays 2.0.0.
 * **Parked, with the probe written down:** an index *between* words of one
   run is still reported at the head, because its position in the audio is
   not known. The engine can say: MacinTalk 2, 3 and Pro honour `[[sync
