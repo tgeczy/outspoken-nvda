@@ -302,6 +302,15 @@ Each phase ends green on the checks named, and each is a pull request against
   source archive, `docs/linux.md` as its README) and attaches it to a
   release on publish or on `gh workflow run linux.yml -f release_tag=v2.0.0`.
   User-facing notes: `docs/release-2.0.0-notes.md`.
+* **PUBLISHED 2026-09-20, 03:45 MT.** Tomi's ear passed on all four fronts
+  -- NVDA, SAPI (twice, the settings layer and the upgrade path on the Rog
+  Ally), Android (the release build fed through the zip picker on the
+  Nothing Phone) -- and he said release. PR #4 merged into `main` as
+  54455bc, the release retargeted to `main` and published as latest:
+  https://github.com/tgeczy/outspoken-nvda/releases/tag/v2.0.0 with the
+  add-on, the SAPI installer, the signed APK and both Linux tarballs, every
+  one rebuilt from the final source. Left for after: the Android device
+  suite, the watch, the `[[sync]]` interior marks below.
 * **Out for Tomi's ear, 2026-09-19 evening.** PR #4 (`tgeczy/native-host`
   → `main`). Draft release `v2.0.0`, target the branch head, carrying
   `outspoken-2.0.0.nvda-addon`, `outspoken-sapi-2.0.0-setup.exe` and the
