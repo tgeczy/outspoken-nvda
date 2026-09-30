@@ -10,8 +10,11 @@ interface IOutspokenWorker {
     /** Open or switch to the voice with this catalogue id.  0, or negative. */
     int useVoice(String roots, String id);
     /** The driver's own 0-100 scales; numbers 0 off, 1 words, 2 digits;
-     * ratePercent is the requesting app's speech rate, 100 being normal. */
-    void settings(int rate, int pitch, int inflection, int volume, int numbers, int ratePercent);
+     * ratePercent is the requesting app's speech rate, 100 being normal;
+     * pitchAdj is a per-utterance offset on the same 0-100 pitch scale, which
+     * is how a screen reader raises a capital letter. */
+    void settings(int rate, int pitch, int inflection, int volume, int numbers, int ratePercent,
+                  int pitchAdj);
     /** Begin an utterance from UTF-8 text.  0 when there is audio to pull,
      * 1 when there was nothing to say, negative on failure. */
     int start(in byte[] utf8);

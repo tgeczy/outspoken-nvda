@@ -210,7 +210,7 @@ Java_com_outspoken_tts_OutspokenNative_nativeUseVoice(JNIEnv *env, jclass cls, j
 JNIEXPORT void JNICALL
 Java_com_outspoken_tts_OutspokenNative_nativeSettings(JNIEnv *env, jclass cls, jint rate, jint pitch,
                                                      jint inflection, jint volume, jint numbers,
-                                                     jint ratePercent)
+                                                     jint ratePercent, jint pitchAdj)
 {
     (void)env; (void)cls;
     osp_set_rate(rate);
@@ -219,14 +219,22 @@ Java_com_outspoken_tts_OutspokenNative_nativeSettings(JNIEnv *env, jclass cls, j
     osp_set_volume(volume);
     osp_set_volume_offset(0);
     osp_engine_set_numbers(numbers);
-    osp_apply_settings(0, 0);
+    /* `pitchAdj` is a PitchCommand's offset on the driver's own 0-100 scale,
+     * which is where a screen reader's raised pitch for a capital letter
+     * arrives from.  It was hardcoded to zero here, so the whole property was
+     * dropped: Android ignored both the system pitch and any per-utterance
+     * change of it, while the NVDA driver has honoured the same offset since
+     * f0d6208.  Everything it needs already lives in osp_apply_settings --
+     * the clamp, the conversion to tenths, and 1984's hertz instead of
+     * 'pbas' -- so this only had to be passed along. */
+    osp_apply_settings(0, pitchAdj);
     if (ratePercent > 0 && ratePercent != 100) {
         /* The requesting app's speech rate on top of the slider: the words
          * per minute the slider stands for, scaled, within the curve's own
          * range, so the top of the slider at 200% is still the top. */
         int engine_rate = 0, tenths = 0, wpm;
         double hz = 0;
-        osp_settings_preview(rate, 0, pitch, 0, 110.0, &engine_rate, &tenths, &hz);
+        osp_settings_preview(rate, 0, pitch, pitchAdj, 110.0, &engine_rate, &tenths, &hz);
         wpm = (int)((long)engine_rate * ratePercent / 100);
         if (wpm < 60) wpm = 60;
         if (wpm > 900) wpm = 900;

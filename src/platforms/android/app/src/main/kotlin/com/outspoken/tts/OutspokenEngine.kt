@@ -577,7 +577,8 @@ object OutspokenEngine {
     /** Begin an utterance on the worker: 0 when there is audio to pull, 1
      * when the text had nothing to say, negative on failure. */
     fun speakStart(ctx: Context, voice: VoiceInfo, utf8: ByteArray, ratePercent: Int,
-                   snapshot: Settings = settings(ctx, voice.family)): Int = synchronized(lock) {
+                   snapshot: Settings = settings(ctx, voice.family),
+                   pitchAdj: Int = 0): Int = synchronized(lock) {
         try {
             val owned = checkNotNull(request) { "Speech requires withSynthesis" }
             val next = open(ctx, voice)
@@ -585,7 +586,7 @@ object OutspokenEngine {
             // lost in the interval before the worker marks itself active.
             if (!owned.attach(next)) return@synchronized -1
             next.settings(snapshot.rate, snapshot.pitch, snapshot.inflection, snapshot.engineVolume(),
-                          snapshot.numbersMode, ratePercent)
+                          snapshot.numbersMode, ratePercent, pitchAdj)
             next.start(utf8).also { if (it == 0) owned.started() }
         } catch (e: Exception) {
             Log.e("OutspokenEngine", "Speech failed", e); -1

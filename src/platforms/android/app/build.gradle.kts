@@ -40,8 +40,14 @@ android {
         applicationId = "com.outspoken.tts"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0.1"
+        versionCode = 3
+        versionName = "2.0.2"
+
+        // The device suite: one Instrumentation, driven by adb, the way the
+        // sibling project does it. There is no JUnit runner here on purpose --
+        // these checks speak through the real platform TTS client and report a
+        // Bundle, so they need no test library at all.
+        testInstrumentationRunner = "com.outspoken.tts.PitchCheck"
 
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
@@ -53,6 +59,7 @@ android {
     // storage, the zip importer -- under src/test/kotlin.
     sourceSets["main"].java.srcDirs("src/main/kotlin")
     sourceSets["test"].java.srcDirs("src/test/kotlin")
+    sourceSets["androidTest"].java.srcDirs("src/androidTest/kotlin")
     sourceSets["main"].assets.srcDir(nativeNotices)
 
     // Release signing.  Android refuses to install an unsigned APK, so a
@@ -90,6 +97,14 @@ android {
             if (signingProperties.isFile) signingConfig = signingConfigs.getByName("release")
         }
     }
+
+    // The device suite instruments the debug build by default. `-PreleaseTests`
+    // points it at the release one, which is the only way to run it against a
+    // release already on a phone: instrumentation requires the test APK and its
+    // target to share a signature, so a debug-signed test cannot instrument the
+    // signed build people actually install. Swapping the release out for a debug
+    // build instead would uninstall the engine data with it.
+    if (project.hasProperty("releaseTests")) testBuildType = "release"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -31,8 +31,12 @@ object OutspokenNative {
     /** The driver's own 0-100 scales for rate, pitch, inflection and volume;
      * numbers 0 off, 1 words, 2 digits.  `ratePercent` is the requesting
      * app's speech rate, 100 being normal, applied on top of the slider. */
+    /** `pitchAdj` is a per-utterance offset on the same 0-100 pitch scale,
+     * added to the slider before it becomes tenths of a semitone -- the
+     * PitchCommand offset the NVDA driver has always sent, arriving here from
+     * a caller's TextToSpeech.setPitch. 0 leaves the slider alone. */
     external fun nativeSettings(rate: Int, pitch: Int, inflection: Int, volume: Int,
-                                numbers: Int, ratePercent: Int)
+                                numbers: Int, ratePercent: Int, pitchAdj: Int)
 
     /** Begin an utterance.  UTF-8 in: the host folds it to MacRoman exactly
      * as the SAPI engine does.  0 when there is audio, 1 when the text had

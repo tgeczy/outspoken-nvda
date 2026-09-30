@@ -30,8 +30,9 @@ class OutspokenWorkerService : Service() {
             OutspokenNative.nativeUseVoice(roots, id)
         }
         override fun settings(rate: Int, pitch: Int, inflection: Int, volume: Int,
-                              numbers: Int, ratePercent: Int) = runNative {
-            OutspokenNative.nativeSettings(rate, pitch, inflection, volume, numbers, ratePercent)
+                              numbers: Int, ratePercent: Int, pitchAdj: Int) = runNative {
+            OutspokenNative.nativeSettings(rate, pitch, inflection, volume, numbers, ratePercent,
+                                           pitchAdj)
         }
         override fun start(utf8: ByteArray): Int = runNative {
             OutspokenNative.nativeStart(utf8)

@@ -96,10 +96,19 @@ class OutspokenTtsService : TextToSpeechService() {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
 
         val text = request.charSequenceText?.toString() ?: ""
+        // What the caller asked for with TextToSpeech.setPitch, as a ratio where
+        // 100 is the voice's own pitch.  A screen reader marking a capital letter
+        // sends one request at, say, 150 and the next back at 100.
+        //
+        // **Dropped entirely until now**, so neither the system pitch slider nor a
+        // per-utterance change of it did anything on Android, while the NVDA driver
+        // has honoured the same offset since f0d6208.
+        val pitchAdj = PitchScale.sliderOffset(request.pitch)
         val latencyProbe = request.params.getBoolean("com.outspoken.tts.latency_probe", false)
         var probeMarked = false
         Log.i("OutspokenTts", "synth: voice=${request.voiceName} lang=${request.language} " +
-            "rate=${request.speechRate} verified=${OutspokenEngine.verified(this)} textLen=${text.length}")
+            "rate=${request.speechRate} pitch=${request.pitch}->${pitchAdj} " +
+            "verified=${OutspokenEngine.verified(this)} textLen=${text.length}")
 
         if (!OutspokenEngine.verified(this)) {
             Log.w("OutspokenTts", "not verified -> error"); callback.error(TextToSpeech.ERROR_SERVICE); return
@@ -142,7 +151,8 @@ class OutspokenTtsService : TextToSpeechService() {
         val pieces = OutspokenText.pieces(text)
         for (piece in pieces) {
             if (stopRequested) break
-            val started = OutspokenEngine.speakStart(this, voice, OutspokenText.bytes(piece), ratePercent, snapshot)
+            val started = OutspokenEngine.speakStart(this, voice, OutspokenText.bytes(piece),
+                                                     ratePercent, snapshot, pitchAdj)
             if (started == 1) continue                  // nothing to say in it
             if (started != 0) {
                 if (stopRequested) return
