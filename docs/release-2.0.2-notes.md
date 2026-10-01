@@ -18,7 +18,10 @@ the same pitch as everything else. Tomi confirmed it by ear this way, on this ap
 and on Panthera's. For capital letters specifically, how TalkBack marks them is
 TalkBack's own setting rather than ours -- saying the word "capital" is what it
 does by default, and it does not announce every capital as you type the way
-VoiceOver does. If you set it to change pitch instead, that now works.
+VoiceOver does. If you would rather hear them by pitch, TalkBack can do that: in
+TalkBack settings, under **Verbosity** or **Keyboard feedback** depending on your
+version, set the capital letters option to change pitch. It reaches the engine by
+the same route a deleted character does, so if one is audible the other is too.
 
 The NVDA add-on has raised pitch on request since 2.0.0, and the engines have all
 been able to change pitch since before that. The gap was one number the app never
