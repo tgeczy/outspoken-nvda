@@ -471,6 +471,120 @@ object OutspokenEngine {
 
     // ---- per-family settings -----------------------------------------------
     //
+    // ---- removing engine data ----------------------------------------------
+    //
+    // Switching a family off in Engine settings hides its voices and keeps its
+    // files; this is the other half, for somebody who does not want an engine on
+    // the phone at all.  The sibling project has the same button, and this is
+    // deliberately the same shape -- but the unit is not the same thing.  There
+    // a generation is one folder holding an engine and its voices; here the
+    // engine folders and the `voices` folder are separate units, and every
+    // engine reads the one `voices` folder.  So the list offers what the
+    // importer offers, and says out loud which one is shared.
+
+    /** Which family an engine folder belongs to, or null for a unit that is not
+     * one engine's -- `voices`, which they all read. */
+    fun unitFamily(unit: String): String? = when (unit) {
+        "macintalk1" -> FAM_SP
+        "macintalk2" -> FAM_MTK2
+        "macintalk3" -> FAM_MTK3
+        "macintalkpro" -> FAM_GALA
+        "macintalkespanol" -> FAM_CAMI
+        else -> null
+    }
+
+    /** Every folder holding a copy of this unit, across every root, including a
+     * half-finished import or move.
+     *
+     * **All of them, not just the one the host reads.**  Data outside protected
+     * storage is copied back in by `migrate` on the next unlock, so deleting
+     * only the live copy would have the unit reappear by itself -- from the
+     * user's point of view, a removal that did not take.  The roots already
+     * include the wrapper folders somebody zipped around their data, so a copy
+     * inside `outspoken/` or `macintalk/` is found as readily as one at the top.
+     *
+     * Free of Context so the desktop JVM can test it, the same reason
+     * ProtectedStorage is: which folders get deleted is the part of a removal
+     * worth being sure about, and it is pure file arithmetic. */
+    fun unitFolders(roots: List<File>, unit: String): List<File> =
+        roots.distinctBy { it.absolutePath }.flatMap { root ->
+            listOf(File(root, unit), File(root, unit + ProtectedStorage.MOVING),
+                   File(root, unit + ZipImport.IMPORTING))
+        }.filter { it.isDirectory }.distinctBy { it.absolutePath }
+
+    /** The units actually on the device, in the order the importer names them.
+     *
+     * A unit has to hold something.  An empty folder wearing a unit's name is
+     * what an interrupted import or a half-finished move leaves behind, and
+     * offering it as installed would promise a removal that frees nothing --
+     * `removeUnits` still deletes such a folder when the unit is named, so the
+     * leftover is cleaned up rather than stranded. */
+    fun installedUnits(ctx: Context): List<String> =
+        (ZipImport.ENGINE_FOLDERS.keys.toList() + ZipImport.VOICES)
+            .filter { unit ->
+                unitFolders(candidateRoots(ctx), unit)
+                    .any { folder -> folder.walkTopDown().any { it.isFile } }
+            }
+
+    /** What removing these units would free: every copy of each. */
+    fun removableSize(ctx: Context, units: Collection<String>): Long =
+        units.sumOf { unit -> unitFolders(candidateRoots(ctx), unit).sumOf { ProtectedStorage.size(it) } }
+
+    /** Delete these units' files and forget the settings that go with them.
+     *
+     * `progress(unit)` is called as each one begins.  -> the bytes freed.  Never
+     * on the main thread: it retires the worker process and deletes hundreds of
+     * megabytes.
+     *
+     * The worker is retired first and waited for.  It holds the engine and its
+     * voice data mapped in a process of its own, and unlinking underneath it
+     * would leave the space held until that process happened to die. */
+    fun removeUnits(ctx: Context, units: Collection<String>,
+                    progress: (String) -> Unit = {}): Long {
+        var freed = 0L
+        val wanted = units.filter { it in ZipImport.UNITS }
+        if (wanted.isEmpty()) return 0L
+        // One worker here, not one per family, so it is retired once for the
+        // whole removal rather than between units.
+        try { OutspokenWorkers.restart() }
+        catch (e: Throwable) { Log.w("OutspokenEngine", "the worker did not retire", e) }
+        for (unit in wanted) {
+            progress(unit)
+            for (folder in unitFolders(candidateRoots(ctx), unit)) {
+                val size = ProtectedStorage.size(folder)
+                if (folder.deleteRecursively()) freed += size
+                else Log.w("OutspokenEngine", "could not remove $folder")
+            }
+        }
+        forgetUnits(ctx, wanted)
+        refreshVoiceCatalogue()
+        // Re-run the gate rather than leaving it set: with the engines gone,
+        // `verified` has to become false or the service keeps offering a
+        // language it can no longer speak.
+        checkEngine(ctx)
+        return freed
+    }
+
+    /** Drop the stored choices belonging to engines that are gone, so a later
+     * re-import starts clean rather than inheriting settings the person cannot
+     * see any more -- including an off switch, which would make a freshly
+     * imported engine silently absent. */
+    private fun forgetUnits(ctx: Context, units: Collection<String>) {
+        val families = units.mapNotNull { unitFamily(it) }
+        if (families.isEmpty()) return
+        val p = prefs(ctx)
+        val editor = p.edit()
+        val perFamily = listOf(PREF_RATE, PREF_PITCH, PREF_INFLECTION, PREF_VOLUME, PREF_NUMBERS)
+        for (fam in families) {
+            editor.remove(voicePrefKey(fam))
+            for (key in perFamily) editor.remove(settingKey(key, fam))
+            if (p.getString(PREF_FAMILY, null) == fam) editor.remove(PREF_FAMILY)
+        }
+        val disabled = disabledFamilies(ctx).toMutableSet()
+        if (disabled.removeAll(families.toSet())) editor.putStringSet(PREF_DISABLED_FAMILIES, disabled)
+        editor.apply()
+    }
+
     // Read together once per utterance, after resolving its voice.  A key
     // without a family suffix is the fallback for every family, which is
     // what the sliders write when "for every engine" is chosen.

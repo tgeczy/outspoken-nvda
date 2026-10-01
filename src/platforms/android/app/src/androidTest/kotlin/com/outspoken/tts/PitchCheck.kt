@@ -38,18 +38,21 @@ class PitchCheck : Instrumentation() {
     private var pitch = false
     private var report = false
     private var voiceName: String? = null
+    private var removeUnit: String? = null
     private var restoreAfter: (() -> Unit)? = null
 
     override fun onCreate(arguments: Bundle?) {
         pitch = arguments?.getString("pitch") == "true"
         report = arguments?.getString("report") == "true"
         voiceName = arguments?.getString("voice")
+        removeUnit = arguments?.getString("removeUnit")
         super.onCreate(arguments); start()
     }
 
     override fun onStart() {
         if (report) { reportState(); return }
         if (pitch) { checkPitch(); return }
+        removeUnit?.let { checkRemoval(it); return }
         val results = Bundle()
         results.putString("usage", "pass -e pitch true, or -e report true")
         finish(Activity.RESULT_CANCELED, results)
@@ -70,6 +73,17 @@ class PitchCheck : Instrumentation() {
             for ((family, group) in voices.groupBy { it.family })
                 results.putString("family_$family", group.joinToString(" ") { it.name })
             results.putString("default", OutspokenEngine.defaultVoice(targetContext)?.id ?: "none")
+            val units = OutspokenEngine.installedUnits(targetContext)
+            results.putString("units", units.toString())
+            results.putString("dataRoot", OutspokenEngine.dataRoot(targetContext).path)
+            val inbox = OutspokenEngine.inboxRoot(targetContext)
+            results.putString("inbox", inbox?.path ?: "unavailable")
+            results.putString("inboxHolds",
+                inbox?.listFiles()?.joinToString { it.name } ?: "unreadable")
+            results.putString("roots", OutspokenEngine.rootsArgument(targetContext).replace("\n", " | "))
+            for (unit in units)
+                results.putString("unit_$unit",
+                    OutspokenEngine.removableSize(targetContext, listOf(unit)).toString() + " bytes")
             // The arithmetic the fix turns on, reported so a device run states it
             // rather than leaving it to be recomputed by hand.
             for (ratio in listOf(150, 100, 75)) {
@@ -80,6 +94,77 @@ class PitchCheck : Instrumentation() {
         } catch (e: Throwable) {
             results.putString("failure", Log.getStackTraceString(e))
             finish(Activity.RESULT_CANCELED, results)
+        }
+    }
+
+    /** Remove one data unit and report what the app believes afterwards.
+     *
+     * **Destructive, and named explicitly for that reason**: `-e removeUnit
+     * macintalk2` deletes that engine's files on the device it runs on. It takes
+     * a unit rather than defaulting to one, and refuses one that is not there
+     * instead of reporting a cheerful zero.
+     *
+     * `foldersLeft` is the point of the report: a copy surviving in the inbox is
+     * one migrate away from undoing the removal, and this is where that shows.
+     */
+    private fun checkRemoval(unit: String) {
+        val results = Bundle()
+        try {
+            check(unit in ZipImport.UNITS) { "not a data unit: $unit" }
+            val before = OutspokenEngine.installedUnits(targetContext)
+            check(unit in before) { "$unit is not installed; installed: $before" }
+            results.putString("unitsBefore", before.toString())
+            results.putString("sizeBefore",
+                OutspokenEngine.removableSize(targetContext, listOf(unit)).toString())
+            // Speak first, so the removal has a live worker holding the engine
+            // mapped to retire rather than the easy case of one never used.
+            results.putString("warmed", warmWorker())
+            val freed = OutspokenEngine.removeUnits(targetContext, listOf(unit))
+            results.putString("freed", freed.toString())
+            val after = OutspokenEngine.installedUnits(targetContext)
+            results.putString("unitsAfter", after.toString())
+            results.putString("verifiedAfter", OutspokenEngine.verified(targetContext).toString())
+            results.putString("familiesAfter", OutspokenEngine.installedFamilies(targetContext).toString())
+            results.putString("voicesAfter", OutspokenEngine.allVoices(targetContext).size.toString())
+            val left = OutspokenEngine.unitFolders(
+                listOfNotNull(OutspokenEngine.dataRoot(targetContext),
+                              OutspokenEngine.inboxRoot(targetContext)), unit)
+            results.putString("foldersLeft", left.joinToString().ifEmpty { "none" })
+            check(unit !in after) { "$unit is still installed" }
+            check(left.isEmpty()) { "copies of $unit survive: $left" }
+            results.putString("verdict", "$unit removed, no copy left behind")
+            finish(Activity.RESULT_OK, results)
+        } catch (e: Throwable) {
+            results.putString("failure", Log.getStackTraceString(e))
+            finish(Activity.RESULT_CANCELED, results)
+        }
+    }
+
+    /** Render one utterance so the worker process is up and holding its engine
+     * mapped. -> what happened, for the report. */
+    private fun warmWorker(): String {
+        var tts: TextToSpeech? = null
+        return try {
+            val ready = CountDownLatch(1)
+            val client = TextToSpeech(targetContext, { if (it == TextToSpeech.SUCCESS) ready.countDown() },
+                "com.outspoken.tts")
+            tts = client
+            check(ready.await(60, TimeUnit.SECONDS)) { "the engine never initialized" }
+            val done = CountDownLatch(1)
+            client.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String) {}
+                override fun onDone(utteranceId: String) { done.countDown() }
+                override fun onError(utteranceId: String) { done.countDown() }
+                override fun onError(utteranceId: String, code: Int) { done.countDown() }
+            })
+            val file = File(targetContext.filesDir, "warm.wav")
+            check(client.synthesizeToFile("Hello there.", Bundle(), file, "warm") == TextToSpeech.SUCCESS)
+            check(done.await(60, TimeUnit.SECONDS)) { "warm-up render timed out" }
+            "spoke (" + file.length() + " bytes), the worker is live"
+        } catch (e: Throwable) {
+            "warm-up failed: " + e.message
+        } finally {
+            tts?.shutdown()
         }
     }
 

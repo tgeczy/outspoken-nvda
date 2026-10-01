@@ -34,6 +34,9 @@ class SettingsActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var importStatus: TextView
+    private lateinit var removeStatus: TextView
+    private lateinit var removeButton: Button
+    @Volatile private var removing = false
     private var engineHolder: LinearLayout? = null
     private var importDialog: android.app.AlertDialog? = null
     private var importBar: android.widget.ProgressBar? = null
@@ -165,6 +168,7 @@ class SettingsActivity : Activity() {
      * with a stub that does nothing but say so; better to say so here. */
     private fun pickZip() {
         if (importJob != null) { toast("An import is already running."); return }
+        if (removing) { toast("Engine data is being removed; wait for it to finish."); return }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
@@ -194,6 +198,7 @@ class SettingsActivity : Activity() {
      * once OK is pressed -- do it. */
     private fun importZip(source: ZipImport.Source, confirm: Boolean) {
         if (importJob != null) { toast("An import is already running."); return }
+        if (removing) { toast("Engine data is being removed; wait for it to finish."); return }
         importStatus.text = "Checking ${source.name}…"
         val checking = android.app.AlertDialog.Builder(this)
             .setTitle("Checking zip")
@@ -459,6 +464,22 @@ class SettingsActivity : Activity() {
             "screen after a restart, before the phone is unlocked. The folder " +
             "above is empty again afterwards; that is the move, not a loss."))
         moveStatus = body("").also { root.addView(it) }
+
+        // The other direction.  Switching a family off in Engine settings hides
+        // its voices and keeps the files; this is for somebody who does not want
+        // an engine on the phone at all, and without it the only way out is a
+        // file manager pointed at an app's private storage.
+        root.addView(body(
+            "\nTo free the space an engine takes, remove its files here. This deletes " +
+            "engine data you imported; it does not uninstall the app, and you can " +
+            "import it again later. To keep the files but hide an engine's voices, use " +
+            "the switches in Engine settings instead."))
+        removeButton = Button(this).apply {
+            text = "Remove engine data"
+            setOnClickListener { pickRemovals() }
+        }
+        root.addView(removeButton)
+        removeStatus = body("").also { root.addView(it) }
 
         root.addView(heading("2.  Check the engine"))
         root.addView(Button(this).apply {
@@ -1125,6 +1146,120 @@ class SettingsActivity : Activity() {
         } catch (e: Exception) {
             updateStatus?.text = "No browser could open $url."
         }
+    }
+
+    // ---- removing engine data ----------------------------------------------
+
+    /** Check off any number of units, then confirm once for all of them.
+     *
+     * The units are the importer's, because they are what is actually on disk:
+     * an engine folder each, and one `voices` folder that every engine reads.
+     * That last one is why this is not quite the sibling project's dialog --
+     * there a generation is one self-contained folder, here removing `voices`
+     * silences engines whose own files are still present, so it says so. */
+    private fun pickRemovals() {
+        if (removing) { toast("A removal is already running."); return }
+        if (importJob != null) { toast("An import is running; wait for it to finish."); return }
+        val units = OutspokenEngine.installedUnits(this)
+        if (units.isEmpty()) {
+            removeStatus.text = "There is no engine data to remove."
+            toast("No engine data is installed.")
+            return
+        }
+        val labels = units.map { unit ->
+            val size = ZipImport.sizeText(OutspokenEngine.removableSize(this, listOf(unit)))
+            if (unit == ZipImport.VOICES) "Voices — $size, shared by every engine"
+            else "${ZipImport.unitLabel(unit)} — $size"
+        }.toTypedArray()
+        val checked = BooleanArray(units.size)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Remove engine data")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton("Remove…") { _, _ ->
+                val chosen = units.filterIndexed { i, _ -> checked[i] }
+                if (chosen.isEmpty()) toast("Nothing was selected.") else confirmRemoval(chosen)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Name what goes and what it frees, and say plainly what it costs.
+     *
+     * Deleting data somebody spent an evening copying over deserves a second
+     * question -- and one that says the files are theirs to put back, so the
+     * answer is a decision rather than a fright. */
+    private fun confirmRemoval(units: List<String>) {
+        val bytes = OutspokenEngine.removableSize(this, units)
+        val names = units.joinToString(", ") {
+            if (it == ZipImport.VOICES) "Voices" else ZipImport.unitLabel(it)
+        }
+        val remaining = OutspokenEngine.installedUnits(this).filter { it !in units }
+        // Removing the voices leaves engines that cannot speak, and removing the
+        // last engine leaves voices nothing can read. Either way the result is
+        // silence, and either way it is better said now than discovered.
+        val voicesGoing = ZipImport.VOICES in units
+        val enginesLeft = remaining.any { it != ZipImport.VOICES }
+        val after = when {
+            remaining.isEmpty() ->
+                "\n\nThis removes everything, so the engine will have no voices until you " +
+                "import again, and apps will stop offering it."
+            voicesGoing ->
+                "\n\nThis removes the voices every engine reads, so nothing will speak " +
+                "until you import voices again, even though the engine files stay."
+            !enginesLeft ->
+                "\n\nThis removes the last engine, so the voices that stay behind will " +
+                "have nothing to read them until you import an engine again."
+            else -> "\n\nStill installed afterwards: " + remaining.joinToString(", ") {
+                if (it == ZipImport.VOICES) "Voices" else ZipImport.unitLabel(it)
+            } + "."
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Remove $names?")
+            .setMessage("This deletes the files for $names and frees about " +
+                        "${ZipImport.sizeText(bytes)}. Your own copy of the data is not " +
+                        "touched, so you can import it again later." + after)
+            .setPositiveButton("Remove") { _, _ -> startRemoval(units) }
+            .setNegativeButton("Cancel") { _, _ -> removeStatus.text = "Nothing was removed." }
+            .show()
+    }
+
+    /** Off the main thread: it retires the worker process and deletes hundreds
+     * of megabytes, either of which would freeze the screen where it stands. */
+    private fun startRemoval(units: List<String>) {
+        removing = true
+        removeButton.isEnabled = false
+        removeStatus.text = "Removing…"
+        Thread({
+            val freed = try {
+                OutspokenEngine.removeUnits(this, units) { unit ->
+                    val label = if (unit == ZipImport.VOICES) "Voices" else ZipImport.unitLabel(unit)
+                    runOnUiThread { removeStatus.text = "Removing $label…" }
+                }
+            } catch (e: Throwable) {
+                Log.w("OutspokenSettings", "removal failed", e)
+                runOnUiThread {
+                    removing = false
+                    removeButton.isEnabled = true
+                    removeStatus.text = "Removal failed: ${e.message}"
+                }
+                return@Thread
+            }
+            runOnUiThread {
+                removing = false
+                removeButton.isEnabled = true
+                val names = units.joinToString(", ") {
+                    if (it == ZipImport.VOICES) "Voices" else ZipImport.unitLabel(it)
+                }
+                removeStatus.text = "Removed $names, freeing ${ZipImport.sizeText(freed)}."
+                try { removeStatus.announceForAccessibility(removeStatus.text) } catch (e: Throwable) {}
+                toast("Removed $names.")
+                // The voice list, the gate and the family switches all move when
+                // data goes; rebuild them rather than leave a list naming voices
+                // that are not there any more.
+                refresh()
+                refreshSettings(true)
+            }
+        }, "outspoken-remove").apply { priority = Thread.MIN_PRIORITY }.start()
     }
 
     private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
