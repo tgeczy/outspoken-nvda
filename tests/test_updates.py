@@ -73,49 +73,98 @@ def test_the_running_version_is_found():
     assert updates.parse_version(updates.installed_version()) is not None
 
 
-def test_the_tag_page_and_addon_come_back_from_the_payload():
+def _release(tag, assets, page=None, draft=False, prerelease=False):
+    return {
+        "tag_name": tag,
+        "html_url": page or ("https://example.invalid/releases/tag/" + tag),
+        "draft": draft, "prerelease": prerelease,
+        "assets": [{"name": n, "browser_download_url": "https://example.invalid/" + n}
+                   for n in assets],
+    }
+
+
+def _answer(releases):
     def opener(url):
-        assert url == updates.LATEST_API
-        return json.dumps({
-            "tag_name": "v9.9.9",
-            "html_url": "https://example.invalid/releases/tag/x",
-            "assets": [
-                {"name": "outspoken-sapi-9.9.9-setup.exe",
-                 "browser_download_url": "https://example.invalid/setup.exe"},
-                {"name": "outspoken-9.9.9.nvda-addon",
-                 "browser_download_url": "https://example.invalid/a.nvda-addon"},
-            ],
-        }).encode("utf-8")
-
-    tag, url, addon = updates.latest_release(opener=opener)
-    assert tag == "v9.9.9"
-    assert url == "https://example.invalid/releases/tag/x"
-    # The installer exe is not what NVDA installs; the picker steps over it.
-    assert addon == "https://example.invalid/a.nvda-addon"
+        assert url == updates.RELEASES_API
+        return json.dumps(releases).encode("utf-8")
+    return updates.latest_release(opener=opener)
 
 
-def test_a_release_without_an_addon_asset_offers_the_page_alone():
-    def opener(url):
-        return json.dumps({
-            "tag_name": "v9.9.9",
-            "html_url": "https://example.invalid/releases/tag/x",
-        }).encode("utf-8")
+def test_the_version_page_and_addon_come_back_from_the_payload():
+    version, url, addon = _answer([_release("v9.9.9", [
+        "outspoken-sapi-9.9.9-setup.exe",
+        "outspoken-9.9.9.nvda-addon",
+    ])])
+    assert version == "9.9.9"
+    assert url == "https://example.invalid/releases/tag/v9.9.9"
+    # The installer exe is not what NVDA installs; the picker must step over
+    # it to the .nvda-addon, whatever order GitHub lists them in.
+    assert addon.endswith("outspoken-9.9.9.nvda-addon")
 
-    tag, url, addon = updates.latest_release(opener=opener)
-    assert tag and url
+
+def test_the_version_is_the_addon_file_and_not_the_tag():
+    """The whole point, and the repository's real shape: 2.0.2 is an Android
+    release that carries the 2.0.1 add-on, so that every file for a version is
+    findable in one place. Read the tag here and somebody on 2.0.1 is offered
+    the add-on they already have, forever."""
+    version, url, addon = _answer([
+        _release("v2.0.2", ["outspoken-2.0.2.apk", "outspoken-2.0.1.nvda-addon"]),
+        _release("v2.0.1", ["outspoken-2.0.1.nvda-addon"]),
+    ])
+    assert version == "2.0.1"
+    assert updates.is_newer(version, "2.0.1") is False
+    # ...and the link goes to the newest release carrying it, which is where
+    # somebody following it expects to land.
+    assert url.endswith("v2.0.2")
+
+
+def test_a_newer_addon_further_down_the_list_still_wins():
+    """Releases arrive newest first, but the newest *add-on* decides."""
+    version, _, addon = _answer([
+        _release("v2.0.3", ["outspoken-2.0.3.apk"]),
+        _release("v2.0.2", ["outspoken-2.0.2.nvda-addon"]),
+    ])
+    assert version == "2.0.2"
+    assert addon.endswith("outspoken-2.0.2.nvda-addon")
+
+
+def test_drafts_and_prereleases_are_passed_over():
+    version, _, _ = _answer([
+        _release("v9.9.9", ["outspoken-9.9.9.nvda-addon"], draft=True),
+        _release("v9.9.8", ["outspoken-9.9.8.nvda-addon"], prerelease=True),
+        _release("v2.0.1", ["outspoken-2.0.1.nvda-addon"]),
+    ])
+    assert version == "2.0.1"
+
+
+def test_the_siblings_addon_is_not_mistaken_for_ours():
+    """The two add-ons share a shape and may share a release page."""
+    version, _, addon = _answer([_release("v2.0.1", [
+        "pantheraspeech-9.9.9.nvda-addon",
+        "outspoken-2.0.1.nvda-addon",
+    ])])
+    assert version == "2.0.1"
+    assert addon.endswith("outspoken-2.0.1.nvda-addon")
+
+
+def test_the_apk_is_not_mistaken_for_the_addon():
+    """They share the stem and differ only by extension."""
+    version, why, addon = _answer([_release("v2.0.1", ["outspoken-2.0.1.apk"])])
+    assert version is None
     assert addon is None
 
 
-def test_a_release_with_no_version_in_it_is_refused():
-    """Rather than reported as an update to something unnameable."""
-    def opener(url):
-        return json.dumps({"tag_name": "nightly"}).encode("utf-8")
-
-    tag, why, addon = updates.latest_release(opener=opener)
-    assert tag is None
-    assert "version" in why
+def test_a_release_without_an_addon_asset_offers_nothing_to_update_to():
+    version, why, addon = _answer([_release("v9.9.9", ["notes.txt"])])
+    assert version is None
+    assert "add-on" in why
     assert addon is None
 
+
+def test_an_addon_with_no_version_in_its_name_is_refused():
+    version, why, addon = _answer([_release("nightly", ["outspoken.nvda-addon"])])
+    assert version is None
+    assert addon is None
 
 def test_a_network_failure_is_a_reason_and_not_a_traceback():
     def opener(url):

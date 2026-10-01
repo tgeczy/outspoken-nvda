@@ -19,19 +19,29 @@ import java.net.URL
  * kept for the same reason: an engine that quietly contacts a server on its
  * own tells that server when its owner picked the phone up.
  *
- * `/releases/latest` is not consulted. That is pinned to the newest release
- * carrying the desktop files, so the NVDA and SAPI updaters stay quiet about
- * Android-only releases; this walks the recent releases for the newest one
- * that carries an APK. The version comparison is pure and tested; the fetch
- * is the smallest piece that reaches the network.
+ * `/releases/latest` is not consulted, and **the version does not come from the
+ * tag**. A release carries assets for things that do not move together -- the
+ * APK, the add-on, the SAPI installer, the Linux tarballs -- so a release whose
+ * tag is newer than its APK would announce an update that is not there, offer
+ * the file already installed, and go on offering it, because what is installed
+ * never catches up with a tag. Each thing is versioned by its own asset's
+ * filename instead: `outspoken-2.0.2.apk` says 2.0.2 wherever it hangs. This
+ * walks the recent releases for the newest such APK. The version comparison is
+ * pure and tested; the fetch is the smallest piece that reaches the network.
  */
 object Updates {
     const val RELEASES_API =
         "https://api.github.com/repos/tgeczy/outspoken-nvda/releases?per_page=20"
     const val RELEASES_PAGE = "https://github.com/tgeczy/outspoken-nvda/releases"
 
+    /** What this project's APK asset is called. Pinned to the shape rather than
+     * to `.apk` alone, so the sibling project's APK -- or a one-off build -- on
+     * the same release is not mistaken for this one. The add-on shares the stem
+     * and is told apart by the extension. */
+    val APK_ASSET = Regex("""^outspoken-\d[\d.]*\.apk$""", RegexOption.IGNORE_CASE)
+
     class Release(val version: String, val page: String, val apk: String) {
-        /** "2.0.0" out of "v2.0.0". */
+        /** "2.0.2" out of "outspoken-2.0.2.apk". */
         val number: String get() = parseVersion(version)?.joinToString(".") ?: version
     }
 
@@ -72,21 +82,19 @@ object Updates {
         for (i in 0 until releases.length()) {
             val r = releases.getJSONObject(i)
             if (r.optBoolean("draft", false) || r.optBoolean("prerelease", false)) continue
-            val tag = if (r.has("tag_name")) r.getString("tag_name") else r.optString("name", "")
-            if (parseVersion(tag) == null) continue
             val assets = r.optJSONArray("assets") ?: continue
-            var apk: String? = null
+            val page = if (r.has("html_url")) r.getString("html_url") else RELEASES_PAGE
             for (j in 0 until assets.length()) {
                 val a = assets.getJSONObject(j)
-                if (a.optString("name", "").endsWith(".apk", ignoreCase = true)
-                        && a.has("browser_download_url")) {
-                    apk = a.getString("browser_download_url")
-                    break
-                }
+                val name = a.optString("name", "")
+                if (!APK_ASSET.matches(name) || !a.has("browser_download_url")) continue
+                if (parseVersion(name) == null) continue
+                // Newest release first, so a strict comparison keeps the page
+                // link on the first release carrying a given APK.
+                if (best == null || isNewer(name, best.version))
+                    best = Release(name, page, a.getString("browser_download_url"))
+                break
             }
-            if (apk == null) continue
-            val page = if (r.has("html_url")) r.getString("html_url") else RELEASES_PAGE
-            if (best == null || isNewer(tag, best.version)) best = Release(tag, page, apk)
         }
         return best
     }

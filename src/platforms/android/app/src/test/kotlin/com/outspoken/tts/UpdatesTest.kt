@@ -34,7 +34,7 @@ class UpdatesTest {
         ]
     """.trimIndent()
 
-    @Test fun versionsAreReadOutOfTags() {
+    @Test fun versionsAreReadOutOfNames() {
         assertEquals(listOf(3, 0, 2), Updates.parseVersion("v3.0.2"))
         assertEquals(listOf(3, 1), Updates.parseVersion("3.1"))
         assertNull(Updates.parseVersion("no numbers here"))
@@ -63,6 +63,68 @@ class UpdatesTest {
         val newest = Updates.newestApk(releases)!!
         assertFalse(newest.apk.contains("draft"))
         assertFalse(newest.apk.contains("rc"))
+    }
+
+    @Test fun theVersionIsTheApkFileAndNotTheTag() {
+        // The repository's real shape: an Android release carries the previous
+        // add-on and installer, so every file for a version is in one place. The
+        // APK is what decides, so somebody on it is not offered it again.
+        val json = """
+            [
+              {"tag_name": "v2.0.2", "draft": false, "prerelease": false,
+               "html_url": "https://example/2.0.2",
+               "assets": [{"name": "outspoken-2.0.2.apk", "browser_download_url": "https://example/2.0.2.apk"},
+                          {"name": "outspoken-2.0.1.nvda-addon", "browser_download_url": "https://example/old.nvda-addon"}]},
+              {"tag_name": "v2.0.1", "draft": false, "prerelease": false,
+               "html_url": "https://example/2.0.1",
+               "assets": [{"name": "outspoken-2.0.1.apk", "browser_download_url": "https://example/2.0.1.apk"}]}
+            ]
+        """.trimIndent()
+        val newest = Updates.newestApk(json)!!
+        assertEquals("2.0.2", newest.number)
+        assertFalse(Updates.isNewer(newest.version, "2.0.2"))
+        assertTrue(Updates.isNewer(newest.version, "2.0.1"))
+    }
+
+    @Test fun aNewerApkFurtherDownTheListStillWins() {
+        // A later release carrying only desktop files must not hide an APK
+        // published before it.
+        val json = """
+            [
+              {"tag_name": "v2.1.0", "draft": false, "prerelease": false,
+               "html_url": "https://example/2.1.0",
+               "assets": [{"name": "outspoken-2.1.0.nvda-addon", "browser_download_url": "https://example/a"}]},
+              {"tag_name": "v2.0.2", "draft": false, "prerelease": false,
+               "html_url": "https://example/2.0.2",
+               "assets": [{"name": "outspoken-2.0.2.apk", "browser_download_url": "https://example/2.0.2.apk"}]}
+            ]
+        """.trimIndent()
+        val newest = Updates.newestApk(json)!!
+        assertEquals("2.0.2", newest.number)
+        assertEquals("https://example/2.0.2", newest.page)
+    }
+
+    @Test fun theSiblingsApkIsNotMistakenForOurs() {
+        val json = """
+            [{"tag_name": "v9.9.9", "draft": false, "prerelease": false,
+              "html_url": "https://example/x",
+              "assets": [{"name": "panthera-android-9.9.9.apk", "browser_download_url": "https://example/theirs.apk"},
+                         {"name": "outspoken-2.0.2.apk", "browser_download_url": "https://example/ours.apk"}]}]
+        """.trimIndent()
+        val newest = Updates.newestApk(json)!!
+        assertEquals("2.0.2", newest.number)
+        assertEquals("https://example/ours.apk", newest.apk)
+    }
+
+    @Test fun theAddonIsNotMistakenForTheApk() {
+        // They share the stem and differ only by extension.
+        assertNull(Updates.newestApk("""[{"tag_name": "v2.0.1", "draft": false, "prerelease": false,
+            "assets": [{"name": "outspoken-2.0.1.nvda-addon", "browser_download_url": "u"}]}]"""))
+    }
+
+    @Test fun anApkWithNoVersionInItsNameIsRefused() {
+        assertNull(Updates.newestApk("""[{"tag_name": "v9.9", "draft": false, "prerelease": false,
+            "assets": [{"name": "outspoken.apk", "browser_download_url": "u"}]}]"""))
     }
 
     @Test fun aListWithoutAnApkAnswersNothing() {

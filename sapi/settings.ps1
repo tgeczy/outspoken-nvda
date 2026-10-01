@@ -604,34 +604,69 @@ $updates.Add_Click({
     # GitHub is TLS 1.2 or nothing; older .NET defaults to less.  Additive,
     # and forgiven where the enum does not exist.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
-    $tag = $null; $asset = $null; $problem = $null
+    # **The version comes from the installer's own filename, not from the release
+    # tag, and the recent releases are walked rather than just the latest one.**
+    #
+    # Only one release can be GitHub's "latest", and a release carries assets for
+    # things that do not move together -- this installer, the add-on, the APK, the
+    # Linux tarballs.  Reading the tag meant a release whose tag was newer than its
+    # installer announced an update that was not there: run it and the same version
+    # installs again, and it is offered again next time, because what is installed
+    # never catches up with a tag.  The old answer was to leave an Android-only
+    # release unmarked, which left the newest release findable only by knowing it
+    # was there.
+    #
+    # So `outspoken-sapi-2.0.1-setup.exe` says 2.0.1 wherever it hangs, and the
+    # newest such installer across the releases wins.  The JSON is parsed rather
+    # than pattern-matched as text, because the first `-setup.exe` in the text is
+    # whichever release GitHub listed first and need not be the newest installer --
+    # nor even this project's.
+    $newest = $null; $asset = $null; $problem = $null
     try {
         $wc = New-Object Net.WebClient
         $wc.Headers.Add('User-Agent','outspoken-sapi-settings')
-        $json = $wc.DownloadString('https://api.github.com/repos/tgeczy/outspoken-nvda/releases/latest')
-        if ($json -match '"tag_name"\s*:\s*"([^"]+)"') { $tag = $matches[1] }
-        if ($json -match '"browser_download_url"\s*:\s*"([^"]*-setup\.exe)"') { $asset = $matches[1] }
+        $json = $wc.DownloadString('https://api.github.com/repos/tgeczy/outspoken-nvda/releases?per_page=20')
+        # Assigned before the loop on purpose.  PowerShell 5.1's ConvertFrom-Json
+        # hands a JSON array down the pipeline as ONE object, so
+        # `foreach ($r in @($json | ConvertFrom-Json))` runs once with $r set to the
+        # whole array -- and `$r.draft` is then an array of booleans, which is
+        # truthy, so every release was skipped and no installer was ever found.
+        # Assigning first collects it as a real array that foreach enumerates.
+        $releases = $json | ConvertFrom-Json
+        foreach ($release in $releases) {
+            # A draft under test must never advertise itself to everybody.
+            if ($release.draft -or $release.prerelease) { continue }
+            foreach ($a in @($release.assets)) {
+                if ($a.name -notmatch '^outspoken-sapi-\d[\d.]*(-r\d+)?-setup\.exe$') { continue }
+                $found = [regex]::Match($a.name, '\d+(\.\d+)*')
+                if (-not $found.Success) { continue }
+                if (-not $newest -or (Compare-Versions $found.Value $newest) -gt 0) {
+                    $newest = $found.Value; $asset = $a.browser_download_url
+                }
+                break
+            }
+        }
     } catch { $problem = $_.Exception.Message }
     $status.Text = ''
-    if ($problem -or (-not $tag)) {
-        if (-not $problem) { $problem = 'the newest release could not be read' }
+    if ($problem -or (-not $newest)) {
+        if (-not $problem) { $problem = 'no release offers an installer to update to' }
         [Windows.Forms.MessageBox]::Show($form,("Could not check for updates:`n`n{0}" -f $problem),'outSPOKEN SAPI','OK','Warning') | Out-Null
         return
     }
     $installed = Get-InstalledSapiVersion
     if (-not $installed) {
-        [Windows.Forms.MessageBox]::Show($form,("The newest release is {0}. No installed copy was found to compare against." -f $tag),'outSPOKEN SAPI','OK','Information') | Out-Null
+        [Windows.Forms.MessageBox]::Show($form,("The newest release is {0}. No installed copy was found to compare against." -f $newest),'outSPOKEN SAPI','OK','Information') | Out-Null
         return
     }
-    if ((Compare-Versions $tag $installed) -le 0) {
+    if ((Compare-Versions $newest $installed) -le 0) {
         [Windows.Forms.MessageBox]::Show($form,("You have the newest version, {0}." -f $installed),'outSPOKEN SAPI','OK','Information') | Out-Null
         return
     }
     if (-not $asset) {
-        [Windows.Forms.MessageBox]::Show($form,("A newer version exists ({0}), but its installer could not be found on the release. Visit the releases page to download it." -f $tag),'outSPOKEN SAPI','OK','Warning') | Out-Null
+        [Windows.Forms.MessageBox]::Show($form,("A newer version exists ({0}), but its installer could not be found on the release. Visit the releases page to download it." -f $newest),'outSPOKEN SAPI','OK','Warning') | Out-Null
         return
     }
-    $answer = [Windows.Forms.MessageBox]::Show($form,("A newer version is available: {0}. You have {1}.`n`nDownload and run the installer now? It will ask before changing anything." -f $tag,$installed),'outSPOKEN SAPI','YesNo','Question')
+    $answer = [Windows.Forms.MessageBox]::Show($form,("A newer version is available: {0}. You have {1}.`n`nDownload and run the installer now? It will ask before changing anything." -f $newest,$installed),'outSPOKEN SAPI','YesNo','Question')
     if ($answer -ne 'Yes') { return }
     $parts = $asset -split '/'
     $file = Join-Path $env:TEMP $parts[$parts.Length - 1]
