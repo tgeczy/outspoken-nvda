@@ -70,9 +70,10 @@ stay in step.
 ## Everything else
 
 No change to the NVDA add-on, the SAPI voices or the Linux builds. The NVDA
-add-on and the SAPI installer attached below are the 2.0.1 files, unchanged and
-offered for convenience; your add-on and SAPI installs will not offer you an
-update, and do not need one.
+add-on, the SAPI installer and the Linux tarballs attached below are the 2.0.1
+files, unchanged and kept here so that everything for this version can be found
+in one place; your add-on and SAPI installs will not offer you an update, and do
+not need one.
 
 Nothing of Apple's or Berkeley's is included. Keep using your extracted data.
 
