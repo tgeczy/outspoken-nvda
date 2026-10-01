@@ -1,38 +1,44 @@
 # outSPOKEN 2.0.2
 
-**An Android release.** Capital letters can be heard on Android, and engine data
-you no longer want can be removed from the phone. The NVDA add-on, the SAPI
+**An Android release.** Pitch changes are heard on Android at last, and engine
+data you no longer want can be removed from the phone. The NVDA add-on, the SAPI
 voices and the Linux builds are unchanged.
 
-## Capital letters are heard again
+## Pitch changes are heard again
 
-The Android app gave no sign of a capital letter, and the pitch a calling app
-asked for was ignored entirely — which meant **the system pitch slider**, in
-Android's own Text-to-speech settings, did nothing either. If you had given up
-on that slider, it is worth another try.
+**The Android app ignored the pitch a calling app asked for**, and told the host
+the offset was zero every time. So nothing that asked for a pitch got it: not
+**the system pitch slider** in Android's own Text-to-speech settings, and not any
+pitch change a screen reader makes to tell you something. If you had given up on
+that slider, it is worth another try.
 
-The NVDA add-on has raised capitals since 2.0.0, and the engines have all been
-able to change pitch since before that. The gap was one number the app never
-passed along: it asked the host to apply the pitch offset and always told it
-zero. The host already knew what to do with a real one — it has carried the
-add-on's own capital-pitch offset from the beginning, including the part where
-MacinTalk 1 moves its pitch in hertz while the Speech Manager engines move
-theirs in musical steps.
+The easiest one to hear is **deleting text**: TalkBack speaks the character it
+removed at a raised pitch, and on outSPOKEN that character used to come back at
+the same pitch as everything else. Tomi confirmed it by ear this way, on this app
+and on Panthera's. For capital letters specifically, how TalkBack marks them is
+TalkBack's own setting rather than ours -- saying the word "capital" is what it
+does by default, and it does not announce every capital as you type the way
+VoiceOver does. If you set it to change pitch instead, that now works.
 
-So the offset now uses the same scale the NVDA add-on uses, and a capital is
-raised by the same amount in both. Nothing changes for an app that never asks
-for a pitch, which is most of them.
+The NVDA add-on has raised pitch on request since 2.0.0, and the engines have all
+been able to change pitch since before that. The gap was one number the app never
+passed along. The host already knew what to do with a real one -- it has carried
+the add-on's own offset from the beginning, including the part where MacinTalk 1
+moves its pitch in hertz while the Speech Manager engines move theirs in musical
+steps -- so the offset now uses the same scale the add-on uses, and the same
+request is raised by the same amount in both. Nothing changes for an app that
+never asks for a pitch, which is most of them.
 
-Measured on the Nothing Phone through Android's own speech client — not through
+Measured on the Nothing Phone through Android's own speech client -- not through
 a shortcut into the engine, since the gap was in the layer a shortcut would have
-skipped — and **on all five engines**: MacinTalk 1, 2, 3, Pro, and Pro's Spanish
+skipped -- and **on all five engines**: MacinTalk 1, 2, 3, Pro, and Pro's Spanish
 voices. Each one speaks differently at normal, raised and lowered pitch, and
 coming back to normal reproduces the original audio exactly. That last check is
-the capital-letter case itself: one word raised, the next back down, with
-nothing left behind to drift the pitch of everything after it.
+the one that matters for a raised character: one word up, the next back down,
+with nothing left behind to drift the pitch of everything after it.
 
 The host's own pitch arithmetic is held to the add-on's, value for value, by
-`tools/settings_oracle.py` — 3989 cases, no disagreement — which is why one
+`tools/settings_oracle.py` -- 3989 cases, no disagreement -- which is why one
 setting means one thing on NVDA, SAPI, Android and Linux alike.
 
 ## Removing engine data from the phone
