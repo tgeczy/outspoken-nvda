@@ -1,7 +1,7 @@
 # outSPOKEN 2.0.3
 
 **A battery fix for the SAPI voices.** Only the SAPI installer is new; the voices
-sound exactly as they did, and nothing changes for NVDA, Android or Linux.
+sound exactly as they did, and nothing changes for NVDA or Android.
 
 ## What was wrong
 
@@ -33,9 +33,12 @@ family. Windows 7 was not available to test.
 
 ## Everything else
 
-The NVDA add-on, the APK and the Linux tarballs attached here are the 2.0.2
-files, unchanged, so their update checks stay quiet: each one reads the version
-off its own file.
+The NVDA add-on and the APK attached here are the 2.0.2 files, unchanged, so
+their update checks stay quiet: each one reads the version off its own file.
+
+The Linux tarballs are built for 2.0.3 as this release is published. The only
+change in them is the same fix to `osp_host --serve`, which matters only to
+something you have connected to it yourself; the 2.0.2 tarballs stay alongside.
 
 Nothing of Apple's or Berkeley's is included. Keep using your extracted data.
 
