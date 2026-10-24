@@ -143,9 +143,11 @@ static void serve_reader(void *arg)
             while (g_serve.qn >= SERVE_QUEUE) { osp_plat_unlock(); osp_plat_sleep_ms(5); osp_plat_lock(); }
             g_serve.queue[g_serve.qn++] = r;
             osp_plat_unlock();
+            osp_plat_wake();
         }
     }
     g_serve.eof = 1;
+    osp_plat_wake();
 }
 
 static int serve_write(const void *p, int n) { return osp_plat_write_all(g_serve.out_fd, p, n); }
@@ -315,7 +317,12 @@ OSP_API int osp_serve_run(const char *roots, int in_fd, int out_fd)
         osp_plat_unlock();
         if (!have) {
             if (g_serve.eof) break;
-            osp_plat_sleep_ms(2);
+            /* Asleep until the reader queues something or the input closes.
+             * This was a 2 ms poll, which kept an idle SAPI host waking 63
+             * times a second for as long as a program held the voice; the
+             * wake now comes the moment a request lands, so nothing is
+             * slower.  The bound is only a backstop. */
+            osp_plat_wait(1000);
             continue;
         }
         osp_plat_lock();

@@ -49,6 +49,34 @@ void osp_plat_sleep_ms(int ms)
 void osp_plat_lock(void)   { pthread_mutex_lock(&g_mutex); }
 void osp_plat_unlock(void) { pthread_mutex_unlock(&g_mutex); }
 
+/* A flag under its own mutex, so a wake with nobody waiting is kept. */
+static pthread_mutex_t g_wake_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_wake_cond = PTHREAD_COND_INITIALIZER;
+static int g_woken;
+
+void osp_plat_wake(void)
+{
+    pthread_mutex_lock(&g_wake_mutex);
+    g_woken = 1;
+    pthread_cond_signal(&g_wake_cond);
+    pthread_mutex_unlock(&g_wake_mutex);
+}
+
+void osp_plat_wait(int ms)
+{
+    struct timespec until;
+    if (ms < 0) ms = 0;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += ms / 1000;
+    until.tv_nsec += (long)(ms % 1000) * 1000000L;
+    if (until.tv_nsec >= 1000000000L) { until.tv_sec++; until.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&g_wake_mutex);
+    while (!g_woken)
+        if (pthread_cond_timedwait(&g_wake_cond, &g_wake_mutex, &until) != 0) break;
+    g_woken = 0;
+    pthread_mutex_unlock(&g_wake_mutex);
+}
+
 void osp_plat_stdio_binary(void) { }
 
 int osp_plat_claim_stdout(void)

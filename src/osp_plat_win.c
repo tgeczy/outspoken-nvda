@@ -44,6 +44,21 @@ void osp_plat_sleep_ms(int ms) { Sleep(ms < 0 ? 0 : (DWORD)ms); }
 void osp_plat_lock(void)   { cs_init(); EnterCriticalSection(&g_cs); }
 void osp_plat_unlock(void) { LeaveCriticalSection(&g_cs); }
 
+/* An auto-reset event, made by whichever thread gets here first. */
+static HANDLE g_wake;
+
+static HANDLE wake_event(void)
+{
+    if (!g_wake) {
+        HANDLE h = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (InterlockedCompareExchangePointer((PVOID *)&g_wake, h, NULL) != NULL) CloseHandle(h);
+    }
+    return g_wake;
+}
+
+void osp_plat_wake(void) { SetEvent(wake_event()); }
+void osp_plat_wait(int ms) { WaitForSingleObject(wake_event(), ms < 0 ? 0 : (DWORD)ms); }
+
 void osp_plat_stdio_binary(void)
 {
     _setmode(_fileno(stdin), _O_BINARY);

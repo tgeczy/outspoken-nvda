@@ -24,6 +24,13 @@ void osp_plat_sleep_ms(int ms);
 void osp_plat_lock(void);
 void osp_plat_unlock(void);
 
+/* One process-wide wake-up, so a thread with nothing to do can sleep until
+ * there is something instead of polling for it.  A wake sent while nobody
+ * waits is kept for the next wait, never lost.  The wait returns after at
+ * most `ms` either way. */
+void osp_plat_wake(void);
+void osp_plat_wait(int ms);
+
 /* Put fd 0 and fd 1 into binary mode (a no-op off Windows). */
 void osp_plat_stdio_binary(void);
 
