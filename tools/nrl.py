@@ -43,6 +43,10 @@ VOICED = set("BDVGJLMNRWZ")                     # '.'
 SIBILANTS = set("SCGZXJ")                       # '&', plus CH and SH
 RULE_U = set("TSRDLZNJ")                        # '@', plus TH CH SH
 SUFFIXES = ("ER", "E", "ES", "ED", "ING", "ELY")    # '%'
+# What a word is made of, for ' ' in a context: the letters, and the
+# apostrophe in both its spellings, which the contraction rules ([ON'T], 'S,
+# 'LL) treat as part of the word.
+WORD = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ'’")
 
 
 class Rules(object):
@@ -153,8 +157,15 @@ def respell(text, dictionary):
 #
 # Left context is matched right-to-left from just before the focus; right
 # context left-to-right from just after it.  Everything is uppercase and the
-# text is padded with spaces, so ' ' in a rule means a word boundary and needs
-# no special case.
+# text is padded with spaces.
+#
+# **' ' in a rule is the edge of a word, not a space character** -- in NRL's
+# notation a blank is the beginning or end of a word.  Reading it as a literal
+# space passed every whole-word assertion in RULZ, because those are words on
+# their own, and broke every word with punctuation after it: "hello," lost the
+# rule for a final O and said "hellaw", "try." said "tree", "go," "gah"
+# (issue #5).  It still consumes the one character it matched, as the space
+# did, so ` [THE] #` and `? [X] ?` read the same as before.
 
 def _suffix_at(text, i):
     """Length of the suffix at `i`, or 0.
@@ -168,7 +179,7 @@ def _suffix_at(text, i):
     """
     for s in sorted(SUFFIXES, key=len, reverse=True):
         j = i + len(s)
-        if text[i:j] == s and (j >= len(text) or text[j] == " "):
+        if text[i:j] == s and (j >= len(text) or text[j] not in WORD):
             return len(s)
     return 0
 
@@ -218,6 +229,11 @@ def _match_right(text, i, pat):
             if i >= len(text) or not text[i].isdigit():
                 return False
             i += 1
+        elif c == " ":                     # the edge of the word
+            if i < len(text):
+                if text[i] in WORD:
+                    return False
+                i += 1
         else:
             if i >= len(text) or text[i] != c:
                 return False
@@ -268,6 +284,11 @@ def _match_left(text, i, pat):
             if i <= 0 or not text[i - 1].isdigit():
                 return False
             i -= 1
+        elif c == " ":                     # the edge of the word
+            if i > 0:
+                if text[i - 1] in WORD:
+                    return False
+                i -= 1
         else:
             if i <= 0 or text[i - 1] != c:
                 return False

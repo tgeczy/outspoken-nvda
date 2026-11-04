@@ -138,6 +138,7 @@ def corpus(rules, dictionary):
             "it's", "don't", "won't", "o'brien", "rock'n'roll", "'quoted'",
             "well-known", "re-enter", "x-ray", "end.", "end...", "wait!",
             "really?", "yes, no; maybe: so", "  two  spaces  ", "\ttab\t",
+            "hello, try this.", "go, no, so.", "(why?)", "I’m", "don’t",
             "new\nline", "UPPER CASE", "MiXeD cAsE", "MacinTalk", "outSPOKEN",
             "NVDA", "SAPI5", "H2O", "mp3", "utf8", "COM1", "3M", "",
             " ", "   ", "a b c", "A. B. C.", "e.g.", "i.e.", "U.S.A.",

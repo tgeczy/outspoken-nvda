@@ -39,6 +39,33 @@ def test_known_words(rules, word, expected):
     assert nrl.translate(word, rules) == expected
 
 
+@pytest.mark.parametrize("word,expected", [
+    # Issue #5: ' ' in a rule is the edge of the word.  Read as a literal
+    # space, punctuation after a word kept its word-final rules from firing:
+    # "hello," said HEH1LAA1 ("hellaw") and "try." TRIH ("tree").
+    ("hello", "/HEH1LOW1"),
+    ("hello,", "/HEH1LOW1,"),
+    ("hello.", "/HEH1LOW1."),
+    ("try.", "TRAY."),
+    ("try,", "TRAY,"),
+    ("go,", "GOW1,"),
+    ("why?", "WAY."),
+    ("me.", "MIY."),
+    ("complete.", "KAA1MPLIY4T."),
+    # The two rules with a space inside a context read as before.
+    ("the apple", "DHIY AE3PUL"),
+    ("3 x 4", "THRIY4  BAY  FOH4R"),
+    # The apostrophe stays inside the word, so contractions read as before;
+    # counted as an edge, "I'm" became "I em".
+    ("I'm", "AY5M"),
+    ("don't", "DOW4NT"),
+    ("it's", "IH1TS"),
+    ("John's", "JAA1NZ"),
+])
+def test_words_before_punctuation(rules, word, expected):
+    assert nrl.translate(word, rules) == expected
+
+
 def test_every_letter_says_its_name(rules):
     """A lone 'a' matches the rule for the WORD "a" and comes out a schwa;
     every other letter already gives its name."""

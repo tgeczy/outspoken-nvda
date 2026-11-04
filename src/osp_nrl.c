@@ -207,6 +207,18 @@ static int nrl_bucket_for(unsigned char c)
  * context left-to-right from just after it.  `text` is the padded, uppercased
  * buffer of `n` bytes. */
 
+/* What a word is made of, for ' ' in a context: the letters, and the
+ * apostrophe in both its spellings (0xD5 is MacRoman's), which the
+ * contraction rules treat as part of the word.  nrl.py's WORD.
+ *
+ * ' ' in a rule is the edge of a word, not a space character, as in NRL's
+ * notation; read as a literal space it broke every word with punctuation
+ * after it -- "hello," said "hellaw", "try." said "tree" (issue #5). */
+static int nrl_in_word(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') || c == '\'' || c == 0xD5;
+}
+
 /* Length of the suffix at `i`, or 0.  `%` is one of ER, E, ES, ED, ING, ELY
  * -- and they are suffixes, so the match only counts when the word ends
  * there.  Longest first, in the Python's (stable) sort order. */
@@ -217,7 +229,7 @@ static int nrl_suffix_at(const unsigned char *text, int n, int i)
     for (k = 0; k < 6; k++) {
         int l = (int)strlen(suf[k]), j = i + l;
         if (j <= n && memcmp(text + i, suf[k], (size_t)l) == 0
-            && (j >= n || text[j] == ' '))
+            && (j >= n || !nrl_in_word(text[j])))
             return l;
     }
     return 0;
@@ -265,6 +277,11 @@ static int nrl_match_right(const unsigned char *text, int n, int i,
         } else if (c == '?') {                       /* a digit */
             if (i >= n || !nrl_is_digit(text[i])) return 0;
             i++;
+        } else if (c == ' ') {                       /* the edge of the word */
+            if (i < n) {
+                if (nrl_in_word(text[i])) return 0;
+                i++;
+            }
         } else {
             if (i >= n || text[i] != c) return 0;
             i++;
@@ -308,6 +325,11 @@ static int nrl_match_left(const unsigned char *text, int i,
         } else if (c == '?') {
             if (i <= 0 || !nrl_is_digit(text[i - 1])) return 0;
             i--;
+        } else if (c == ' ') {                       /* the edge of the word */
+            if (i > 0) {
+                if (nrl_in_word(text[i - 1])) return 0;
+                i--;
+            }
         } else {
             if (i <= 0 || text[i - 1] != c) return 0;
             i--;
