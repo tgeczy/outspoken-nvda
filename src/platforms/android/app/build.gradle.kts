@@ -40,8 +40,8 @@ android {
         applicationId = "com.outspoken.tts"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.0.2"
+        versionCode = 4
+        versionName = "2.0.3"
 
         // The device suite: one Instrumentation, driven by adb, the way the
         // sibling project does it. There is no JUnit runner here on purpose --
