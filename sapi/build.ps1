@@ -49,6 +49,24 @@ foreach ($exe in "osp_host.exe","osp_host_x86.exe") {
   if (!(Test-Path $built)) { throw "$built is missing: run `sh build.sh` first" }
   Copy-Item $built $stage
 }
+# What SAPI asks of an engine, asked of this one through the DLL's own code
+# with a fake application on the other side: partial writes, the program's
+# volume, rate/volume/pitch markup, <spell>, <silence>, skip and where
+# bookmarks go -- see speak_test.cpp.  Both widths, one voice of each engine
+# family; a voice that is not installed is skipped, so the gate is real on a
+# machine with engine data and quiet on one without.
+foreach ($testArch in "x86","x64") {
+  # Not a folder named x86 or x64: the DLL looks for its host one level up
+  # from one of those, where the installer puts it.
+  $speakDir = Join-Path $env:TEMP "outspoken-speak-test\speak-$testArch"
+  $testArchCl = Join-Path $msvc.FullName "bin\Hostx64\$testArch\cl.exe"
+  New-Item -ItemType Directory -Force $speakDir | Out-Null
+  foreach ($exe in "osp_host.exe","osp_host_x86.exe") { Copy-Item (Join-Path $stage $exe) $speakDir -Force }
+  & $testArchCl /nologo /EHsc /O2 /MT /DUNICODE /D_UNICODE "/I$PSScriptRoot" "/I$($msvc.FullName)\include" "/I$($sdk.FullName)\um" "/I$($sdk.FullName)\shared" "/I$($sdk.FullName)\ucrt" (Join-Path $PSScriptRoot "speak_test.cpp") (Join-Path $PSScriptRoot "settings.cpp") "/Fe$speakDir\speak_test.exe" "/Fo$speakDir\" /link "/LIBPATH:$($msvc.FullName)\lib\$testArch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\um\$testArch" "/LIBPATH:$($sdk.Parent.Parent.FullName)\Lib\$($sdk.Name)\ucrt\$testArch" sapi.lib ole32.lib advapi32.lib shell32.lib
+  if ($LASTEXITCODE) { throw "speak test build failed ($LASTEXITCODE)" }
+  & "$speakDir\speak_test.exe" (Join-Path $env:APPDATA "nvda") "male" "mtk2:Ben" "mtk3:Fred" "gala:Bruce" "cami:Carlos"
+  if ($LASTEXITCODE) { throw "the SAPI engine misbehaves ($testArch)" }
+}
 # The serve protocol's specification, kept beside the host that implements it.
 Copy-Item (Join-Path $PSScriptRoot "osp_serve.py") $stage
 Copy-Item (Join-Path $PSScriptRoot "register.ps1") $stage

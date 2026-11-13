@@ -62,6 +62,23 @@ TGSpeechbox and Panthera: word-per-fragment feeding with bookmarks between
 never reads bookmark names aloud, and the seam between fragments keeps its
 space.
 
+An application's markup is honoured as SAPI asks: `<rate>` adds to the
+application's rate and `<volume>` is a share of its volume, `<pitch>`
+reaches the words it encloses wherever they fall in the text, `<spell>` is
+read a character at a time as NVDA's character mode reads it, `<silence>`
+is that much silence, and **ISpVoice::Skip** moves by sentences and speech
+goes on from there. The application's own volume is applied by the engine,
+because SAPI leaves that to the engine. Text in one state is one engine
+utterance, and a change of state starts a new one, as the NVDA driver does
+for its pitch, rate and volume commands. A bookmark at the start or end of
+an utterance, or between spelled characters, goes out exactly where it
+stands, before the audio that follows; one between the words of a single
+utterance is placed by its share of the text, because the engines speak an
+utterance whole. Every byte is offered to the application until it has
+taken it, because Windows 7's SAPI takes none while its buffer is full.
+`sapi/speak_test.cpp` holds the engine to all of this, on one voice of each
+engine family, in every SAPI build.
+
 **Settings live in two files, and the registry is what they fall back to,
 since 2.0.0** — Panthera's model, carried over. Each is flat TOML, and the
 engine reads one typed value at a time in this order: `%APPDATA%\outSPOKEN

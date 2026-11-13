@@ -15,12 +15,15 @@
  * 2.0 the child was an embeddable Python running sapi/osp_serve.py over
  * the driver modules; that script stays as the protocol's specification
  * and tests/test_serve_hosts.py holds the two hosts to each other.  There
- * is no text processing here at all: the host on the other side of the
- * pipe owns every decision about how speech sounds.
+ * is no text processing here: the host on the other side of the pipe owns
+ * every decision about how speech sounds.  What is here is SAPI's side of
+ * the bargain -- markup, bookmarks, spelling, skip, the application's
+ * volume, a Write that takes part of a block -- which speak_test.cpp holds
+ * it to.
  *
  * The host stays resident: 22 ms warm to first PCM against 131 cold,
- * measured.  An abort kills it -- instant cancel -- and the next Speak
- * pays the cold start once.
+ * measured.  An abort is a seq-tagged cancel and a drain, the host kept
+ * warm, so the next Speak is warm too.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -340,9 +343,43 @@ public:
             return E_FAIL;
         }
     }
+    /* **A fragment list is regrouped into runs, one serve request each.**
+     *
+     * SAPI hands the engine its text as fragments, each with its own state:
+     * the rate, pitch and volume the application's markup asked for, and
+     * whether it is to be spelled.  A run is the longest stretch of
+     * fragments that agree on all four, so plain text -- JAWS's word after
+     * word included -- is still one run, one request and one utterance.  A
+     * change of state is where the application asked for a change, and that
+     * is where the NVDA driver flushes too (outspoken.py, on its pitch,
+     * volume and rate commands): one engine utterance per setting, which is
+     * the only way the serve can give one.
+     *
+     * A spelled run is spoken a character at a time, each a request of its
+     * own, exactly as the driver speaks NVDA's character mode: the 1984
+     * rules name a lone letter, and the Speech Manager engines do so
+     * themselves.
+     *
+     * Bookmarks keep their place.  A mark with nothing said before it in its
+     * run goes out before the run's audio, one with nothing after it, after,
+     * and one between a spelled run's characters, between them -- all exact.
+     * A mark between words of one utterance is an estimate, by its share of
+     * the text: the engines speak an utterance whole and cannot say where in
+     * it they are. */
+    struct Mark { std::wstring name; size_t pos; };
+    struct Run {
+        long rateAdj, pitchAdj; USHORT volume; bool spell; ULONG silenceMs;
+        std::wstring text; std::vector<Mark> marks;
+        /* Where its sentences start, the first of them numbered
+         * firstSentence in the whole call. */
+        std::vector<size_t> starts; size_t firstSentence=0;
+        bool same(const SPVSTATE &s,bool sp) const {
+            return !silenceMs&&spell==sp&&rateAdj==s.RateAdj&&
+                   pitchAdj==s.PitchAdj.MiddleAdj&&volume==s.Volume;
+        }
+    };
     HRESULT speakInner(const SPVTEXTFRAG *frags,ISpTTSEngineSite *site){
         if(!token||!site)return E_UNEXPECTED;
-        std::wstring text;
         /* Bookmarks are the pacing contract, not decoration: NVDA's SAPI
          * driver interleaves <Bookmark Mark="N"/> with the text and waits
          * for the TTS_BOOKMARK events to advance -- an engine that stays
@@ -350,91 +387,164 @@ public:
          * NVDA's scheduler eventually purges what it thinks is a stuck
          * utterance.  That purge was heard as the end of speech clipping,
          * and the cold restart after it as arrowing lag. */
-        struct Mark { std::wstring name; size_t chars; };
-        std::vector<Mark> marks;
+        std::vector<Run> runs; std::vector<Mark> pending;
+        int cur=-1;
+        auto open_run=[&](const SPVSTATE &s,bool sp,ULONG silence){
+            Run r; r.rateAdj=s.RateAdj; r.pitchAdj=s.PitchAdj.MiddleAdj;
+            r.volume=s.Volume; r.spell=sp; r.silenceMs=silence;
+            r.marks.swap(pending);           /* marks waiting for a start */
+            for(auto &m:r.marks)m.pos=0;
+            runs.push_back(r); cur=(int)runs.size()-1;
+        };
         for(auto f=frags;f;f=f->pNext){
-            if(f->State.eAction==SPVA_Bookmark){
+            const SPVSTATE &st=f->State;
+            if(st.eAction==SPVA_Bookmark){
                 if(f->pTextStart&&f->ulTextLen){
                     Mark m; m.name.assign(f->pTextStart,f->ulTextLen);
-                    m.chars=text.size(); marks.push_back(m);
+                    if(cur<0){m.pos=0;pending.push_back(m);}
+                    else{
+                        Run &r=runs[cur];
+                        /* After a silence, a mark is after it. */
+                        m.pos=r.silenceMs?(size_t)-1:r.text.size();
+                        r.marks.push_back(m);
+                    }
                 }
                 continue;
             }
-            switch(f->State.eAction){
+            if(st.eAction==SPVA_Silence){
+                /* <silence msec="..."/>: the pause itself, in the stream. */
+                open_run(st,false,st.SilenceMSecs?st.SilenceMSecs:1);
+                continue;
+            }
+            switch(st.eAction){
             case SPVA_Speak: case SPVA_SpellOut: case SPVA_Pronounce: break;
             default: continue;
             }
             if(!f->pTextStart||!f->ulTextLen)continue;
-            if(!text.empty()&&!iswspace(text.back())&&!iswspace(f->pTextStart[0]))
-                text.push_back(L' ');
-            text.append(f->pTextStart,f->ulTextLen);
+            bool spell=st.eAction==SPVA_SpellOut;
+            if(cur<0||!runs[cur].same(st,spell))open_run(st,spell,0);
+            Run &r=runs[cur];
+            if(!r.text.empty()&&!iswspace(r.text.back())&&!iswspace(f->pTextStart[0]))
+                r.text.push_back(L' ');
+            r.text.append(f->pTextStart,f->ulTextLen);
         }
-        if(text.empty()&&marks.empty())return S_OK;
+        if(runs.empty()&&pending.empty())return S_OK;
         std::wstring root=token_string(token,L"DataPath"), voice=token_string(token,L"VoiceId");
         if(root.empty()){
             wchar_t buf[MAX_PATH]; DWORD n=GetEnvironmentVariableW(L"APPDATA",buf,MAX_PATH);
             if(n&&n<MAX_PATH)root=std::wstring(buf)+L"\\nvda";
         }
-        long sapiRate=0; site->GetRate(&sapiRate);
-        if(sapiRate<-10)sapiRate=-10;if(sapiRate>10)sapiRate=10;
-        /* The driver's own 0-100 scales, linearly: SAPI zero is the middle
-         * of the NVDA slider, and the ten-step ends are its ends. */
-        int rate=(int)((sapiRate+10)*5);
-        int pitch=50;
-        if(frags){
-            long pa=frags->State.PitchAdj.MiddleAdj;
-            if(pa<-10)pa=-10;if(pa>10)pa=10;
-            pitch=(int)(50+pa*5);
+        long hostRate=0; site->GetRate(&hostRate);
+        /* The two engine settings the NVDA driver has and SAPI's own
+         * request cannot carry, read fresh so a change in the settings
+         * program reaches the next thing spoken.  The number style is
+         * matched against its vocabulary here, before it reaches a
+         * command line: the machine file is one any account can write. */
+        DWORD infl=outspoken_sapi::setting_dword(L"Inflection",50); if(infl>100)infl=100;
+        std::wstring numbers=outspoken_sapi::setting_string(L"NumberStyle",L"words");
+        if(numbers!=L"digits")numbers=L"words";
+        /* A sentence starts with each run, and after a full stop, question
+         * mark or exclamation mark followed by a space: what a skip request
+         * counts in, and nothing about any one language. */
+        size_t sentences=0;
+        for(auto &r:runs){
+            if(r.silenceMs)continue;
+            for(auto &m:r.marks)if(m.pos>r.text.size())m.pos=r.text.size();
+            r.firstSentence=sentences++;
+            r.starts.assign(1,0);
+            if(r.spell)continue;
+            for(size_t i=0;i+1<r.text.size();i++){
+                wchar_t c=r.text[i];
+                if((c==L'.'||c==L'?'||c==L'!')&&iswspace(r.text[i+1])){
+                    size_t j=i+1;
+                    while(j<r.text.size()&&iswspace(r.text[j]))j++;
+                    if(j<r.text.size()){r.starts.push_back(j);sentences++;}
+                    i=j-1;
+                }
+            }
         }
-        int volume=100;   /* SAPI applies the application's volume itself. */
-        std::string v=utf8(voice), u=utf8(text);
-        unsigned req=REQ_MAGIC,nv=(unsigned)v.size(),nt=(unsigned)u.size();
+        auto blank=[](const std::wstring &s,size_t from,size_t to){
+            for(size_t i=from;i<to&&i<s.size();i++)if(!iswspace(s[i]))return false;
+            return true;
+        };
+
         CsLock lock(&g_hostLock);
-        bool ok=true;int status=0;bool aborted=false;
+        bool ok=true, aborted=false, skipping=false; int status=0;
         unsigned long long total=0;
-        unsigned seq=++g_seq;
-        if(!text.empty()){
-            /* The two engine settings the NVDA driver has and SAPI's own
-             * request cannot carry, read fresh so a change in the settings
-             * program reaches the next thing spoken.  The number style is
-             * matched against its vocabulary here, before it reaches a
-             * command line: the machine file is one any account can write. */
-            DWORD infl=outspoken_sapi::setting_dword(L"Inflection",50); if(infl>100)infl=100;
-            std::wstring numbers=outspoken_sapi::setting_string(L"NumberStyle",L"words");
-            if(numbers!=L"digits")numbers=L"words";
-            ok=host_ensure(root,infl,numbers);
-            ok=ok&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
+        auto fire=[&](const Mark &m,unsigned long long at){
+            SPEVENT ev;memset(&ev,0,sizeof ev);
+            ev.eEventId=SPEI_TTS_BOOKMARK;
+            ev.elParamType=SPET_LPARAM_IS_STRING;
+            ev.ullAudioStreamOffset=at;
+            ev.wParam=(WPARAM)_wtol(m.name.c_str());
+            ev.lParam=(LPARAM)m.name.c_str();
+            site->AddEvents(&ev,1);
+        };
+        /* Everything the application takes, it takes in full.  Write may
+         * accept part of a block, or nothing at all while the audio device's
+         * buffer is full -- Windows 7's SAPI does exactly that -- and what it
+         * did not take is offered again after a short wait, the abort flag
+         * checked between tries.  Before, the rest of the block was simply
+         * dropped: on Windows 7 that was audio missing from the middle of
+         * speech.  A skip request stops the writing too, where it may. */
+        auto write_out=[&](const BYTE *p,ULONG n,bool mayskip)->bool{
+            while(n){
+                DWORD act=site->GetActions();
+                if(act&SPVES_ABORT){aborted=true;return true;}
+                if(mayskip&&(act&SPVES_SKIP)){skipping=true;return true;}
+                ULONG took=0;
+                if(FAILED(site->Write(p,n,&took)))return false;
+                if(took>n)took=n;
+                if(!took){Sleep(5);continue;}
+                p+=took;n-=took;total+=took;
+            }
+            return true;
+        };
+        /* One utterance: ask, and stream what comes back.  On an abort the
+         * seq-tagged cancel goes out and the response is drained to its
+         * terminator, the host kept warm.  On a skip the rest is read unheard
+         * instead, which is what says how long the whole would have been --
+         * the engines cannot say where in an utterance they are, so the
+         * share heard is the share of the text spoken. */
+        auto say_one=[&](const std::wstring &text,long sapiRate,long pa,USHORT share,
+                         unsigned long long &heard,unsigned long long &whole)->bool{
+            heard=whole=0;
+            /* The driver's own 0-100 scales, linearly: SAPI zero is the middle
+             * of the NVDA slider, and the ten-step ends are its ends. */
+            int rate=(int)((sapiRate+10)*5);
+            int pitch=(int)(50+pa*5);
+            int volume=100;   /* applied here, as gain: see below */
+            std::string v=utf8(voice), u=utf8(text);
+            unsigned req=REQ_MAGIC,nv=(unsigned)v.size(),nt=(unsigned)u.size();
+            unsigned seq=++g_seq;
+            ok=host_ensure(root,infl,numbers)&&exact(g_in,&req,4,true)&&exact(g_in,&seq,4,true)&&exact(g_in,&rate,4,true)&&exact(g_in,&pitch,4,true)&&exact(g_in,&volume,4,true)&&exact(g_in,&nv,4,true)&&exact(g_in,&nt,4,true)&&exact(g_in,(void*)v.data(),nv,true)&&exact(g_in,(void*)u.data(),nt,true);
             unsigned magic=0;status=-1;
+            auto cancel=[&](){
+                unsigned c=CANCEL_MAGIC;
+                if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();ok=false;}
+            };
             /* Response reads wait rather than block -- exact_wait watches
              * the abort flag, the serve's death and a no-progress deadline,
              * so a wedged serve costs one failed utterance, not the
-             * session.  An abort while waiting takes the same door as the
-             * mid-stream one below: the seq-tagged cancel frame, then a
-             * drain to the terminator with the host kept warm. */
+             * session. */
             if(ok){
                 ReadWait r=exact_wait(g_out,&magic,4,site);
                 if(r==RW_OK)r=exact_wait(g_out,&status,4,site);
                 if(r==RW_ABORT){
-                    aborted=true;
-                    unsigned c=CANCEL_MAGIC;
-                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();ok=false;}
-                    else{
+                    aborted=true; cancel();
+                    if(ok){
                         r=exact_wait(g_out,&magic,4,0);
                         if(r==RW_OK)r=exact_wait(g_out,&status,4,0);
                         if(r!=RW_OK||magic!=RSP_MAGIC)ok=false;
                     }
                 }else if(r!=RW_OK||magic!=RSP_MAGIC)ok=false;
             }
+            bool skip=false;
             std::vector<BYTE> audio;
             while(ok&&status==0){
                 unsigned frames=0;
-                ReadWait r=exact_wait(g_out,&frames,4,aborted?0:site);
-                if(r==RW_ABORT){
-                    aborted=true;
-                    unsigned c=CANCEL_MAGIC;
-                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();ok=false;break;}
-                    continue;                      /* drain to terminator */
-                }
+                ReadWait r=exact_wait(g_out,&frames,4,(aborted||skip)?0:site);
+                if(r==RW_ABORT){aborted=true;cancel();continue;}   /* drain */
                 if(r!=RW_OK){ok=false;break;}
                 if(!frames)break;
                 if(frames>MAX_CHUNK_FRAMES){
@@ -445,56 +555,176 @@ public:
                 }
                 unsigned bytes=frames*2; audio.resize(bytes);
                 if(exact_wait(g_out,audio.data(),bytes,0)!=RW_OK){ok=false;break;}
-                if(!aborted&&(site->GetActions()&SPVES_ABORT)){
+                whole+=bytes;
+                if(aborted||skip)continue;              /* draining, not speaking */
+                DWORD act=site->GetActions();
+                if(act&SPVES_ABORT){
                     /* Graceful cancel keeps the host warm: the serve side
                      * runs the driver's own instant cancel when the OSPC
                      * frame lands, so the terminator follows fast and the
                      * next utterance costs 21 ms, not a cold start.  The
                      * first build killed the process here, and every
                      * arrow after a cancel paid 158 ms plus engine
-                     * warm-up -- the reported arrowing lag. */
-                    aborted=true;
-                    /* The cancel names its target: pipes buffer, and an
+                     * warm-up -- the reported arrowing lag.
+                     *
+                     * The cancel names its target: pipes buffer, and an
                      * untagged cancel arriving after this utterance
                      * finished was cutting the NEXT one -- the black box
                      * showed aborted=0 utterances ending at a fraction of
                      * their audio, which is what the ear heard as tails
                      * clipping on the slow engines. */
-                    unsigned c=CANCEL_MAGIC;
-                    if(!exact(g_in,&c,4,true)||!exact(g_in,&seq,4,true)){host_drop();break;}
-                    continue;                      /* drain to terminator */
+                    aborted=true;cancel();continue;
                 }
-                if(aborted)continue;               /* draining, not speaking */
-                ULONG wrote=0;if(FAILED(site->Write(audio.data(),bytes,&wrote))){ok=false;break;}
-                total+=bytes;
+                if(act&SPVES_SKIP){skip=true;continue;}
+                /* **SAPI does not apply the application's volume to an
+                 * engine's audio** -- this used to say it did.  Measured
+                 * through SAPI into memory on the SSI-263 engine, the
+                 * sibling built the same way: volume 30 left its samples as
+                 * they were, where Microsoft's own voice came out at an
+                 * eighth.  So the volume is applied here, per chunk, as
+                 * Panthera does: the application's, times the run's own
+                 * markup as a share of it, and a change during a paragraph
+                 * reaches the next chunk. */
+                USHORT sv=100;
+                if(FAILED(site->GetVolume(&sv))){ok=false;break;}
+                if(sv>100)sv=100;
+                unsigned gain=(unsigned)sv*(share>100?100:share);
+                if(gain!=10000){
+                    short *s=(short*)audio.data();
+                    for(unsigned i=0;i<frames;i++)s[i]=(short)((long long)s[i]*gain/10000);
+                }
+                unsigned long long before=total;
+                if(!write_out(audio.data(),bytes,true)){ok=false;break;}
+                heard+=total-before;
+                if(aborted){cancel();continue;}
+                if(skipping){skipping=false;skip=true;continue;}
+            }
+            return !skip;
+        };
+
+        size_t sentence=0;                      /* the one being spoken */
+        auto sentence_at=[&](const Run &r,size_t p){
+            size_t s=r.firstSentence;
+            for(size_t k=1;k<r.starts.size();k++)if(r.starts[k]<=p)s=r.firstSentence+k;
+            return s;
+        };
+        for(auto &m:pending)fire(m,0);          /* marks and nothing else */
+        size_t ri=0, from=0;
+        bool stopped=false;                     /* a skip that ran out of text */
+        while(ri<runs.size()&&ok&&status==0&&!aborted){
+            Run &r=runs[ri];
+            bool skipped=false;
+            long sapiRate=hostRate+r.rateAdj;
+            if(sapiRate<-10)sapiRate=-10;if(sapiRate>10)sapiRate=10;
+            long pa=r.pitchAdj;
+            if(pa<-10)pa=-10;if(pa>10)pa=10;
+            if(r.silenceMs){
+                for(auto &m:r.marks)if(m.pos!=(size_t)-1)fire(m,total);
+                std::vector<BYTE> zero((size_t)r.silenceMs*NATIVE_RATE/1000*2);
+                if(!write_out(zero.data(),(ULONG)zero.size(),true))ok=false;
+                if(aborted)break;
+                if(skipping){skipping=false;skipped=true;}
+                else for(auto &m:r.marks)if(m.pos==(size_t)-1)fire(m,total);
+            } else if(r.spell){
+                sentence=r.firstSentence;
+                size_t next=0;                          /* the next mark to send */
+                while(next<r.marks.size()&&r.marks[next].pos<from)next++;
+                for(size_t i=from;i<r.text.size()&&ok&&status==0&&!aborted&&!skipped;){
+                    size_t n=(IS_HIGH_SURROGATE(r.text[i])&&i+1<r.text.size())?2:1;
+                    /* a combining mark or variation selector stays with
+                     * the character before it */
+                    while(i+n<r.text.size()&&
+                          ((r.text[i+n]>=0x0300&&r.text[i+n]<=0x036F)||(r.text[i+n]>=0xFE00&&r.text[i+n]<=0xFE0F)))n++;
+                    while(next<r.marks.size()&&r.marks[next].pos<=i)fire(r.marks[next++],total);
+                    if(!iswspace(r.text[i])){
+                        unsigned long long heard,whole;
+                        if(!say_one(r.text.substr(i,n),sapiRate,pa,r.volume,heard,whole))skipped=true;
+                    }
+                    i+=n;
+                }
+                if(!aborted&&!skipped)while(next<r.marks.size())fire(r.marks[next++],total);
+            } else {
+                sentence=sentence_at(r,from);
+                /* -1: passed over by a skip, 0: before anything said,
+                 *  1: between words, 2: after it all */
+                std::vector<int> where(r.marks.size());
+                for(size_t i=0;i<r.marks.size();i++)
+                    where[i]=r.marks[i].pos<from?-1:blank(r.text,from,r.marks[i].pos)?0:
+                             blank(r.text,r.marks[i].pos,r.text.size())?2:1;
+                for(size_t i=0;i<r.marks.size();i++)if(where[i]==0)fire(r.marks[i],total);
+                unsigned long long runStart=total, last=total, heard=0, whole=0;
+                std::wstring text=r.text.substr(from);
+                if(!blank(text,0,text.size())&&!say_one(text,sapiRate,pa,r.volume,heard,whole)){
+                    skipped=true;
+                    /* Where it was: the share heard of the share of the text. */
+                    size_t span=r.text.size()-from;
+                    size_t at=from+(whole?(size_t)((double)heard/(double)whole*(double)span):0);
+                    sentence=sentence_at(r,at);
+                    /* The marks in what was heard were passed, and are
+                     * reported; the rest are skipped over. */
+                    for(size_t i=0;i<r.marks.size();i++)
+                        if(where[i]==1&&r.marks[i].pos<at){
+                            unsigned long long off=runStart+
+                                (unsigned long long)((double)(r.marks[i].pos-from)/(double)span*(double)whole)/2*2;
+                            if(off>total)off=total;
+                            if(off<last)off=last;
+                            fire(r.marks[i],off);last=off;
+                        }
+                }
+                if(aborted)break;
+                if(!skipped){
+                    size_t span=r.text.size()-from;
+                    for(size_t i=0;i<r.marks.size();i++)
+                        if(where[i]==1){
+                            unsigned long long at=runStart+(span?
+                                (unsigned long long)((double)(r.marks[i].pos-from)/(double)span*(double)(total-runStart))/2*2:0);
+                            if(at<last)at=last;
+                            fire(r.marks[i],at);last=at;
+                        }
+                    for(size_t i=0;i<r.marks.size();i++)if(where[i]==2)fire(r.marks[i],total);
+                }
+            }
+            if(aborted)break;
+            if(!skipped){ri++;from=0;continue;}
+            /* A skip request (ISpVoice::Skip): how many sentences, from the
+             * one being spoken, and in which direction; 0 is the start of
+             * this one.  The number that could be skipped is reported, and
+             * speech goes on from there if it was the number asked for --
+             * or, when the text has fewer sentences than that, ends.  A host
+             * that cannot say what it wants is answered with nothing
+             * skipped, and the call ends. */
+            SPVSKIPTYPE type=SPVST_SENTENCE; long n=0;
+            if(FAILED(site->GetSkipInfo(&type,&n))||type!=SPVST_SENTENCE){
+                site->CompleteSkip(0);stopped=true;break;
+            }
+            long target=(long)sentence+n;
+            if(target<0||target>=(long)sentences){
+                site->CompleteSkip(target<0?-(long)sentence:(long)sentences-1-(long)sentence);
+                stopped=true;break;
+            }
+            site->CompleteSkip(n);
+            for(size_t j=0;j<runs.size();j++){
+                Run &q=runs[j];
+                if(q.silenceMs)continue;
+                if((size_t)target>=q.firstSentence&&(size_t)target<q.firstSentence+q.starts.size()){
+                    ri=j;from=q.starts[(size_t)target-q.firstSentence];break;
+                }
             }
         }
-        if(ok&&status==0&&!aborted){
-            /* The pacing contract: one TTS_BOOKMARK event per bookmark
-             * fragment.  The audio streamed as one utterance, so the
-             * offsets are proportional estimates by character position --
-             * NVDA schedules the index at its own player position when
-             * the event arrives, so arrival is what unblocks it and the
-             * offset is bookkeeping. */
-            for(size_t i=0;i<marks.size();i++){
-                SPEVENT ev;memset(&ev,0,sizeof ev);
-                ev.eEventId=SPEI_TTS_BOOKMARK;
-                ev.elParamType=SPET_LPARAM_IS_STRING;
-                ev.ullAudioStreamOffset=text.empty()?0:
-                    (unsigned long long)((double)marks[i].chars/(double)text.size()*(double)total);
-                ev.wParam=(WPARAM)_wtol(marks[i].name.c_str());
-                ev.lParam=(LPARAM)marks[i].name.c_str();
-                site->AddEvents(&ev,1);
-            }
-            /* And the tail: the engines end at the last phoneme with zero
-             * trailing frames, and SAPI's playback path eats the tail of
-             * a stream that ends flush with its data.  150 ms of silence
-             * makes what it eats silent.  NVDA's own player drains
-             * properly, which is why the add-on never needed this. */
-            if(total){
-                BYTE pad[6676]={0};                /* 150 ms at 22254 Hz */
-                ULONG wrote=0;site->Write(pad,sizeof pad,&wrote);
-            }
+        if(!aborted&&!stopped){
+            /* A run that failed still answers the marks after it: an index
+             * that never arrives is a stuck utterance to the client. */
+            for(size_t j=ri;j<runs.size();j++)
+                for(auto &m:runs[j].marks)fire(m,total);
+        }
+        /* And the tail: the engines end at the last phoneme with zero
+         * trailing frames, and SAPI's playback path eats the tail of a
+         * stream that ends flush with its data.  150 ms of silence makes
+         * what it eats silent.  NVDA's own player drains properly, which is
+         * why the add-on never needed this. */
+        if(total&&ok&&status==0&&!aborted){
+            BYTE pad[6676]={0};                /* 150 ms at 22254 Hz */
+            if(!write_out(pad,sizeof pad,false))ok=false;
         }
         /* A desynced pipe is never reused -- and that has to include a
          * drain that failed after an abort: the old guard kept the host
@@ -502,13 +732,15 @@ public:
          * full of leftovers for the next utterance to misread. */
         if(!ok)host_drop();
         /* The measurements convicted all four bugs; the words never did. */
+        size_t chars=0,count=pending.size();
+        for(auto &r:runs){chars+=r.text.size();count+=r.marks.size();}
         if(diagLevel()>=2)
-            logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
-                    (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
-                    ok?1:0,status,aborted?1:0,text.c_str());
+            logline(L"speak done: runs=%u chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d text=\"%.40s\"",
+                    (unsigned)runs.size(),(unsigned)chars,(unsigned)count,(unsigned)total,
+                    ok?1:0,status,aborted?1:0,runs.empty()?L"":runs[0].text.c_str());
         else
-            logline(L"speak done: chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d",
-                    (unsigned)text.size(),(unsigned)marks.size(),(unsigned)total,
+            logline(L"speak done: runs=%u chars=%u marks=%u bytes-written=%u ok=%d status=%d aborted=%d",
+                    (unsigned)runs.size(),(unsigned)chars,(unsigned)count,(unsigned)total,
                     ok?1:0,status,aborted?1:0);
         return aborted||(ok&&status==0)?S_OK:E_FAIL;
     }
