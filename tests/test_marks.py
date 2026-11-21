@@ -218,6 +218,33 @@ def test_a_cancel_mid_render_abandons_the_rest_and_loses_no_index():
                    for k, v, *_ in raw), "the break after the cancel was queued"
 
 
+def test_a_cancel_while_the_text_is_prepared_abandons_it_too():
+    """outspoken-nvda#9: the cancel lands while the worker is preparing the
+    run -- settings, apply, volume, translate are ctypes calls that let NVDA's
+    main thread in, so that is where a keystroke's cancel() tends to land.
+    `_flush` used to read the cancel count afresh after them, render the
+    whole run under the *new* count, and the feeder then played the line the
+    user had just cancelled."""
+    d = _bare()
+    eng = d._engineRef
+    translate = eng.translate
+
+    def cancelledWhilePrepared(text):
+        d._cancels += 1                 # cancel() arrived during preparation
+        return translate(text)
+    eng.translate = cancelledWhilePrepared
+    d._queue.put((list(EARCON), time.perf_counter()))
+    worker = threading.Thread(target=d._render)
+    worker.start()
+    time.sleep(0.3)
+    d._queue.put(None)
+    worker.join(timeout=2.0)
+    raw = _drain(d._audioQueue)
+    live = [(k, len(v)) for k, v, *t in raw if k == "audio" and t[0] == d._cancels]
+    assert not live, "the cancelled line would play: %r" % (live,)
+    assert [v for k, v, *_ in raw if k == "index"] == [7], "its index must still be reported"
+
+
 # -- the feeder: when a mark is reported --------------------------------------
 
 class _Reports(object):

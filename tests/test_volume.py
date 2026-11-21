@@ -158,7 +158,7 @@ def test_a_volume_command_reaches_the_conversion(monkeypatch):
     d._nSpoken = d._nEmpty = 0
     d._lastReport = 0.0
     d._audioQueue = type("Q", (), {"put": lambda self, x: None})()
-    d._flush(Eng(), ["hello"], 0, -40, 15, [], 0.0)
+    d._flush(Eng(), ["hello"], 0, -40, 15, [], 0.0, d._cancels)
     assert ("apply", 15, 0) in Eng.calls, (
         "a RateCommand offset never reached the engine")
     assert ("volume", 100, -40) in Eng.calls, (

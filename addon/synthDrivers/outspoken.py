@@ -998,18 +998,19 @@ class SynthDriver(SynthDriver):
                         run.append(value)
                         if spelling:
                             self._flush(eng, run, adj, vadj, radj, indexes,
-                                        queuedAt)
+                                        queuedAt, gen0)
                         continue
                     if kind == "index":
                         indexes.append((value, len(run)))
                         continue
-                    self._flush(eng, run, adj, vadj, radj, indexes, queuedAt)
+                    self._flush(eng, run, adj, vadj, radj, indexes, queuedAt,
+                                gen0)
                     if self._cancels != gen0:
                         break                   # the cancel landed in there
                     if kind == "break":
                         self._audioOut = True
                         self._audioQueue.put(("audio", _silence16(value),
-                                              self._cancels))
+                                              gen0))
                     elif kind == "pitch":
                         adj = value
                     elif kind == "volume":
@@ -1019,7 +1020,8 @@ class SynthDriver(SynthDriver):
                     elif kind == "spell":
                         spelling = value
                 else:
-                    self._flush(eng, run, adj, vadj, radj, indexes, queuedAt)
+                    self._flush(eng, run, adj, vadj, radj, indexes, queuedAt,
+                                gen0)
                 # Whatever is left -- indexes after the last words, or the
                 # indexes of an abandoned sequence -- NVDA is told about.
                 # It sent them, and it is told about every one, cancelled
@@ -1030,7 +1032,7 @@ class SynthDriver(SynthDriver):
             except Exception:
                 log.error("outSPOKEN: speech failed", exc_info=True)
 
-    def _flush(self, eng, run, adj, vadj, radj, indexes, queuedAt):
+    def _flush(self, eng, run, adj, vadj, radj, indexes, queuedAt, gen0):
         """Render everything collected so far as ONE utterance. -> spoke?
 
         Joins with a space only where neither side has one, or "link" + "Home"
@@ -1083,6 +1085,15 @@ class SynthDriver(SynthDriver):
         t0 = time.perf_counter()
         prepared = eng.translate(text)
         t1 = time.perf_counter()
+        # A cancel that landed while the run was being prepared is for this
+        # run too: the calls above are ctypes calls that let NVDA's main
+        # thread in, which is exactly where a keystroke's cancel() tends to
+        # land (outspoken-nvda#9).  Nothing is rendered, and the indexes are
+        # still told about.
+        if self._stopped or self._cancels != gen0:
+            for index in tail:
+                self._audioQueue.put(("index", index))
+            return False
 
         # **Stream.** Each piece goes out as the engine renders it -- the
         # first sound of a long MacinTalk 3 or Pro sentence arrives after one
@@ -1090,10 +1101,11 @@ class SynthDriver(SynthDriver):
         # whole hand over one piece.  The pieces concatenate to exactly the
         # whole-utterance render (tests/test_engine_pull.py).
         #
-        # `gen` is read HERE, when this utterance starts, which is necessarily
-        # after any cancel that preceded it -- so an utterance can never begin
-        # already stale. See the note on `_cancels`.
-        gen = self._cancels
+        # `gen` is the count when this sequence was taken up, not the count
+        # now: reading it afresh here tagged a run cancelled during its own
+        # preparation as current, and the feeder played it (#9).  A run that
+        # reaches this line was not cancelled, so the two are the same.
+        gen = gen0
         fed = 0
         if eng.speak_start(prepared):
             while True:
