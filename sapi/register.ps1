@@ -162,11 +162,24 @@ if ($Move) {
     # `macintalk` root with the same ACL Panthera's mover sets, so whichever
     # add-on moves first locks the folder for both.  SIDs, not names,
     # because BUILTIN\Users is localised.
+    #
+    # **On the root alone, then everything under it inherits.**  The grants
+    # used to go down the tree with /T, and on a FILE that left an empty ACL:
+    # /inheritance:r took the inherited entries away, and a grant carrying
+    # (OI)(CI) takes nothing on a file.  Every ROM moved -- and, the root
+    # being shared, every Panthera voice bank already there -- was then
+    # unreadable by everybody, SYSTEM included.  (Found in ssi263-speech's
+    # port of Panthera's mover, which spoke from the moved folder through
+    # SAPI; Panthera fixed the same, 106f926.)  /reset on each child is the
+    # repair below the root: it inherits the root's three entries alone.
     $sharedRoot = Split-Path -Parent $MoveTo
     & "$env:SystemRoot\System32\icacls.exe" $sharedRoot /inheritance:r `
-        /grant '*S-1-5-18:(OI)(CI)F' `
-        /grant '*S-1-5-32-544:(OI)(CI)F' `
-        /grant '*S-1-5-32-545:(OI)(CI)RX' /T /C /Q | Out-Null
+        /grant:r '*S-1-5-18:(OI)(CI)F' `
+        /grant:r '*S-1-5-32-544:(OI)(CI)F' `
+        /grant:r '*S-1-5-32-545:(OI)(CI)RX' /C /Q | Out-Null
+    foreach ($child in @(Get-ChildItem -LiteralPath $sharedRoot -Force)) {
+        & "$env:SystemRoot\System32\icacls.exe" $child.FullName /reset /T /C /Q | Out-Null
+    }
     # Past this line the data has moved: a failure now is "moved but the
     # registry did not follow", which needs different words said to the
     # person than "nothing changed", so it has its own exit code.
